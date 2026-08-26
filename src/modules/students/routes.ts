@@ -8,7 +8,7 @@ export default async function studentRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
   app.addHook('preHandler', app.requireRole('TRAINER', 'ADMIN'))
 
-  app.get('/', async (req) => studentService.listStudentsForTrainer(req.user!.id))
+  app.get('/', async (req) => studentService.listStudentsOverviewForTrainer(req.user!.id))
 
   app.get<{ Params: { id: string } }>('/:id', async (req) => {
     const id = parseId(req.params.id)
@@ -19,7 +19,7 @@ export default async function studentRoutes(app: FastifyInstance) {
   app.post('/', async (req, reply) => {
     const body = studentCreateSchema.parse(req.body)
     reply.status(201)
-    return userService.createUser({ ...body, role: 'CLIENT' })
+    return studentService.createStudent(body)
   })
 
   app.patch<{ Params: { id: string } }>('/:id', async (req) => {
