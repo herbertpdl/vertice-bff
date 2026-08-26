@@ -16,6 +16,12 @@ export default async function studentRoutes(app: FastifyInstance) {
     return userService.getUser(id)
   })
 
+  app.get<{ Params: { id: string } }>('/:id/overview', async (req) => {
+    const id = parseId(req.params.id)
+    await studentService.assertIsTrainersClient(req.user!.id, id)
+    return studentService.getStudentOverview(req.user!.id, id)
+  })
+
   app.post('/', async (req, reply) => {
     const body = studentCreateSchema.parse(req.body)
     reply.status(201)
