@@ -49,12 +49,14 @@ A trainer's roster = distinct clients across their training plans (User has no d
 
 ## Exercises (catalog) — `/exercises`
 Shared across all trainers.
-- `GET /` → `Exercise[]` = `{id, name, description, videoUrl}`
+- `GET /` → `Exercise[]` = `{id, name, description, videoUrl, muscleGroup}`
 - `GET /:id` → `Exercise`
 - `GET /:id/progress?clientId=` → `{weekStartDate, weight}[]` (weight-over-time for a graph). CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
-- `POST /` `{name, description, videoUrl?}` (TRAINER)
+- `POST /` `{name, description, videoUrl?, muscleGroup}` (TRAINER)
 - `PATCH /:id` (TRAINER)
 - `DELETE /:id` (TRAINER)
+
+`muscleGroup` is one of `CHEST | BACK | LEGS | SHOULDERS | ARMS | CORE | CARDIO`, required.
 
 ## Training plans — `/training-plans`
 - `GET /?clientId=` → `TrainingPlan[]`. CLIENT: own plans only. TRAINER: own plans, optionally filtered by `clientId`.

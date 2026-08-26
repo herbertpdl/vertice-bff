@@ -15,17 +15,30 @@ service ExerciseService {
   rpc DeleteExercise(DeleteExerciseRequest) returns (google.protobuf.Empty);
 }
 
+enum MuscleGroup {
+  MUSCLE_GROUP_UNSPECIFIED = 0;
+  CHEST = 1;
+  BACK = 2;
+  LEGS = 3;
+  SHOULDERS = 4;
+  ARMS = 5;
+  CORE = 6;
+  CARDIO = 7;
+}
+
 message ExerciseResponse {
   int64 id = 1;
   string name = 2;
   string description = 3;
   string video_url = 4;
+  MuscleGroup muscle_group = 5;
 }
 
 message ExerciseRequest {
   string name = 1;
   string description = 2;
   string video_url = 3;
+  MuscleGroup muscle_group = 4;
 }
 
 message ListExercisesRequest {
