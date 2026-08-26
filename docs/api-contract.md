@@ -24,8 +24,13 @@ Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. All
 - `GET /me` (auth) → full `User` `{id,name,email,cpf,cref,role}`
 
 ## Students — `/students` (TRAINER only)
-A trainer's roster = distinct clients across their training plans (User has no direct trainer link).
-- `GET /` → `StudentSummary[]` = `User & {activePlanCount}`
+A trainer's roster = distinct clients across their training plans (User has no direct trainer link). **This means a newly created student with no training plan yet does not appear in `GET /` until a plan is created for them** — this is pre-existing behavior of the roster derivation, not something the endpoints below change.
+- **`GET /`** → `StudentOverview[]` = `User & {activePlanCount, currentPlan, lastWorkoutAt, weekActivity}`, for the roster/list screen:
+  - `currentPlan`: `{id, name, endDate} | null` — the student's date-active training plan (`startDate <= today <= endDate`) among the trainer's plans for them; `null` if none is currently active (shown as a "Sem plano" tag in the UI). If more than one plan is active at once, the most recently started one is returned.
+  - `lastWorkoutAt`: ISO timestamp of the student's most recent *completed* workout log, or `null`. **Scoped to the current week only** — see limitation note below.
+  - `weekActivity`: `{date, dayOfWeek, completed}[]`, always 5 entries for Monday–Friday of the current week, `completed` true if a workout log finished on that calendar date. Powers the 5-dot weekly-activity indicator.
+
+  Limitation: vertice-api's `ListWorkoutLogs` RPC is scoped to one `trainingPlanId` + one `weekStartDate` at a time (no general "this client's workout history" query), so — mirroring the dashboard module's `completedToday` logic — `lastWorkoutAt`/`weekActivity` only reflect the *current* week's logs across all of the trainer's plans for that client. A student whose last completed workout falls in an earlier week shows `lastWorkoutAt: null` and an all-empty week strip here, rather than a stale older date.
 - `GET /:id` → `User` (403 if not one of your students)
 - **`GET /:id/overview`** → aggregation for the student-detail header (active plan, this-week progress, last workout, adherence). One call instead of orchestrating training-plans + workouts + workout-logs from the frontend:
   ```json
@@ -38,7 +43,7 @@ A trainer's roster = distinct clients across their training plans (User has no d
   }
   ```
   `activePlan` is the plan whose `[startDate, endDate]` contains today (most recently started one wins if more than one overlaps); everything else is zeroed/null when the student has no active plan. `thisWeek` counts completed vs. total workouts in the active plan for the current ISO week. `adherence4Weeks` is an **approximation**: vertice-api's `ListWorkoutLogs` RPC is scoped to one plan + one week (no general history query), so this re-fetches logs for the last 4 Mondays (clamped to weeks on/after the plan's start date), treats the plan's workout list as the recurring weekly schedule, and computes `completed / (workoutsPerWeek × weeksElapsed) × 100`, capped at 100. `lastWorkoutAt` is the latest `completedAt` found in that same 4-week lookback window (not a true all-time last-workout value — there's no cheaper way to get that from the current API surface).
-- `POST /` `{name, email, password, cpf}` → creates a CLIENT user
+- `POST /` `{name, email, cpf?, password?}` → creates a CLIENT user. **`password` is optional** — the "Novo aluno" flow in the design is invite-based (name/email/cpf only, no password field in the UI). When omitted, a random password is generated server-side (`crypto.randomUUID()`); there is no email-invite system in this stack yet, so this is a placeholder until one exists.
 - `PATCH /:id` `{name, email, cpf?}`
 - `DELETE /:id`
 
