@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package vertice.plan.v1;
+
+import "google/protobuf/empty.proto";
+
+option java_package = "com.vertice.api.generated.grpc.plan.v1";
+option java_multiple_files = true;
+
+service ExerciseSetService {
+  rpc ListExerciseSets(ListExerciseSetsRequest) returns (ListExerciseSetsResponse);
+  rpc GetExerciseSet(GetExerciseSetRequest) returns (ExerciseSetResponse);
+  rpc CreateExerciseSet(ExerciseSetCreateRequest) returns (ExerciseSetResponse);
+  rpc UpdateExerciseSet(UpdateExerciseSetRequest) returns (ExerciseSetResponse);
+  rpc DeleteExerciseSet(DeleteExerciseSetRequest) returns (google.protobuf.Empty);
+}
+
+enum SetStrategy {
+  SET_STRATEGY_UNSPECIFIED = 0;
+  STRAIGHT = 1;
+  WARM_UP = 2;
+  BACKOFF = 3;
+  DROPSET = 4;
+  REST_PAUSE = 5;
+  CLUSTER = 6;
+  AMRAP = 7;
+  ISOMETRIC_HOLD = 8;
+  FAILURE = 9;
+}
+
+message ExerciseSetResponse {
+  int64 id = 1;
+  int64 workout_exercise_id = 2;
+  int32 set_number = 3;
+  int32 reps = 4;
+  int32 duration_seconds = 5;
+  string weight = 6;
+  string load_percentage = 7;
+  SetStrategy strategy = 8;
+  int32 rest_seconds = 9;
+  string notes = 10;
+}
+
+message ExerciseSetRequest {
+  int32 set_number = 1;
+  int32 reps = 2;
+  int32 duration_seconds = 3;
+  string weight = 4;
+  string load_percentage = 5;
+  SetStrategy strategy = 6;
+  int32 rest_seconds = 7;
+  string notes = 8;
+}
+
+message ExerciseSetCreateRequest {
+  int64 workout_exercise_id = 1;
+  int32 set_number = 2;
+  int32 reps = 3;
+  int32 duration_seconds = 4;
+  string weight = 5;
+  string load_percentage = 6;
+  SetStrategy strategy = 7;
+  int32 rest_seconds = 8;
+  string notes = 9;
+}
+
+message ListExerciseSetsRequest {
+  int64 workout_exercise_id = 1;
+}
+
+message ListExerciseSetsResponse {
+  repeated ExerciseSetResponse exercise_sets = 1;
+}
+
+message GetExerciseSetRequest {
+  int64 id = 1;
+}
+
+message UpdateExerciseSetRequest {
+  int64 id = 1;
+  ExerciseSetRequest exercise_set = 2;
+}
+
+message DeleteExerciseSetRequest {
+  int64 id = 1;
+}

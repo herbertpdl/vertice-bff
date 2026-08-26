@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package vertice.plan.v1;
+
+import "google/protobuf/empty.proto";
+
+option java_package = "com.vertice.api.generated.grpc.plan.v1";
+option java_multiple_files = true;
+
+service WorkoutService {
+  rpc ListWorkouts(ListWorkoutsRequest) returns (ListWorkoutsResponse);
+  rpc GetWorkout(GetWorkoutRequest) returns (WorkoutResponse);
+  rpc CreateWorkout(WorkoutCreateRequest) returns (WorkoutResponse);
+  rpc UpdateWorkout(UpdateWorkoutRequest) returns (WorkoutResponse);
+  rpc DeleteWorkout(DeleteWorkoutRequest) returns (google.protobuf.Empty);
+  rpc CloneWorkout(CloneWorkoutRequest) returns (WorkoutResponse);
+}
+
+enum DayOfWeek {
+  DAY_OF_WEEK_UNSPECIFIED = 0;
+  MONDAY = 1;
+  TUESDAY = 2;
+  WEDNESDAY = 3;
+  THURSDAY = 4;
+  FRIDAY = 5;
+  SATURDAY = 6;
+  SUNDAY = 7;
+}
+
+message WorkoutResponse {
+  int64 id = 1;
+  string name = 2;
+  int64 training_plan_id = 3;
+  DayOfWeek day_of_week = 4;
+}
+
+message WorkoutRequest {
+  string name = 1;
+  DayOfWeek day_of_week = 2;
+}
+
+message WorkoutCreateRequest {
+  string name = 1;
+  int64 training_plan_id = 2;
+  DayOfWeek day_of_week = 3;
+}
+
+message ListWorkoutsRequest {
+  int64 training_plan_id = 1;
+}
+
+message ListWorkoutsResponse {
+  repeated WorkoutResponse workouts = 1;
+}
+
+message GetWorkoutRequest {
+  int64 id = 1;
+}
+
+message UpdateWorkoutRequest {
+  int64 id = 1;
+  WorkoutRequest workout = 2;
+}
+
+message DeleteWorkoutRequest {
+  int64 id = 1;
+}
+
+message CloneWorkoutRequest {
+  int64 source_workout_id = 1;
+  int64 target_training_plan_id = 2;
+  string name = 3;
+  DayOfWeek day_of_week = 4;
+}

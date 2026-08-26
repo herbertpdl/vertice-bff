@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package vertice.user.v1;
+
+import "google/protobuf/empty.proto";
+
+option java_package = "com.vertice.api.generated.grpc.user.v1";
+option java_multiple_files = true;
+
+service UserService {
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc GetUser(GetUserRequest) returns (UserResponse);
+  rpc CreateUser(UserCreateRequest) returns (UserResponse);
+  rpc UpdateUser(UpdateUserRequest) returns (UserResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (google.protobuf.Empty);
+  rpc SetUserPassword(SetUserPasswordRequest) returns (google.protobuf.Empty);
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ADMIN = 1;
+  TRAINER = 2;
+  CLIENT = 3;
+}
+
+message UserResponse {
+  int64 id = 1;
+  string name = 2;
+  string email = 3;
+  string cpf = 4;
+  string cref = 5;
+  Role role = 6;
+}
+
+message UserRequest {
+  string name = 1;
+  string email = 2;
+  string cpf = 3;
+  string cref = 4;
+  Role role = 5;
+}
+
+message UserCreateRequest {
+  string name = 1;
+  string email = 2;
+  string password = 3;
+  string cpf = 4;
+  string cref = 5;
+  Role role = 6;
+}
+
+message ListUsersRequest {
+  Role role = 1;
+}
+
+message ListUsersResponse {
+  repeated UserResponse users = 1;
+}
+
+message GetUserRequest {
+  int64 id = 1;
+}
+
+message UpdateUserRequest {
+  int64 id = 1;
+  UserRequest user = 2;
+}
+
+message DeleteUserRequest {
+  int64 id = 1;
+}
+
+message SetUserPasswordRequest {
+  int64 id = 1;
+  string password = 2;
+}

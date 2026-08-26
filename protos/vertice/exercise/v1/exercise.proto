@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package vertice.exercise.v1;
+
+import "google/protobuf/empty.proto";
+
+option java_package = "com.vertice.api.generated.grpc.exercise.v1";
+option java_multiple_files = true;
+
+service ExerciseService {
+  rpc ListExercises(ListExercisesRequest) returns (ListExercisesResponse);
+  rpc GetExercise(GetExerciseRequest) returns (ExerciseResponse);
+  rpc CreateExercise(ExerciseRequest) returns (ExerciseResponse);
+  rpc UpdateExercise(UpdateExerciseRequest) returns (ExerciseResponse);
+  rpc DeleteExercise(DeleteExerciseRequest) returns (google.protobuf.Empty);
+}
+
+message ExerciseResponse {
+  int64 id = 1;
+  string name = 2;
+  string description = 3;
+  string video_url = 4;
+}
+
+message ExerciseRequest {
+  string name = 1;
+  string description = 2;
+  string video_url = 3;
+}
+
+message ListExercisesRequest {
+}
+
+message ListExercisesResponse {
+  repeated ExerciseResponse exercises = 1;
+}
+
+message GetExerciseRequest {
+  int64 id = 1;
+}
+
+message UpdateExerciseRequest {
+  int64 id = 1;
+  ExerciseRequest exercise = 2;
+}
+
+message DeleteExerciseRequest {
+  int64 id = 1;
+}

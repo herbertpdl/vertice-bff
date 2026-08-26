@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package vertice.session.v1;
+
+option java_package = "com.vertice.api.generated.grpc.session.v1";
+option java_multiple_files = true;
+
+service WorkoutSessionService {
+  rpc GetOrStartWorkoutLog(GetOrStartWorkoutLogRequest) returns (WorkoutLogResponse);
+  rpc RecordSetLog(RecordSetLogRequest) returns (SetLogResponse);
+  rpc CompleteWorkoutLog(CompleteWorkoutLogRequest) returns (WorkoutLogResponse);
+  rpc ListWorkoutLogs(ListWorkoutLogsRequest) returns (ListWorkoutLogsResponse);
+  rpc GetLastSetLogs(GetLastSetLogsRequest) returns (GetLastSetLogsResponse);
+  rpc GetExerciseProgress(GetExerciseProgressRequest) returns (GetExerciseProgressResponse);
+}
+
+message WorkoutLogResponse {
+  int64 id = 1;
+  int64 workout_id = 2;
+  int64 client_id = 3;
+  string week_start_date = 4;
+  string started_at = 5;
+  string completed_at = 6;
+}
+
+message SetLogResponse {
+  int64 id = 1;
+  int64 workout_log_id = 2;
+  int64 exercise_set_id = 3;
+  string weight = 4;
+  int32 reps = 5;
+  string recorded_at = 6;
+}
+
+message GetOrStartWorkoutLogRequest {
+  int64 workout_id = 1;
+  int64 client_id = 2;
+  string week_start_date = 3;
+}
+
+message RecordSetLogRequest {
+  int64 workout_log_id = 1;
+  int64 exercise_set_id = 2;
+  string weight = 3;
+  int32 reps = 4;
+}
+
+message CompleteWorkoutLogRequest {
+  int64 id = 1;
+}
+
+message ListWorkoutLogsRequest {
+  int64 client_id = 1;
+  int64 training_plan_id = 2;
+  string week_start_date = 3;
+}
+
+message ListWorkoutLogsResponse {
+  repeated WorkoutLogResponse workout_logs = 1;
+}
+
+message GetLastSetLogsRequest {
+  int64 client_id = 1;
+  int64 workout_id = 2;
+}
+
+message GetLastSetLogsResponse {
+  repeated SetLogResponse set_logs = 1;
+}
+
+message GetExerciseProgressRequest {
+  int64 client_id = 1;
+  int64 exercise_id = 2;
+}
+
+message ProgressPoint {
+  string week_start_date = 1;
+  string weight = 2;
+}
+
+message GetExerciseProgressResponse {
+  repeated ProgressPoint points = 1;
+}
