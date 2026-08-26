@@ -27,6 +27,17 @@ Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. All
 A trainer's roster = distinct clients across their training plans (User has no direct trainer link).
 - `GET /` → `StudentSummary[]` = `User & {activePlanCount}`
 - `GET /:id` → `User` (403 if not one of your students)
+- **`GET /:id/overview`** → aggregation for the student-detail header (active plan, this-week progress, last workout, adherence). One call instead of orchestrating training-plans + workouts + workout-logs from the frontend:
+  ```json
+  {
+    "student": { "...User" },
+    "activePlan": { "id": 0, "name": "", "level": "BEGINNER", "startDate": "", "endDate": "" } | null,
+    "thisWeek": { "completed": 0, "total": 0 },
+    "lastWorkoutAt": "2026-08-26T16:52:17.169082Z" | null,
+    "adherence4Weeks": 0 | null
+  }
+  ```
+  `activePlan` is the plan whose `[startDate, endDate]` contains today (most recently started one wins if more than one overlaps); everything else is zeroed/null when the student has no active plan. `thisWeek` counts completed vs. total workouts in the active plan for the current ISO week. `adherence4Weeks` is an **approximation**: vertice-api's `ListWorkoutLogs` RPC is scoped to one plan + one week (no general history query), so this re-fetches logs for the last 4 Mondays (clamped to weeks on/after the plan's start date), treats the plan's workout list as the recurring weekly schedule, and computes `completed / (workoutsPerWeek × weeksElapsed) × 100`, capped at 100. `lastWorkoutAt` is the latest `completedAt` found in that same 4-week lookback window (not a true all-time last-workout value — there's no cheaper way to get that from the current API surface).
 - `POST /` `{name, email, password, cpf}` → creates a CLIENT user
 - `PATCH /:id` `{name, email, cpf?}`
 - `DELETE /:id`
@@ -90,7 +101,7 @@ Shared across all trainers.
 
 ## Feedback
 - `POST /workout-logs/:workoutLogId/feedback` `{text}` (CLIENT)
-- `GET /feedback` (TRAINER) → `EnrichedFeedback[]` = `WorkoutFeedback & {clientName, workoutName, trainingPlanName}`, newest first
+- `GET /feedback` (TRAINER) → `EnrichedFeedback[]` = `WorkoutFeedback & {clientName, workoutName, trainingPlanName}`, newest first. **Not** scoped to one client — returns the whole trainer's feedback. Screens that need one student's feedback (e.g. the student-detail page) filter this client-side by `clientId`; the trainer's total feedback volume is small enough that this is fine for now. No `?clientId=` param was added — revisit if that assumption stops holding.
 
 ## Dashboard (TRAINER)
 - `GET /dashboard` → everything the trainer landing page needs in one call:
