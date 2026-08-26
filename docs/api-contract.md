@@ -50,6 +50,7 @@ Shared across all trainers.
 `TrainingPlan` = `{id, name, description, trainerId, clientId, startDate, endDate, level}`
 
 ## Workouts
+- **`GET /workouts?recent=true`** (TRAINER/ADMIN) → `RecentWorkoutSummary[]` = `Workout & {studentName, planName, exerciseCount}` — the trainer's workouts **across every plan/student**, for the workout-builder's "usar treino existente como base" clone picker. `?recent=true` is currently the only supported mode (no unfiltered "list all" query). Sorted by workout id descending (proxy for recency — `Workout` has no timestamp field). `exerciseCount` costs one `listWorkoutExercises` call per workout, not a full `/full` fetch.
 - `GET /training-plans/:planId/workouts` → `Workout[]`
 - `POST /training-plans/:planId/workouts` `{name, dayOfWeek}` (TRAINER)
 - `GET /workouts/:id` → `Workout` = `{id, name, trainingPlanId, dayOfWeek}`

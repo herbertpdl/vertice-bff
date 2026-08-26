@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { parseId } from '../../lib/net.js'
 import { assertOwnsPlan, assertOwnsWorkout } from '../../lib/ownership.js'
+import { ValidationError } from '../../lib/errors.js'
 import { workoutInputSchema, cloneWorkoutSchema } from './schemas.js'
 import * as workoutService from './service.js'
 import * as planService from '../training-plans/service.js'
@@ -31,6 +32,20 @@ export async function workoutsUnderPlanRoutes(app: FastifyInstance) {
 /** Mounted at /api/workouts */
 export async function workoutRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
+
+  // Only `?recent=true` is supported today — it powers the workout builder's
+  // clone picker (the trainer's workouts across every plan/student). There is
+  // no unfiltered "list all workouts" mode.
+  app.get<{ Querystring: { recent?: string } }>(
+    '/',
+    { preHandler: app.requireRole('TRAINER', 'ADMIN') },
+    async (req) => {
+      if (req.query.recent !== 'true') {
+        throw new ValidationError('GET /workouts requires ?recent=true')
+      }
+      return workoutService.listRecentWorkoutsForTrainer(req.user!.id)
+    },
+  )
 
   app.get<{ Params: { id: string } }>('/:id', async (req) => {
     const id = parseId(req.params.id)
