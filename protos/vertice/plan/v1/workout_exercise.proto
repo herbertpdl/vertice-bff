@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package vertice.plan.v1;
+
+import "google/protobuf/empty.proto";
+
+option java_package = "com.vertice.api.generated.grpc.plan.v1";
+option java_multiple_files = true;
+
+service WorkoutExerciseService {
+  rpc ListWorkoutExercises(ListWorkoutExercisesRequest) returns (ListWorkoutExercisesResponse);
+  rpc GetWorkoutExercise(GetWorkoutExerciseRequest) returns (WorkoutExerciseResponse);
+  rpc CreateWorkoutExercise(WorkoutExerciseCreateRequest) returns (WorkoutExerciseResponse);
+  rpc UpdateWorkoutExercise(UpdateWorkoutExerciseRequest) returns (WorkoutExerciseResponse);
+  rpc DeleteWorkoutExercise(DeleteWorkoutExerciseRequest) returns (google.protobuf.Empty);
+}
+
+message WorkoutExerciseResponse {
+  int64 id = 1;
+  int64 workout_id = 2;
+  int64 exercise_id = 3;
+  int32 order = 4;
+  int32 rest_seconds_between_sets = 5;
+  string notes = 6;
+}
+
+message WorkoutExerciseRequest {
+  int32 order = 1;
+  int32 rest_seconds_between_sets = 2;
+  string notes = 3;
+}
+
+message WorkoutExerciseCreateRequest {
+  int64 workout_id = 1;
+  int64 exercise_id = 2;
+  int32 order = 3;
+  int32 rest_seconds_between_sets = 4;
+  string notes = 5;
+}
+
+message ListWorkoutExercisesRequest {
+  int64 workout_id = 1;
+}
+
+message ListWorkoutExercisesResponse {
+  repeated WorkoutExerciseResponse workout_exercises = 1;
+}
+
+message GetWorkoutExerciseRequest {
+  int64 id = 1;
+}
+
+message UpdateWorkoutExerciseRequest {
+  int64 id = 1;
+  WorkoutExerciseRequest workout_exercise = 2;
+}
+
+message DeleteWorkoutExerciseRequest {
+  int64 id = 1;
+}
