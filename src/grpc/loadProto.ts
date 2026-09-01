@@ -30,4 +30,5 @@ const packageDefinition = protoLoader.loadSync(PROTO_FILES, {
 // `grpc.loadPackageDefinition` returns a deeply nested, dynamically-shaped
 // object (one property per proto package segment) — there's no static type
 // for it, so callers work with the concrete `vertice.*.v1.*` services below.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const grpcProto = grpc.loadPackageDefinition(packageDefinition) as any
