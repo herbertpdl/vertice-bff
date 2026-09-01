@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`vertice-bff` is a Backend-for-Frontend: a Fastify HTTP/JSON API that sits between `vertice-web` (frontend) and `vertice-api` (a Spring Boot service exposed only over gRPC on `:9090`). It does not own any data itself — every route handler ultimately calls a gRPC method on `vertice-api` and reshapes the response for the frontend. There is no database, ORM, or ODM in this repo.
+`vertice-bff` is a Backend-for-Frontend: a Fastify HTTP/JSON API that sits between `vertice-web-react` (frontend) and `vertice-api` (a Spring Boot service exposed only over gRPC on `:9090`). It does not own any data itself — every route handler ultimately calls a gRPC method on `vertice-api` and reshapes the response for the frontend. There is no database, ORM, or ODM in this repo.
 
-Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web`):
+Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web-react`):
 1. `vertice-api` — `docker compose up -d` (postgres), then `./gradlew bootRun --args='--spring.profiles.active=local'` (gRPC on `:9090`, auth disabled locally).
 2. `vertice-bff` (this repo) — `cp .env.example .env && npm install && npm run dev` (REST on `:3000`).
-3. `vertice-web` — `npm run dev` (Vite, default `:5173`).
+3. `vertice-web-react` — `npm run dev` (Next.js App Router, default `:3000` — **same default port as this BFF**; override one of them, e.g. `PORT=3000` here is already taken, so run this BFF on its default and start Next with `npm run dev -- -p <other-port>`, or vice versa). Replaces the old Vue-based `vertice-web`, which is deprecated. It's currently a skeleton with no features implemented yet, so the two aren't wired together in practice.
 
 ## Commands
 
