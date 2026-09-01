@@ -15,6 +15,7 @@ const PROTO_FILES = [
   'vertice/plan/v1/exercise_set.proto',
   'vertice/session/v1/workout_session.proto',
   'vertice/session/v1/workout_feedback.proto',
+  'vertice/trainerclient/v1/trainer_client.proto',
 ].map((file) => path.join(PROTOS_ROOT, file))
 
 const packageDefinition = protoLoader.loadSync(PROTO_FILES, {
@@ -29,4 +30,5 @@ const packageDefinition = protoLoader.loadSync(PROTO_FILES, {
 // `grpc.loadPackageDefinition` returns a deeply nested, dynamically-shaped
 // object (one property per proto package segment) — there's no static type
 // for it, so callers work with the concrete `vertice.*.v1.*` services below.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const grpcProto = grpc.loadPackageDefinition(packageDefinition) as any
