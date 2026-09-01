@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web-react`):
 1. `vertice-api` — `docker compose up -d` (postgres), then `./gradlew bootRun --args='--spring.profiles.active=local'` (gRPC on `:9090`, auth disabled locally).
 2. `vertice-bff` (this repo) — `cp .env.example .env && npm install && npm run dev` (REST on `:3000`).
-3. `vertice-web-react` — `npm run dev` (Next.js App Router, default `:3000` — **same default port as this BFF**; override one of them, e.g. `PORT=3000` here is already taken, so run this BFF on its default and start Next with `npm run dev -- -p <other-port>`, or vice versa). Replaces the old Vue-based `vertice-web`, which is deprecated. It's currently a skeleton with no features implemented yet, so the two aren't wired together in practice.
+3. `vertice-web-react` — `npm run dev` (Next.js App Router, default `:3000` — **same default port as this BFF**; override one of them, e.g. `PORT=3000` here is already taken, so run this BFF on its default and start Next with `npm run dev -- -p <other-port>`, or vice versa). Replaces the old Vue-based `vertice-web`, which is deprecated. It's currently a skeleton with no features implemented yet, so the two aren't wired together in practice. Note: `.env.example`'s `CORS_ORIGIN=http://localhost:5173` is a leftover Vite default from the old `vertice-web`; once wiring up `vertice-web-react` for real, update `CORS_ORIGIN` to match whatever port it actually runs on.
 
 ## Commands
 
@@ -31,7 +31,7 @@ There's no single-test-file invocation documented yet since the suite is empty; 
 - `schemas.ts` — Zod schemas for request bodies, parsed explicitly in route handlers (`schema.parse(req.body)`), not via a Fastify validation hook.
 - `service.ts` — business logic, gRPC calls, and response shaping. This is where cross-module composition happens (e.g. `clients/service.ts` pulls from `users`, `training-plans`, and `workout-sessions` services to build a roster view).
 
-Not every module has all three files — `users` and `dashboard` are read/compose-only and have no `routes.ts`/`schemas.ts` of their own where unneeded.
+Not every module has all three files — `users` is read/compose-only with no `routes.ts`/`schemas.ts` of its own; `dashboard` has `routes.ts` but no `schemas.ts` (no request body to validate).
 
 **gRPC bridge** (`src/grpc/`):
 - `loadProto.ts` loads all `.proto` files under `protos/vertice/**` via `@grpc/proto-loader` into `grpcProto`, a dynamically-shaped object with no static type (hence the `as any` at its export — services are consumed through the concrete clients below, not through this object directly).
