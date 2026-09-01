@@ -22,3 +22,7 @@ export const workoutFeedbackClient = new grpcProto.vertice.session.v1.WorkoutFee
   grpcTarget,
   credentials,
 )
+export const trainerClientClient = new grpcProto.vertice.trainerclient.v1.TrainerClientService(
+  grpcTarget,
+  credentials,
+)

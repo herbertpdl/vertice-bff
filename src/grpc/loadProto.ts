@@ -15,6 +15,7 @@ const PROTO_FILES = [
   'vertice/plan/v1/exercise_set.proto',
   'vertice/session/v1/workout_session.proto',
   'vertice/session/v1/workout_feedback.proto',
+  'vertice/trainerclient/v1/trainer_client.proto',
 ].map((file) => path.join(PROTOS_ROOT, file))
 
 const packageDefinition = protoLoader.loadSync(PROTO_FILES, {

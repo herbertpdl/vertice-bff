@@ -7,7 +7,7 @@ import { recordSetLogSchema } from './schemas.js'
 import * as sessionService from './service.js'
 import * as workoutService from '../workouts/service.js'
 import * as planService from '../training-plans/service.js'
-import { assertIsTrainersClient } from '../students/service.js'
+import { assertIsTrainersClient } from '../clients/service.js'
 
 /** Mounted at /api/workouts/:workoutId/session */
 export async function workoutSessionRoutes(app: FastifyInstance) {

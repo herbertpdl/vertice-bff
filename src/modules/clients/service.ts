@@ -3,14 +3,16 @@ import * as userService from '../users/service.js'
 import * as planService from '../training-plans/service.js'
 import * as workoutService from '../workouts/service.js'
 import * as sessionService from '../workout-sessions/service.js'
+import { trainerClientClient } from '../../grpc/clients.js'
+import { grpcCall } from '../../grpc/call.js'
 import { ForbiddenError } from '../../lib/errors.js'
 import { currentWeekStartDate } from '../../lib/dates.js'
 
-export interface StudentSummary extends userService.User {
+export interface ClientSummary extends userService.User {
   activePlanCount: number
 }
 
-export interface StudentCreateInput {
+export interface ClientCreateInput {
   name: string
   email: string
   cpf?: string
@@ -18,32 +20,27 @@ export interface StudentCreateInput {
 }
 
 /**
- * Creates a CLIENT user for a trainer's roster. The design's "Novo aluno"
- * flow is invite-based (name/email/cpf only, no password field) — there is
- * no email-invite system in this stack yet, so when no password is supplied
- * we generate one server-side. The client never sees it; a real invite/reset
+ * Creates a CLIENT user and links them to the trainer's roster via
+ * vertice-api's TrainerClientService.CreateClientForTrainer RPC — this is
+ * the source of truth for the trainer/client relationship (User has no
+ * direct trainer/client link of its own). The design's "Novo aluno" flow is
+ * invite-based (name/email/cpf only, no password field) — there is no
+ * email-invite system in this stack yet, so when no password is supplied we
+ * generate one server-side. The client never sees it; a real invite/reset
  * flow would replace this later.
  */
-export async function createStudent(input: StudentCreateInput): Promise<userService.User> {
-  return userService.createUser({
+export async function createClient(trainerId: number, input: ClientCreateInput): Promise<userService.User> {
+  const res = await grpcCall<
+    { trainerId: number; name: string; email: string; password: string; cpf: string },
+    userService.UserResponse
+  >(trainerClientClient, 'CreateClientForTrainer', {
+    trainerId,
     name: input.name,
     email: input.email,
-    cpf: input.cpf,
     password: input.password ?? randomUUID(),
-    role: 'CLIENT',
+    cpf: input.cpf ?? '',
   })
-}
-
-/** A trainer's roster is derived from the distinct clients across their training plans — User has no direct trainer/client link. */
-export async function listStudentsForTrainer(trainerId: number): Promise<StudentSummary[]> {
-  const plans = await planService.listTrainingPlans({ trainerId })
-  const countByClient = new Map<number, number>()
-  for (const plan of plans) {
-    countByClient.set(plan.clientId, (countByClient.get(plan.clientId) ?? 0) + 1)
-  }
-
-  const clients = await Promise.all([...countByClient.keys()].map((id) => userService.getUser(id)))
-  return clients.map((client) => ({ ...client, activePlanCount: countByClient.get(client.id) ?? 0 }))
+  return userService.toUser(res)
 }
 
 export interface CurrentPlanInfo {
@@ -60,7 +57,7 @@ export interface WeekActivityDay {
   completed: boolean
 }
 
-export interface StudentRosterEntry extends StudentSummary {
+export interface ClientRosterEntry extends ClientSummary {
   currentPlan: CurrentPlanInfo | null
   lastWorkoutAt: string | null
   weekActivity: WeekActivityDay[]
@@ -69,25 +66,42 @@ export interface StudentRosterEntry extends StudentSummary {
 const WEEKDAY_LABELS: WeekdayLabel[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY']
 
 /**
- * Roster view for the students list screen: extends the plain student
- * summary with each student's current (date-active) training plan, their
- * most recent workout completion, and which weekdays this week had a
- * completed workout (5 dots: Monday–Friday).
+ * Roster view for the clients list screen: extends the plain client summary
+ * with each client's current (date-active) training plan, their most recent
+ * workout completion, and which weekdays this week had a completed workout
+ * (5 dots: Monday–Friday).
+ *
+ * The base roster — who counts as "this trainer's client" — comes from
+ * vertice-api's TrainerClientService.ListClientsForTrainer RPC, not from
+ * training plans; a freshly-created client with zero plans still shows up
+ * here. Training plans are only used to *enrich* each roster member: a
+ * client absent from the plans-derived maps below simply falls back to
+ * activePlanCount 0 / currentPlan null / lastWorkoutAt null / an all-empty
+ * week strip, rather than being dropped.
  *
  * Simplification: vertice-api's ListWorkoutLogs RPC is scoped to one
  * trainingPlanId + one weekStartDate at a time — there's no general "give me
  * this client's workout history" query. Mirroring the dashboard module's
  * completedToday logic, this only looks at the *current* week's logs across
- * all of the trainer's plans. A student whose last completed workout falls
- * in an earlier week shows `lastWorkoutAt: null` / an all-empty week strip
- * here, rather than a stale older date — we only surface activity we can
- * actually confirm.
+ * all of the trainer's plans. A client whose last completed workout falls in
+ * an earlier week shows `lastWorkoutAt: null` / an all-empty week strip here,
+ * rather than a stale older date — we only surface activity we can actually
+ * confirm.
  */
-export async function listStudentsOverviewForTrainer(trainerId: number): Promise<StudentRosterEntry[]> {
-  const plans = await planService.listTrainingPlans({ trainerId })
+export async function listClientsOverviewForTrainer(trainerId: number): Promise<ClientRosterEntry[]> {
   const today = new Date().toISOString().slice(0, 10)
   const weekStartDate = currentWeekStartDate()
   const weekDates = WEEKDAY_LABELS.map((dayOfWeek, i) => ({ dayOfWeek, date: addDays(weekStartDate, i) }))
+
+  const [rosterRes, plans] = await Promise.all([
+    grpcCall<{ trainerId: number }, { clients: userService.UserResponse[] }>(
+      trainerClientClient,
+      'ListClientsForTrainer',
+      { trainerId },
+    ),
+    planService.listTrainingPlans({ trainerId }),
+  ])
+  const roster = rosterRes.clients.map(userService.toUser)
 
   const countByClient = new Map<number, number>()
   const plansByClient = new Map<number, planService.TrainingPlan[]>()
@@ -95,16 +109,12 @@ export async function listStudentsOverviewForTrainer(trainerId: number): Promise
     countByClient.set(plan.clientId, (countByClient.get(plan.clientId) ?? 0) + 1)
     plansByClient.set(plan.clientId, [...(plansByClient.get(plan.clientId) ?? []), plan])
   }
-  const clientIds = [...countByClient.keys()]
 
-  const [clients, logsByPlan] = await Promise.all([
-    Promise.all(clientIds.map((id) => userService.getUser(id))),
-    Promise.all(
-      plans.map((plan) =>
-        sessionService.listWorkoutLogs({ clientId: plan.clientId, trainingPlanId: plan.id, weekStartDate }),
-      ),
+  const logsByPlan = await Promise.all(
+    plans.map((plan) =>
+      sessionService.listWorkoutLogs({ clientId: plan.clientId, trainingPlanId: plan.id, weekStartDate }),
     ),
-  ])
+  )
 
   const logsByClient = new Map<number, sessionService.WorkoutLog[]>()
   plans.forEach((plan, i) => {
@@ -112,7 +122,7 @@ export async function listStudentsOverviewForTrainer(trainerId: number): Promise
     logsByClient.set(plan.clientId, [...(logsByClient.get(plan.clientId) ?? []), ...completedLogs])
   })
 
-  return clients.map((client) => {
+  return roster.map((client) => {
     const clientPlans = plansByClient.get(client.id) ?? []
     const [activePlan] = clientPlans
       .filter((p) => p.startDate <= today && today <= p.endDate)
@@ -134,10 +144,15 @@ export async function listStudentsOverviewForTrainer(trainerId: number): Promise
   })
 }
 
+/** Confirms `clientId` is actually one of `trainerId`'s clients via vertice-api's TrainerClientService. */
 export async function assertIsTrainersClient(trainerId: number, clientId: number): Promise<void> {
-  const plans = await planService.listTrainingPlans({ trainerId, clientId })
-  if (plans.length === 0) {
-    throw new ForbiddenError('This client is not one of your students')
+  const res = await grpcCall<{ trainerId: number; clientId: number }, { isClient: boolean }>(
+    trainerClientClient,
+    'IsTrainersClient',
+    { trainerId, clientId },
+  )
+  if (!res.isClient) {
+    throw new ForbiddenError('This client is not one of your clients')
   }
 }
 
@@ -151,7 +166,7 @@ function addDays(isoDate: string, days: number): string {
 
 // (shared by both the weekly-activity roster view above and the adherence calc below)
 
-export interface StudentOverview {
+export interface ClientOverview {
   student: userService.User
   activePlan: {
     id: number
@@ -166,8 +181,8 @@ export interface StudentOverview {
 }
 
 /**
- * Aggregates the "4-tile" header stats for the student detail screen: the
- * student's currently active plan (the one whose date range contains today —
+ * Aggregates the "4-tile" header stats for the client detail screen: the
+ * client's currently active plan (the one whose date range contains today —
  * if more than one somehow overlaps, the most recently started one wins),
  * this week's completed-vs-total workout count for that plan, the most
  * recent completed-workout timestamp, and a trailing-4-week adherence %.
@@ -182,7 +197,7 @@ export interface StudentOverview {
  * lookback window, not a true all-time value, since there's no cheaper way
  * to get it from the current API surface.
  */
-export async function getStudentOverview(trainerId: number, studentId: number): Promise<StudentOverview> {
+export async function getClientOverview(trainerId: number, studentId: number): Promise<ClientOverview> {
   const [student, plans] = await Promise.all([
     userService.getUser(studentId),
     planService.listTrainingPlans({ trainerId, clientId: studentId }),

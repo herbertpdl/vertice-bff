@@ -5,7 +5,7 @@ import errorHandler from './plugins/error-handler.js'
 import authenticatePlugin from './plugins/authenticate.js'
 
 import authRoutes from './modules/auth/routes.js'
-import studentRoutes from './modules/students/routes.js'
+import clientRoutes from './modules/clients/routes.js'
 import exerciseRoutes from './modules/exercises/routes.js'
 import trainingPlanRoutes from './modules/training-plans/routes.js'
 import { workoutsUnderPlanRoutes, workoutRoutes } from './modules/workouts/routes.js'
@@ -39,7 +39,7 @@ export async function buildApp() {
   await app.register(
     async (api) => {
       await api.register(authRoutes, { prefix: '/auth' })
-      await api.register(studentRoutes, { prefix: '/students' })
+      await api.register(clientRoutes, { prefix: '/clients' })
       await api.register(exerciseRoutes, { prefix: '/exercises' })
       await api.register(trainingPlanRoutes, { prefix: '/training-plans' })
       await api.register(workoutsUnderPlanRoutes, { prefix: '/training-plans/:planId/workouts' })

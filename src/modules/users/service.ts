@@ -12,7 +12,7 @@ export interface User {
   role: Role
 }
 
-interface UserResponse {
+export interface UserResponse {
   id: string
   name: string
   email: string
@@ -21,7 +21,7 @@ interface UserResponse {
   role: Role
 }
 
-function toUser(r: UserResponse): User {
+export function toUser(r: UserResponse): User {
   return { id: Number(r.id), name: r.name, email: r.email, cpf: r.cpf, cref: r.cref, role: r.role }
 }
 
