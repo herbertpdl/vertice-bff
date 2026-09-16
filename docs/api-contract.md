@@ -11,7 +11,7 @@ All error responses have the shape:
 ```
 Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `UPSTREAM_UNAVAILABLE` (503).
 
-`PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it (upstream gRPC `FAILED_PRECONDITION`); the `message` is vertice-api's verbatim. Distinct from `VALIDATION_ERROR` ("fix the payload").
+`PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — today only `PUT /workouts/:workoutId/exercises` emits it, when a client has already recorded data under the workout; the `message` is vertice-api's verbatim and names the blocking exercise and set number. Distinct from `VALIDATION_ERROR` ("fix the payload").
 
 Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. All list/detail endpoints auto-scope to the caller (a `CLIENT` only ever sees their own data; a `TRAINER` only sees their own students/plans).
 
@@ -72,7 +72,18 @@ Shared across all trainers.
 ## Workouts
 - **`GET /workouts?recent=true`** (TRAINER/ADMIN) → `RecentWorkoutSummary[]` = `Workout & {studentName, planName, exerciseCount}` — the trainer's workouts **across every plan/student**, for the workout-builder's "usar treino existente como base" clone picker. `?recent=true` is currently the only supported mode (no unfiltered "list all" query). Sorted by workout id descending (proxy for recency — `Workout` has no timestamp field). `exerciseCount` costs one `listWorkoutExercises` call per workout, not a full `/full` fetch.
 - `GET /training-plans/:planId/workouts` → `Workout[]`
-- `POST /training-plans/:planId/workouts` `{name, dayOfWeek}` (TRAINER)
+- **`POST /training-plans/:planId/workouts`** `{name, dayOfWeek, exercises?: WorkoutExerciseEntry[]}` (TRAINER) → `201` **`FullWorkout`** (same shape as `GET /workouts/:id/full`, so the web gets every new `WorkoutExercise`/`ExerciseSet` id right away). `exercises` is optional — omitted or `[]` creates an empty workout, exactly as before. Max 20 entries. Creation is all-or-nothing: on any 4xx nothing was created. Upstream RPC: `CreateWorkoutWithExercises`.
+  ```jsonc
+  // WorkoutExerciseEntry — no `order`: list position is the order
+  { "exerciseId": 12,                 // catalog exercise, must exist; the same id may repeat
+    "restSecondsBetweenSets": 90,     // optional, default 0
+    "notes": "",                      // optional, default ""
+    "sets": [                         // optional, default []; max 10 — no `setNumber`: list position is the set number
+      { "reps": 10, "durationSeconds": 0, "weight": "60.0", "loadPercentage": "",   // all optional; numbers default 0, decimals are strings ("" = unset)
+        "strategy": "STRAIGHT",       // optional; omitted → vertice-api defaults to STRAIGHT
+        "restSeconds": 90, "notes": "" } ] }
+  ```
+  Errors: Zod failures (missing `name`, >20 exercises, >10 sets, bad enum, negative number) → 400 `VALIDATION_ERROR` with field `details`; upstream rejections (cap, nonexistent `exerciseId`, malformed decimal) → 400 `VALIDATION_ERROR` with a flat message that does not say which entry.
 - `GET /workouts/:id` → `Workout` = `{id, name, trainingPlanId, dayOfWeek}`
 - **`GET /workouts/:id/full`** → `Workout & { exercises: FullWorkoutExercise[] }` — **the key aggregate for a workout-builder or read-only workout view.** Each `FullWorkoutExercise` = `WorkoutExercise & { exercise: Exercise, sets: ExerciseSet[] }`, sorted by `order`/`setNumber`. One call gets everything needed to render a workout.
 - `PATCH /workouts/:id` `{name, dayOfWeek}` (TRAINER)
@@ -84,6 +95,7 @@ Shared across all trainers.
 ## Workout exercises
 - `GET /workouts/:workoutId/exercises` → `WorkoutExercise[]`
 - `POST /workouts/:workoutId/exercises` `{exerciseId, order, restSecondsBetweenSets, notes?}` (TRAINER)
+- **`PUT /workouts/:workoutId/exercises`** `{exercises: WorkoutExerciseEntry[]}` (TRAINER) → `200` **`FullWorkout`** — replaces the workout's **entire** exercise/set tree with the given list (full replace, not merge; same entry shape as `POST /training-plans/:planId/workouts`, max 20). `exercises` is required — `[]` empties the workout, omitting it is a 400. Upstream deletes and recreates the tree, so **every `WorkoutExercise`/`ExerciseSet` id in the response is new**; any id held from before the call is invalid. Refused with **409 `PRECONDITION_FAILED`** once *any* set under the workout has recorded client data (not just sets the replace would drop) — from then on the workout can only be edited through the one-at-a-time endpoints on this page. All-or-nothing: on any 4xx nothing changed. Upstream RPC: `ReplaceWorkoutExercises`.
 - `PATCH /workout-exercises/:id` `{order, restSecondsBetweenSets, notes?}` (TRAINER)
 - `DELETE /workout-exercises/:id` (TRAINER)
 
