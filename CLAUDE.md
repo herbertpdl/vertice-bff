@@ -18,10 +18,10 @@ Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web-react`
 - `npm run build` / `npm start` — compile to `dist/` and run the compiled output
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run lint` — ESLint (flat config, `eslint.config.js`, typescript-eslint recommended rules)
-- `npm test` — Vitest (`vitest run`); no test files exist yet, so this currently passes trivially
+- `npm test` — Vitest (`vitest run`); unit tests live next to the code as `*.test.ts` (e.g. `src/grpc/call.test.ts`) and don't spin up gRPC
 - `docker build .` / the provided `Dockerfile` — containerized dev, runs `npm run dev:docker`
 
-There's no single-test-file invocation documented yet since the suite is empty; once tests exist, standard Vitest filtering (`vitest run path/to/file.test.ts` or `-t "name"`) applies.
+Single-file / single-test runs use standard Vitest filtering: `npx vitest run src/grpc/call.test.ts` or `npx vitest run -t "name"`.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ Not every module has all three files — `users` is read/compose-only with no `r
 **gRPC bridge** (`src/grpc/`):
 - `loadProto.ts` loads all `.proto` files under `protos/vertice/**` via `@grpc/proto-loader` into `grpcProto`, a dynamically-shaped object with no static type (hence the `as any` at its export — services are consumed through the concrete clients below, not through this object directly).
 - `clients.ts` instantiates one gRPC client per service (`userClient`, `exerciseClient`, `trainingPlanClient`, `workoutClient`, `workoutExerciseClient`, `exerciseSetClient`, `workoutSessionClient`, `workoutFeedbackClient`, `trainerClientClient`) against `grpcTarget` (from `env.VERTICE_API_GRPC_HOST`/`PORT`), using insecure credentials (vertice-api runs without TLS locally).
-- `call.ts` exports `grpcCall(client, method, request, metadata?)`, which promisifies grpc-js's callback API and maps gRPC status codes to `HttpError` subclasses (`NOT_FOUND`→404, `INVALID_ARGUMENT`/`FAILED_PRECONDITION`→400, `ALREADY_EXISTS`→409, `UNAUTHENTICATED`→401, `PERMISSION_DENIED`→403, `UNAVAILABLE`→503, else 502). Every service function funnels through this.
+- `call.ts` exports `grpcCall(client, method, request, metadata?)`, which promisifies grpc-js's callback API and maps gRPC status codes to `HttpError` subclasses (`NOT_FOUND`→404, `INVALID_ARGUMENT`→400, `FAILED_PRECONDITION`→409 `PRECONDITION_FAILED` (a well-formed request the resource's state forbids, message passed through verbatim — kept apart from 400 so the web can tell "fix the form" from "cannot be edited this way"), `ALREADY_EXISTS`→409 `CONFLICT`, `UNAUTHENTICATED`→401, `PERMISSION_DENIED`→403, `UNAVAILABLE`→503, else 502). Every service function funnels through this.
 
 To add a new proto: drop the `.proto` file under `protos/`, add its path to `PROTO_FILES` in `loadProto.ts`, and instantiate a client for it in `clients.ts`.
 
@@ -46,7 +46,7 @@ To add a new proto: drop the `.proto` file under `protos/`, add its path to `PRO
 
 **Composed/aggregate endpoints:** several routes exist specifically to save the frontend from orchestrating multiple calls — `GET /clients` (roster with plan/activity enrichment), `GET /clients/:id/overview` (client-detail header stats incl. an approximated 4-week adherence %), `GET /workouts/:id/full`, `GET /workouts/:workoutId/session` (auto-starts/resumes the week's log and merges in last-performed set values), and `GET /dashboard`. These exist because vertice-api's gRPC surface is narrow (e.g. `ListWorkoutLogs` is scoped to one `trainingPlanId` + one `weekStartDate` — there's no general history query), so service functions often approximate or re-fetch across a small date window rather than there being a matching upstream RPC. When touching these, read the surrounding comments in the service file first — they document exactly which upstream limitation is being worked around and why the approximation is shaped the way it is.
 
-**Error handling:** all errors are `HttpError` subclasses (`src/lib/errors.ts`: `NotFoundError`, `ConflictError`, `UnauthorizedError`, `ForbiddenError`, `ValidationError`), thrown from anywhere (routes or services) and caught by the global handler (`src/plugins/error-handler.ts`), which also maps `ZodError` and Fastify's own validation errors to the same `{ error: { code, message, details } }` shape. Don't `reply.send()` an error response manually — throw instead.
+**Error handling:** all errors are `HttpError` subclasses (`src/lib/errors.ts`: `NotFoundError`, `ConflictError`, `UnauthorizedError`, `ForbiddenError`, `ValidationError`, `PreconditionFailedError`), thrown from anywhere (routes or services) and caught by the global handler (`src/plugins/error-handler.ts`), which also maps `ZodError` and Fastify's own validation errors to the same `{ error: { code, message, details } }` shape. Don't `reply.send()` an error response manually — throw instead.
 
 **Config** (`src/config/env.ts`): all env vars are parsed once through a Zod schema at import time (`env`); there's no other place reading `process.env` directly for app config. `grpcTarget` is derived here too.
 
