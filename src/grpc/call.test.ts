@@ -24,9 +24,15 @@ describe('mapGrpcError', () => {
     expect(err.message).toBe('exercise_id: one or more referenced exercises do not exist')
   })
 
-  it('maps NOT_FOUND to 404', () => {
-    const err = mapGrpcError({ code: grpc.status.NOT_FOUND, details: 'Workout' })
+  it('maps NOT_FOUND to 404 with the upstream message verbatim', () => {
+    const err = mapGrpcError({ code: grpc.status.NOT_FOUND, details: 'Workout with id 7 not found' })
     expect(err.statusCode).toBe(404)
     expect(err.code).toBe('NOT_FOUND')
+    expect(err.message).toBe('Workout with id 7 not found')
+  })
+
+  it('falls back to a generic NOT_FOUND message when upstream sends none', () => {
+    const err = mapGrpcError({ code: grpc.status.NOT_FOUND, details: '' })
+    expect(err.message).toBe('Resource not found')
   })
 })

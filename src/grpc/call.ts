@@ -1,5 +1,5 @@
 import * as grpc from '@grpc/grpc-js'
-import { HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
+import { HttpError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
 
 /** Promisifies a grpc-js callback-style unary call and maps gRPC status codes to HttpErrors. */
 export function grpcCall<TRequest, TResponse>(
@@ -27,8 +27,11 @@ export function grpcCall<TRequest, TResponse>(
 /** Maps a gRPC status to the HttpError the global error handler will render. Exported for tests. */
 export function mapGrpcError(error: Pick<grpc.ServiceError, 'code' | 'details'>): HttpError {
   switch (error.code) {
+    // vertice-api's description is already a full sentence ("Exercise with id 5
+    // not found"), so it is passed through verbatim rather than wrapped by
+    // NotFoundError, which would append a second "not found".
     case grpc.status.NOT_FOUND:
-      return new NotFoundError(error.details || 'Resource')
+      return new HttpError(404, error.details || 'Resource not found', 'NOT_FOUND')
     case grpc.status.INVALID_ARGUMENT:
       return new ValidationError(error.details || 'Invalid request')
     // "Valid request, but the resource's state forbids it" (e.g. replacing a
