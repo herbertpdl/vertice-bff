@@ -55,7 +55,7 @@ The catalog is the shared **starter set** (`isStarter: true`, read-only for ever
 ```ts
 MuscleGroup = { id: number, name: string }
 Exercise    = { id: number, name: string, description: string, videoUrl: string,
-                muscleGroups: MuscleGroup[],   // upstream order: primary group first, then the others by id
+                muscleGroups: MuscleGroup[],   // upstream order: primary group first, then the others by id (starter rows only have a primary; a trainer's own exercise is plain id order)
                 isStarter: boolean }
 ```
 There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is gone) — anywhere an `Exercise` is embedded, too.
@@ -69,7 +69,7 @@ There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is g
   - Errors: 403 `FORBIDDEN` `You do not have access to exercise <id>`; 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
 - `GET /exercises/:id/progress?clientId=` → `{weekStartDate, weight}[]` (weight-over-time for a graph). CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
 - `POST /exercises` `{name, description?, videoUrl?, muscleGroupIds}` (TRAINER only) → `201` `Exercise` (`isStarter: false`, private to the caller).
-  - `name` 1..255 chars (must not be blank); `description` ≤255, default `""`; `videoUrl` `""` or an http(s) URL ≤500, default `""`; `muscleGroupIds` at least one positive integer id — duplicates are dropped, order as sent is kept (which one becomes the primary group is upstream's call). Duplicate names are allowed.
+  - `name` 1..255 chars (must not be blank); `description` ≤255, default `""`; `videoUrl` `""` or an http(s) URL ≤500, default `""`; `muscleGroupIds` at least one positive integer id — duplicates are dropped. A trainer-created exercise has no primary group, so its `muscleGroups` come back in id order whatever order was sent. Duplicate names are allowed.
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER` (CLIENT, ADMIN); 400 `VALIDATION_ERROR` with field `details` for Zod failures (`name` missing/empty/too long, `description`/`videoUrl` too long, `videoUrl` not a URL, `muscleGroupIds` missing/empty/non-positive — a body with only the old `muscleGroup` fails here); 400 `VALIDATION_ERROR` with a flat upstream message for `name: must not be blank`, `videoUrl: must be a valid http(s) URL`, `muscleGroupIds: unknown muscle group <id>`.
 - `PATCH /exercises/:id` (TRAINER only), same body as `POST` — **full replacement** of name, description, video URL and the whole group list → `200` `Exercise`.
   - Errors: as `POST`, plus 403 `FORBIDDEN` `Exercise <id> belongs to the shared starter set and cannot be changed` (starter row); 403 `You do not have access to exercise <id>` (another trainer's); 404 `NOT_FOUND`.
