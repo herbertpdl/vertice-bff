@@ -8,6 +8,7 @@ option java_package = "com.vertice.api.generated.grpc.exercise.v1";
 option java_multiple_files = true;
 
 service ExerciseService {
+  rpc ListMuscleGroups(ListMuscleGroupsRequest) returns (ListMuscleGroupsResponse);
   rpc ListExercises(ListExercisesRequest) returns (ListExercisesResponse);
   rpc GetExercise(GetExerciseRequest) returns (ExerciseResponse);
   rpc CreateExercise(ExerciseRequest) returns (ExerciseResponse);
@@ -15,33 +16,41 @@ service ExerciseService {
   rpc DeleteExercise(DeleteExerciseRequest) returns (google.protobuf.Empty);
 }
 
-enum MuscleGroup {
-  MUSCLE_GROUP_UNSPECIFIED = 0;
-  CHEST = 1;
-  BACK = 2;
-  LEGS = 3;
-  SHOULDERS = 4;
-  ARMS = 5;
-  CORE = 6;
-  CARDIO = 7;
+message MuscleGroupResponse {
+  int64 id = 1;
+  string name = 2;
+}
+
+message ListMuscleGroupsRequest {
+}
+
+message ListMuscleGroupsResponse {
+  repeated MuscleGroupResponse muscle_groups = 1;
 }
 
 message ExerciseResponse {
+  reserved 5;
+  reserved "muscle_group";
   int64 id = 1;
   string name = 2;
   string description = 3;
   string video_url = 4;
-  MuscleGroup muscle_group = 5;
+  repeated MuscleGroupResponse muscle_groups = 6;
+  bool is_starter = 7;
 }
 
 message ExerciseRequest {
+  reserved 4;
+  reserved "muscle_group";
   string name = 1;
   string description = 2;
   string video_url = 3;
-  MuscleGroup muscle_group = 4;
+  repeated int64 muscle_group_ids = 5;
 }
 
 message ListExercisesRequest {
+  int64 muscle_group_id = 1;
+  string search = 2;
 }
 
 message ListExercisesResponse {
