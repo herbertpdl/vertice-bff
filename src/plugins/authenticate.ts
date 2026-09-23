@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import fp from 'fastify-plugin'
 import { UnauthorizedError, ForbiddenError } from '../lib/errors.js'
 import { verifyToken, type AuthUser, type Role } from '../lib/jwt.js'
+import { requestContext } from '../lib/request-context.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -17,11 +18,16 @@ export default fp(async function authenticatePlugin(app) {
     if (!header?.startsWith('Bearer ')) {
       throw new UnauthorizedError('Missing bearer token')
     }
+    const token = header.slice('Bearer '.length)
     try {
-      request.user = verifyToken(header.slice('Bearer '.length))
+      request.user = verifyToken(token)
     } catch {
       throw new UnauthorizedError('Invalid or expired token')
     }
+    // Only a verified token is forwarded upstream (see `withCallerIdentity`).
+    // No store means we are not inside a request (e.g. a direct unit call).
+    const store = requestContext.getStore()
+    if (store) store.bearerToken = token
   })
 
   app.decorate('requireRole', (...roles: Role[]) => {

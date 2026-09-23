@@ -2,6 +2,7 @@ import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import { env } from './config/env.js'
 import errorHandler from './plugins/error-handler.js'
+import requestContextPlugin from './plugins/request-context.js'
 import authenticatePlugin from './plugins/authenticate.js'
 
 import authRoutes from './modules/auth/routes.js'
@@ -32,6 +33,7 @@ export async function buildApp() {
 
   await app.register(cors, { origin: env.CORS_ORIGIN, credentials: true })
   await app.register(errorHandler)
+  await app.register(requestContextPlugin)
   await app.register(authenticatePlugin)
 
   app.get('/health', async () => ({ status: 'ok' }))
