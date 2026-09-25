@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web-react`):
 1. `vertice-api` — `docker compose up -d` (postgres), then `./gradlew bootRun --args='--spring.profiles.active=local'` (gRPC on `:9090`, auth disabled locally).
 2. `vertice-bff` (this repo) — `cp .env.example .env && npm install && npm run dev` (REST on `:3000`).
-3. `vertice-web-react` — `npm run dev` (Next.js App Router, default `:3000` — **same default port as this BFF**; override one of them, e.g. `PORT=3000` here is already taken, so run this BFF on its default and start Next with `npm run dev -- -p <other-port>`, or vice versa). Replaces the old Vue-based `vertice-web`, which is deprecated. It's currently a skeleton with no features implemented yet, so the two aren't wired together in practice. Note: `.env.example`'s `CORS_ORIGIN=http://localhost:5173` is a leftover Vite default from the old `vertice-web`; once wiring up `vertice-web-react` for real, update `CORS_ORIGIN` to match whatever port it actually runs on.
+3. `vertice-web-react` — `npm run dev` (Next.js App Router, pinned to `:5173` via `-p 5173` in its own `dev` script, to avoid colliding with this BFF's default `:3000`). Replaces the old Vue-based `vertice-web`, which is deprecated. It calls this BFF server-side only (`BFF_URL`, see its `src/lib/bff.ts`), proxied through its own `/api/*` routes — the browser never calls this BFF directly, but `CORS_ORIGIN` (default `http://localhost:5173`) is still set to match in case that changes.
 
 ## Commands
 
