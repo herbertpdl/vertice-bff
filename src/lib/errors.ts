@@ -39,3 +39,13 @@ export class ValidationError extends HttpError {
     super(400, message, 'VALIDATION_ERROR', details)
   }
 }
+
+/**
+ * The request was well-formed but the resource's current state forbids it
+ * (gRPC FAILED_PRECONDITION) — distinct from a malformed payload (400).
+ */
+export class PreconditionFailedError extends HttpError {
+  constructor(message: string) {
+    super(409, message, 'PRECONDITION_FAILED')
+  }
+}

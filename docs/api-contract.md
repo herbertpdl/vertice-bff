@@ -9,7 +9,9 @@ All error responses have the shape:
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "...", "details": {} } }
 ```
-Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `UPSTREAM_UNAVAILABLE` (503).
+Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `UPSTREAM_UNAVAILABLE` (503).
+
+`PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it (upstream gRPC `FAILED_PRECONDITION`); the `message` is vertice-api's verbatim. Distinct from `VALIDATION_ERROR` ("fix the payload").
 
 Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. All list/detail endpoints auto-scope to the caller (a `CLIENT` only ever sees their own data; a `TRAINER` only sees their own students/plans).
 
