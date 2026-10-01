@@ -1,7 +1,12 @@
 import * as grpc from '@grpc/grpc-js'
 import { HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
+import { requestContext } from '../lib/request-context.js'
 
-/** Promisifies a grpc-js callback-style unary call and maps gRPC status codes to HttpErrors. */
+/**
+ * Promisifies a grpc-js callback-style unary call and maps gRPC status codes to HttpErrors.
+ * The caller's verified bearer token, when the call runs inside a request, is attached as
+ * `authorization` metadata (see `withCallerIdentity`).
+ */
 export function grpcCall<TRequest, TResponse>(
   client: grpc.Client,
   method: string,
@@ -12,7 +17,7 @@ export function grpcCall<TRequest, TResponse>(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(client as any)[method](
       request,
-      metadata,
+      withCallerIdentity(metadata),
       (error: grpc.ServiceError | null, response: TResponse) => {
         if (error) {
           reject(mapGrpcError(error))
@@ -22,6 +27,20 @@ export function grpcCall<TRequest, TResponse>(
       },
     )
   })
+}
+
+/**
+ * Attaches `authorization: Bearer <token>` from the request context, so vertice-api can tell
+ * who is calling. Outside a request, or before `app.authenticate` has verified a token
+ * (`/health`, `/auth/login`, `/auth/register`), nothing is attached and the call is anonymous.
+ * A caller-supplied `authorization` is never overwritten. Mutates and returns `metadata`.
+ */
+export function withCallerIdentity(metadata: grpc.Metadata): grpc.Metadata {
+  const token = requestContext.getStore()?.bearerToken
+  if (token && metadata.get('authorization').length === 0) {
+    metadata.set('authorization', `Bearer ${token}`)
+  }
+  return metadata
 }
 
 /** Maps a gRPC status to the HttpError the global error handler will render. Exported for tests. */
