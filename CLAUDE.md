@@ -52,7 +52,7 @@ To add a new proto: drop the `.proto` file under `protos/`, add its path to `PRO
 
 ## Current module layout
 
-`auth`, `clients` (trainer's roster of CLIENT users — recently replaced a `students` module; sourced via `TrainerClientService`, not derived from training plans), `dashboard`, `exercises`, `exercise-sets`, `training-plans`, `users` (shared `User` type/mapping, no own routes), `workouts`, `workout-exercises`, `workout-sessions` (also owns `/workout-logs` and `/workout-sessions/:id/{sets,complete}`), `feedback`.
+`auth`, `clients` (trainer's roster of CLIENT users — recently replaced a `students` module; sourced via `TrainerClientService`, not derived from training plans), `dashboard`, `exercises` (also owns `/muscle-groups`), `exercise-sets`, `training-plans`, `users` (shared `User` type/mapping, no own routes), `workouts`, `workout-exercises`, `workout-sessions` (also owns `/workout-logs` and `/workout-sessions/:id/{sets,complete}`), `feedback`.
 
 ## Reference docs
 
