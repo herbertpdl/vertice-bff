@@ -11,7 +11,7 @@ All error responses have the shape:
 ```
 Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `UPSTREAM_UNAVAILABLE` (503).
 
-`PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — today only `PUT /workouts/:workoutId/exercises` emits it, when a client has already recorded data under the workout; the `message` is vertice-api's verbatim and names the blocking exercise and set number. Distinct from `VALIDATION_ERROR` ("fix the payload").
+`PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — emitted by `PUT /workouts/:workoutId/exercises`, when a client has already recorded data under the workout (the `message` names the blocking exercise and set number), and by `DELETE /exercises/:id`, while any workout uses the exercise. The `message` is vertice-api's verbatim. Distinct from `VALIDATION_ERROR` ("fix the payload").
 
 Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. All list/detail endpoints auto-scope to the caller (a `CLIENT` only ever sees their own data; a `TRAINER` only sees their own students/plans).
 
@@ -49,16 +49,34 @@ A trainer's roster = distinct clients across their training plans (User has no d
 - `PATCH /:id` `{name, email, cpf?}`
 - `DELETE /:id`
 
-## Exercises (catalog) — `/exercises`
-Shared across all trainers.
-- `GET /` → `Exercise[]` = `{id, name, description, videoUrl, muscleGroup}`
-- `GET /:id` → `Exercise`
-- `GET /:id/progress?clientId=` → `{weekStartDate, weight}[]` (weight-over-time for a graph). CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
-- `POST /` `{name, description, videoUrl?, muscleGroup}` (TRAINER)
-- `PATCH /:id` (TRAINER)
-- `DELETE /:id` (TRAINER)
+## Exercises (catalog) — `/exercises`, `/muscle-groups`
+The catalog is the shared **starter set** (`isStarter: true`, read-only for everyone) plus each trainer's own exercises. **Trainer-created exercises are private; the starter set is shared.** A trainer sees the starter set and their own exercises only; an ADMIN sees the starter set only. Visibility, ordering and search are decided by vertice-api from the caller's identity — the BFF has no exercise-ownership check of its own and returns lists in upstream order.
 
-`muscleGroup` is one of `CHEST | BACK | LEGS | SHOULDERS | ARMS | CORE | CARDIO`, required.
+```ts
+MuscleGroup = { id: number, name: string }
+Exercise    = { id: number, name: string, description: string, videoUrl: string,
+                muscleGroups: MuscleGroup[],   // upstream order: primary group first, then the others by id (starter rows only have a primary; a trainer's own exercise is plain id order)
+                isStarter: boolean }
+```
+There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is gone) — anywhere an `Exercise` is embedded, too.
+
+- `GET /muscle-groups` (any role) → `MuscleGroup[]` in id order — 14 rows (Peito … Cardio). Use it to populate filters/pickers; ids are database-generated, don't hardcode them.
+- `GET /exercises?muscleGroupId=&q=` (TRAINER/ADMIN) → `Exercise[]` **in upstream order**: own exercises first (name asc), then starter exercises (with a group filter: primary-group matches in catalog order, then secondary matches by name; without: name asc). Don't re-sort client-side.
+  - `muscleGroupId` — optional positive integer; exercises with that group as primary or secondary. Empty (`?muscleGroupId=`) = no filter.
+  - `q` — optional name search (case-insensitive substring), trimmed, ≤100 chars. Empty = no filter.
+  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or ADMIN` (CLIENT); 400 `VALIDATION_ERROR` for a non-numeric/0/negative/repeated `muscleGroupId` or `q` >100 chars (field `details`); 404 `NOT_FOUND` for an unknown `muscleGroupId`.
+- `GET /exercises/:id` (any role, upstream decides) → `Exercise`. TRAINER: starter or own; ADMIN: starter only; CLIENT: only an exercise used by a workout in one of their own plans.
+  - Errors: 403 `FORBIDDEN` `You do not have access to exercise <id>`; 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
+- `GET /exercises/:id/progress?clientId=` → `{weekStartDate, weight}[]` (weight-over-time for a graph). CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
+- `POST /exercises` `{name, description?, videoUrl?, muscleGroupIds}` (TRAINER only) → `201` `Exercise` (`isStarter: false`, private to the caller).
+  - `name` 1..255 chars (must not be blank); `description` ≤255, default `""`; `videoUrl` `""` or an http(s) URL ≤500, default `""`; `muscleGroupIds` at least one positive integer id — duplicates are dropped. A trainer-created exercise has no primary group, so its `muscleGroups` come back in id order whatever order was sent. Duplicate names are allowed.
+  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER` (CLIENT, ADMIN); 400 `VALIDATION_ERROR` with field `details` for Zod failures (`name` missing/empty/too long, `description`/`videoUrl` too long, `videoUrl` not a URL, `muscleGroupIds` missing/empty/non-positive — a body with only the old `muscleGroup` fails here); 400 `VALIDATION_ERROR` with a flat upstream message for `name: must not be blank`, `videoUrl: must be a valid http(s) URL`, `muscleGroupIds: unknown muscle group <id>`.
+- `PATCH /exercises/:id` (TRAINER only), same body as `POST` — **full replacement** of name, description, video URL and the whole group list → `200` `Exercise`.
+  - Errors: as `POST`, plus 403 `FORBIDDEN` `Exercise <id> belongs to the shared starter set and cannot be changed` (starter row); 403 `You do not have access to exercise <id>` (another trainer's); 404 `NOT_FOUND`.
+- `DELETE /exercises/:id` (TRAINER only) → `204`, no body.
+  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER`; 403 `Exercise <id> belongs to the shared starter set and cannot be deleted` (starter row); 403 `You do not have access to exercise <id>` (another trainer's); 404 `NOT_FOUND`; **409 `PRECONDITION_FAILED` `Exercise <id> is used by a workout and cannot be deleted`** while any workout references it — remove it from those workouts first.
+
+403 means "never allowed for you" (fix nothing, hide the action); 409 means "not right now" (the state can change).
 
 ## Training plans — `/training-plans`
 - `GET /?clientId=` → `TrainingPlan[]`. CLIENT: own plans only. TRAINER: own plans, optionally filtered by `clientId`.
@@ -72,7 +90,7 @@ Shared across all trainers.
 ## Workouts
 - **`GET /workouts?recent=true`** (TRAINER/ADMIN) → `RecentWorkoutSummary[]` = `Workout & {studentName, planName, exerciseCount}` — the trainer's workouts **across every plan/student**, for the workout-builder's "usar treino existente como base" clone picker. `?recent=true` is currently the only supported mode (no unfiltered "list all" query). Sorted by workout id descending (proxy for recency — `Workout` has no timestamp field). `exerciseCount` costs one `listWorkoutExercises` call per workout, not a full `/full` fetch.
 - `GET /training-plans/:planId/workouts` → `Workout[]`
-- **`POST /training-plans/:planId/workouts`** `{name, dayOfWeek, exercises?: WorkoutExerciseEntry[]}` (TRAINER) → `201` **`FullWorkout`** (same shape as `GET /workouts/:id/full`, so the web gets every new `WorkoutExercise`/`ExerciseSet` id right away). `exercises` is optional — omitted or `[]` creates an empty workout, exactly as before. Max 20 entries. Creation is all-or-nothing: on any 4xx nothing was created. Upstream RPC: `CreateWorkoutWithExercises`.
+- **`POST /training-plans/:planId/workouts`** `{name, dayOfWeek, exercises?: WorkoutExerciseEntry[]}` (TRAINER) → `201` **`FullWorkout`** (same shape as `GET /workouts/:id/full`, so the web gets every new `WorkoutExercise`/`ExerciseSet` id right away). `exercises` is optional — omitted or `[]` creates an empty workout, exactly as before. Max 20 entries. Creation is all-or-nothing: on any 4xx nothing was created. Upstream RPC: `CreateWorkoutWithExercises`. Each `FullWorkoutExercise.exercise` in the response is the `Exercise` shape from the Exercises section (`muscleGroups`, `isStarter`; no `muscleGroup`).
   ```jsonc
   // WorkoutExerciseEntry — no `order`: list position is the order
   { "exerciseId": 12,                 // catalog exercise, must exist; the same id may repeat
@@ -85,7 +103,7 @@ Shared across all trainers.
   ```
   Errors: Zod failures (missing `name`, >20 exercises, >10 sets, bad enum, negative number) → 400 `VALIDATION_ERROR` with field `details`; upstream rejections (cap, nonexistent `exerciseId`, malformed decimal) → 400 `VALIDATION_ERROR` with a flat message that does not say which entry.
 - `GET /workouts/:id` → `Workout` = `{id, name, trainingPlanId, dayOfWeek}`
-- **`GET /workouts/:id/full`** → `Workout & { exercises: FullWorkoutExercise[] }` — **the key aggregate for a workout-builder or read-only workout view.** Each `FullWorkoutExercise` = `WorkoutExercise & { exercise: Exercise, sets: ExerciseSet[] }`, sorted by `order`/`setNumber`. One call gets everything needed to render a workout.
+- **`GET /workouts/:id/full`** → `Workout & { exercises: FullWorkoutExercise[] }` — **the key aggregate for a workout-builder or read-only workout view.** Each `FullWorkoutExercise` = `WorkoutExercise & { exercise: Exercise, sets: ExerciseSet[] }`, sorted by `order`/`setNumber`. One call gets everything needed to render a workout. `FullWorkoutExercise.exercise` is the `Exercise` shape from the Exercises section (`muscleGroups`, `isStarter`; no `muscleGroup`). An ADMIN opening a workout that contains a trainer's private exercise gets **403 `FORBIDDEN`** `You do not have access to exercise <id>` for the whole aggregate (the embedded exercise lookup is refused upstream).
 - `PATCH /workouts/:id` `{name, dayOfWeek}` (TRAINER)
 - `DELETE /workouts/:id` (TRAINER)
 - `POST /workouts/:id/clone` `{targetTrainingPlanId, name, dayOfWeek}` (TRAINER) → clones exercises+sets into a new workout, for "reuse a previous workout as a base"
@@ -95,7 +113,7 @@ Shared across all trainers.
 ## Workout exercises
 - `GET /workouts/:workoutId/exercises` → `WorkoutExercise[]`
 - `POST /workouts/:workoutId/exercises` `{exerciseId, order, restSecondsBetweenSets, notes?}` (TRAINER)
-- **`PUT /workouts/:workoutId/exercises`** `{exercises: WorkoutExerciseEntry[]}` (TRAINER) → `200` **`FullWorkout`** — replaces the workout's **entire** exercise/set tree with the given list (full replace, not merge; same entry shape as `POST /training-plans/:planId/workouts`, max 20). `exercises` is required — `[]` empties the workout, omitting it is a 400. Upstream deletes and recreates the tree, so **every `WorkoutExercise`/`ExerciseSet` id in the response is new**; any id held from before the call is invalid. Refused with **409 `PRECONDITION_FAILED`** once *any* set under the workout has recorded client data (not just sets the replace would drop) — from then on the workout can only be edited through the one-at-a-time endpoints on this page. All-or-nothing: on any 4xx nothing changed. Upstream RPC: `ReplaceWorkoutExercises`.
+- **`PUT /workouts/:workoutId/exercises`** `{exercises: WorkoutExerciseEntry[]}` (TRAINER) → `200` **`FullWorkout`** — replaces the workout's **entire** exercise/set tree with the given list (full replace, not merge; same entry shape as `POST /training-plans/:planId/workouts`, max 20). `exercises` is required — `[]` empties the workout, omitting it is a 400. Upstream deletes and recreates the tree, so **every `WorkoutExercise`/`ExerciseSet` id in the response is new**; any id held from before the call is invalid. Refused with **409 `PRECONDITION_FAILED`** once *any* set under the workout has recorded client data (not just sets the replace would drop) — from then on the workout can only be edited through the one-at-a-time endpoints on this page. All-or-nothing: on any 4xx nothing changed. Upstream RPC: `ReplaceWorkoutExercises`. `FullWorkoutExercise.exercise` in the response is the `Exercise` shape from the Exercises section.
 - `PATCH /workout-exercises/:id` `{order, restSecondsBetweenSets, notes?}` (TRAINER)
 - `DELETE /workout-exercises/:id` (TRAINER)
 
@@ -114,6 +132,7 @@ Shared across all trainers.
 ## Workout sessions (the client "do a workout" flow)
 - **`GET /workouts/:workoutId/session?weekStartDate=YYYY-MM-DD`** (defaults to the current week's Monday) — CLIENT uses own id; TRAINER must pass `?clientId=` and that client must be assigned to the workout's plan.
   → `Workout & { exercises: [...FullWorkoutExercise, sets: [...ExerciseSet, lastPerformed: SetLog|null]] , workoutLog: WorkoutLog }`.
+  Each `exercise` under `exercises[]` is the `Exercise` shape from the Exercises section (`muscleGroups`, `isStarter`; no `muscleGroup`).
   This auto-starts (or resumes) this week's log and merges in last time's recorded weight/reps per set (`lastPerformed`), so the UI can show "last time: 60kg × 12" inline. **This is the single call the workout-execution screen needs.**
 - `POST /workout-sessions/:workoutLogId/sets` `{exerciseSetId, weight, reps}` (CLIENT) → records one set's actual performance
 - `POST /workout-sessions/:workoutLogId/complete` (CLIENT) → marks the log done

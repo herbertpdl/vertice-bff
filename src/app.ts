@@ -2,11 +2,12 @@ import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import { env } from './config/env.js'
 import errorHandler from './plugins/error-handler.js'
+import requestContextPlugin from './plugins/request-context.js'
 import authenticatePlugin from './plugins/authenticate.js'
 
 import authRoutes from './modules/auth/routes.js'
 import clientRoutes from './modules/clients/routes.js'
-import exerciseRoutes from './modules/exercises/routes.js'
+import exerciseRoutes, { muscleGroupRoutes } from './modules/exercises/routes.js'
 import trainingPlanRoutes from './modules/training-plans/routes.js'
 import { workoutsUnderPlanRoutes, workoutRoutes } from './modules/workouts/routes.js'
 import {
@@ -32,6 +33,7 @@ export async function buildApp() {
 
   await app.register(cors, { origin: env.CORS_ORIGIN, credentials: true })
   await app.register(errorHandler)
+  await app.register(requestContextPlugin)
   await app.register(authenticatePlugin)
 
   app.get('/health', async () => ({ status: 'ok' }))
@@ -41,6 +43,7 @@ export async function buildApp() {
       await api.register(authRoutes, { prefix: '/auth' })
       await api.register(clientRoutes, { prefix: '/clients' })
       await api.register(exerciseRoutes, { prefix: '/exercises' })
+      await api.register(muscleGroupRoutes, { prefix: '/muscle-groups' })
       await api.register(trainingPlanRoutes, { prefix: '/training-plans' })
       await api.register(workoutsUnderPlanRoutes, { prefix: '/training-plans/:planId/workouts' })
       await api.register(workoutRoutes, { prefix: '/workouts' })

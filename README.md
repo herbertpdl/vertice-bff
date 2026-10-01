@@ -1,6 +1,6 @@
 # vertice-bff
 
-Backend for Frontend for `vertice-web`. It exposes an HTTP/JSON REST API and bridges each
+Backend for Frontend for `vertice-web-react`. It exposes an HTTP/JSON REST API and bridges each
 request to `vertice-api`, a gRPC service, translating between the two protocols and shaping
 responses for the frontend's screens.
 
@@ -56,7 +56,7 @@ cp .env.example .env
 | `PORT` | `3000` | HTTP port the BFF listens on |
 | `HOST` | `0.0.0.0` | HTTP host to bind |
 | `LOG_LEVEL` | `info` | Pino log level (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) |
-| `CORS_ORIGIN` | `http://localhost:5173` | Allowed CORS origin (the `vertice-web` dev server) |
+| `CORS_ORIGIN` | `http://localhost:5173` | Allowed CORS origin (the `vertice-web-react` dev server) |
 | `VERTICE_API_GRPC_HOST` | `localhost` | Host of the `vertice-api` gRPC server |
 | `VERTICE_API_GRPC_PORT` | `9090` | Port of the `vertice-api` gRPC server |
 | `JWT_SECRET` | `dev-secret-change-me` | Secret used to sign/verify auth tokens issued by the BFF |
@@ -67,11 +67,31 @@ cp .env.example .env
 `vertice-bff` needs a running `vertice-api` (gRPC) to talk to. There are two ways to run the
 stack:
 
-### Option 1 — full stack via `vertice-local`
+### Option 1 — run each app natively (recommended)
 
-If you have the sibling repos `vertice-api`, `vertice-bff`, and `vertice-web` checked out next
-to a `vertice-local` repo (which holds a `docker-compose.yml` orchestrating Postgres, the API,
-this BFF, and the web app with hot reload for all three), run:
+As sibling checkouts (`vertice-api`, `vertice-bff`, `vertice-web-react`), each in its own
+terminal, no Docker required beyond Postgres:
+
+1. `vertice-api` — `docker compose up -d` (Postgres only), then
+   `./gradlew bootRun --args='--spring.profiles.active=local'` (gRPC on `:9090`, auth disabled
+   for local dev — see `vertice-api`'s `application-local.properties`).
+2. `vertice-bff` (this repo):
+   ```sh
+   npm install
+   cp .env.example .env
+   npm run dev
+   ```
+   This starts the REST API on `http://localhost:3000` using `tsx watch` (restarts on file
+   changes).
+3. `vertice-web-react` — `npm install && npm run dev` (`http://localhost:5173`; its `dev`
+   script is pinned to `5173` so it doesn't collide with this BFF's `3000`).
+
+This avoids Docker image-cache/rebuild pain, especially for the frontend.
+
+### Option 2 — full stack via `vertice-local`
+
+If you have a `vertice-local` repo checked out as a sibling (holds a `docker-compose.yml`
+orchestrating Postgres, the API, this BFF, and the web app with hot reload for all three), run:
 
 ```sh
 cd ../vertice-local
@@ -80,24 +100,8 @@ docker compose up --build
 ```
 
 This starts, in order: Postgres -> `vertice-api` (gRPC on `:9090`, HTTP on `:8080`) ->
-`vertice-bff` (`:3000`) -> `vertice-web` (`:5173`). Source is bind-mounted, so this BFF's
+`vertice-bff` (`:3000`) -> `vertice-web-react` (`:5173`). Source is bind-mounted, so this BFF's
 container restarts automatically on file changes.
-
-### Option 2 — run this service standalone against a local `vertice-api`
-
-1. Start `vertice-api` and its database, then run it locally with the `local` Spring profile
-   (gRPC on `:9090`, auth disabled for local dev — see `vertice-api`'s
-   `application-local.properties`).
-2. In this repo:
-   ```sh
-   npm install
-   cp .env.example .env
-   npm run dev
-   ```
-   This starts the REST API on `http://localhost:3000` using `tsx watch` (restarts on file
-   changes).
-3. Optionally start `vertice-web` (`npm run dev`, default `http://localhost:5173`) to hit the
-   BFF from the actual frontend.
 
 A basic health check is available at `GET /health`.
 
