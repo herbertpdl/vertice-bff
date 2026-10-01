@@ -2,7 +2,9 @@ import type { FastifyInstance } from 'fastify'
 import { parseId } from '../../lib/net.js'
 import { assertOwnsWorkout, assertOwnsWorkoutExercise } from '../../lib/ownership.js'
 import { workoutExerciseCreateSchema, workoutExerciseUpdateSchema } from './schemas.js'
+import { replaceWorkoutExercisesSchema } from '../workouts/schemas.js'
 import * as workoutExerciseService from './service.js'
+import * as workoutService from '../workouts/service.js'
 
 /** Mounted at /api/workouts/:workoutId/exercises */
 export async function workoutExercisesUnderWorkoutRoutes(app: FastifyInstance) {
@@ -23,6 +25,21 @@ export async function workoutExercisesUnderWorkoutRoutes(app: FastifyInstance) {
       const body = workoutExerciseCreateSchema.parse(req.body)
       reply.status(201)
       return workoutExerciseService.createWorkoutExercise(workoutId, body)
+    },
+  )
+
+  // Full replace of the workout's exercise/set tree ("this is now the whole
+  // list"). Lives here rather than in workoutRoutes as `/:id/exercises` so the
+  // same path is not registered twice with differently named params. Delegates
+  // to the workouts service because the RPC is on WorkoutService.
+  app.put<{ Params: { workoutId: string } }>(
+    '/',
+    { preHandler: app.requireRole('TRAINER', 'ADMIN') },
+    async (req) => {
+      const workoutId = parseId(req.params.workoutId)
+      await assertOwnsWorkout(req.user!, workoutId)
+      const body = replaceWorkoutExercisesSchema.parse(req.body)
+      return workoutService.replaceWorkoutExercises(workoutId, body.exercises)
     },
   )
 }

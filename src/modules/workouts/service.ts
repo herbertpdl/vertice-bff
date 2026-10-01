@@ -52,13 +52,91 @@ export interface WorkoutInput {
   dayOfWeek: DayOfWeek
 }
 
-export async function createWorkout(trainingPlanId: number, input: WorkoutInput): Promise<Workout> {
-  const res = await grpcCall<WorkoutInput & { trainingPlanId: number }, WorkoutResponse>(
+/** One set inside a nested create/replace entry. No `setNumber`: list position is the order. */
+export interface ExerciseSetEntry {
+  reps?: number
+  durationSeconds?: number
+  weight?: string
+  loadPercentage?: string
+  strategy?: exerciseSetService.SetStrategy
+  restSeconds?: number
+  notes?: string
+}
+
+/** One exercise inside a nested create/replace entry. No `order`: list position is the order. */
+export interface WorkoutExerciseEntry {
+  exerciseId: number
+  restSecondsBetweenSets?: number
+  notes?: string
+  sets?: ExerciseSetEntry[]
+}
+
+export interface WorkoutCreateInput extends WorkoutInput {
+  exercises?: WorkoutExerciseEntry[]
+}
+
+// Make proto3 defaults explicit (numbers → 0, strings → '') like
+// exercise-sets/service.ts does. `strategy` is intentionally left undefined
+// when omitted so it crosses the wire as SET_STRATEGY_UNSPECIFIED and
+// vertice-api applies its own default (STRAIGHT).
+function setEntryWithDefaults(set: ExerciseSetEntry) {
+  return {
+    reps: set.reps ?? 0,
+    durationSeconds: set.durationSeconds ?? 0,
+    weight: set.weight ?? '',
+    loadPercentage: set.loadPercentage ?? '',
+    strategy: set.strategy,
+    restSeconds: set.restSeconds ?? 0,
+    notes: set.notes ?? '',
+  }
+}
+
+function exerciseEntryWithDefaults(entry: WorkoutExerciseEntry) {
+  return {
+    exerciseId: entry.exerciseId,
+    restSecondsBetweenSets: entry.restSecondsBetweenSets ?? 0,
+    notes: entry.notes ?? '',
+    sets: (entry.sets ?? []).map(setEntryWithDefaults),
+  }
+}
+
+type WorkoutExerciseEntryRequest = ReturnType<typeof exerciseEntryWithDefaults>
+
+/**
+ * Creates a workout and, optionally, its whole exercise/set tree in one
+ * upstream transaction (`CreateWorkoutWithExercises`). An empty/omitted
+ * `exercises` list yields exactly what the plain `CreateWorkout` RPC would,
+ * so this is the only create path. Returns the full tree (not the bare
+ * `Workout`) because the web needs every new WorkoutExercise/ExerciseSet id
+ * right after saving — same cost as a follow-up `GET /workouts/:id/full`.
+ */
+export async function createWorkout(trainingPlanId: number, input: WorkoutCreateInput) {
+  const res = await grpcCall<
+    WorkoutInput & { trainingPlanId: number; exercises: WorkoutExerciseEntryRequest[] },
+    WorkoutResponse
+  >(workoutClient, 'CreateWorkoutWithExercises', {
+    name: input.name,
+    dayOfWeek: input.dayOfWeek,
+    trainingPlanId,
+    exercises: (input.exercises ?? []).map(exerciseEntryWithDefaults),
+  })
+  return getFullWorkout(Number(res.id))
+}
+
+/**
+ * Replaces the workout's entire exercise/set tree (`ReplaceWorkoutExercises`
+ * — full replace, not merge). Upstream deletes and recreates the tree, so
+ * **every WorkoutExercise/ExerciseSet id in the returned FullWorkout is new**.
+ * Refused with 409 PRECONDITION_FAILED once any set under the workout has
+ * recorded client data (see grpc/call.ts).
+ */
+export async function replaceWorkoutExercises(workoutId: number, entries: WorkoutExerciseEntry[]) {
+  await grpcCall<{ workoutId: number; exercises: WorkoutExerciseEntryRequest[] }, WorkoutResponse>(
     workoutClient,
-    'CreateWorkout',
-    { ...input, trainingPlanId },
+    'ReplaceWorkoutExercises',
+    { workoutId, exercises: entries.map(exerciseEntryWithDefaults) },
   )
-  return toWorkout(res)
+  return getFullWorkout(workoutId)
 }
 
 export async function updateWorkout(id: number, input: WorkoutInput): Promise<Workout> {

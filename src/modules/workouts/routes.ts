@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { parseId } from '../../lib/net.js'
 import { assertOwnsPlan, assertOwnsWorkout } from '../../lib/ownership.js'
 import { ValidationError } from '../../lib/errors.js'
-import { workoutInputSchema, cloneWorkoutSchema } from './schemas.js'
+import { workoutInputSchema, workoutCreateSchema, cloneWorkoutSchema } from './schemas.js'
 import * as workoutService from './service.js'
 import * as planService from '../training-plans/service.js'
 
@@ -22,7 +22,8 @@ export async function workoutsUnderPlanRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const plan = await planService.getTrainingPlan(parseId(req.params.planId))
       assertOwnsPlan(req.user!, plan)
-      const body = workoutInputSchema.parse(req.body)
+      // Body may carry a nested `exercises` tree; responds with FullWorkout.
+      const body = workoutCreateSchema.parse(req.body)
       reply.status(201)
       return workoutService.createWorkout(plan.id, body)
     },

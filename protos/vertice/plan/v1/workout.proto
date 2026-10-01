@@ -3,6 +3,7 @@ syntax = "proto3";
 package vertice.plan.v1;
 
 import "google/protobuf/empty.proto";
+import "vertice/plan/v1/exercise_set.proto";
 
 option java_package = "com.vertice.api.generated.grpc.plan.v1";
 option java_multiple_files = true;
@@ -14,6 +15,8 @@ service WorkoutService {
   rpc UpdateWorkout(UpdateWorkoutRequest) returns (WorkoutResponse);
   rpc DeleteWorkout(DeleteWorkoutRequest) returns (google.protobuf.Empty);
   rpc CloneWorkout(CloneWorkoutRequest) returns (WorkoutResponse);
+  rpc CreateWorkoutWithExercises(CreateWorkoutWithExercisesRequest) returns (WorkoutResponse);
+  rpc ReplaceWorkoutExercises(ReplaceWorkoutExercisesRequest) returns (WorkoutResponse);
 }
 
 enum DayOfWeek {
@@ -71,4 +74,33 @@ message CloneWorkoutRequest {
   int64 target_training_plan_id = 2;
   string name = 3;
   DayOfWeek day_of_week = 4;
+}
+
+message CreateWorkoutWithExercisesRequest {
+  string name = 1;
+  int64 training_plan_id = 2;
+  DayOfWeek day_of_week = 3;
+  repeated WorkoutExerciseEntry exercises = 4;
+}
+
+message ReplaceWorkoutExercisesRequest {
+  int64 workout_id = 1;
+  repeated WorkoutExerciseEntry exercises = 2;
+}
+
+message WorkoutExerciseEntry {
+  int64 exercise_id = 1;
+  int32 rest_seconds_between_sets = 2;
+  string notes = 3;
+  repeated ExerciseSetEntry sets = 4;
+}
+
+message ExerciseSetEntry {
+  int32 reps = 1;
+  int32 duration_seconds = 2;
+  string weight = 3;
+  string load_percentage = 4;
+  SetStrategy strategy = 5;
+  int32 rest_seconds = 6;
+  string notes = 7;
 }

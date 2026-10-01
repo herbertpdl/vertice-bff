@@ -18,7 +18,7 @@ Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web-react`
 - `npm run build` / `npm start` — compile to `dist/` and run the compiled output
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run lint` — ESLint (flat config, `eslint.config.js`, typescript-eslint recommended rules)
-- `npm test` — Vitest (`vitest run`); unit tests live next to the code as `*.test.ts` (e.g. `src/grpc/call.test.ts`) and don't spin up gRPC
+- `npm test` — Vitest (`vitest run`); unit tests live next to the code as `*.test.ts` (e.g. `src/modules/workouts/schemas.test.ts`, `src/grpc/call.test.ts`) and don't spin up gRPC
 - `docker build .` / the provided `Dockerfile` — containerized dev, runs `npm run dev:docker`
 
 Single-file / single-test runs use standard Vitest filtering: `npx vitest run src/grpc/call.test.ts` or `npx vitest run -t "name"`.
@@ -54,6 +54,13 @@ To add a new proto: drop the `.proto` file under `protos/`, add its path to `PRO
 
 `auth`, `clients` (trainer's roster of CLIENT users — recently replaced a `students` module; sourced via `TrainerClientService`, not derived from training plans), `dashboard`, `exercises`, `exercise-sets`, `training-plans`, `users` (shared `User` type/mapping, no own routes), `workouts`, `workout-exercises`, `workout-sessions` (also owns `/workout-logs` and `/workout-sessions/:id/{sets,complete}`), `feedback`.
 
-## Reference doc
+## Reference docs
+
+Feature-level changes to the REST surface get a spec under `docs/specs/<feature-slug>/spec.md`
+(same slug as the matching `vertice-api` PRD/spec) describing which endpoints are exposed and how
+they map onto upstream RPCs — see `docs/specs/create-workout-with-exercises/spec.md`. Cross-repo
+references in docs are GitHub links (`https://github.com/herbertpdl/<repo>/blob/main/<path>`),
+not `../<repo>/...` relative paths; same-repo references stay relative.
+
 
 `docs/api-contract.md` documents the full REST surface (request/response shapes, role requirements, and the same upstream-limitation notes as the code comments) and is generally reliable for endpoint-level detail — but it predates the `students`→`clients` rename and still refers to a `/students` route; treat anything mentioning `/students` there as referring to what is now `/clients`.
