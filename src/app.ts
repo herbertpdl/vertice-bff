@@ -1,4 +1,4 @@
-import Fastify from 'fastify'
+import Fastify, { type RouteOptions } from 'fastify'
 import cors from '@fastify/cors'
 import { env } from './config/env.js'
 import errorHandler from './plugins/error-handler.js'
@@ -23,13 +23,19 @@ import {
 import { submitFeedbackRoutes, feedbackRoutes } from './modules/feedback/routes.js'
 import dashboardRoutes from './modules/dashboard/routes.js'
 
-export async function buildApp() {
+export interface BuildAppOptions {
+  /** Sees every route as it is registered (the route-authorization suite uses it to find untested routes). */
+  onRoute?: (route: RouteOptions) => void
+}
+
+export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({
     logger: {
       level: env.LOG_LEVEL,
       transport: env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
     },
   })
+  if (options.onRoute) app.addHook('onRoute', options.onRoute)
 
   await app.register(cors, { origin: env.CORS_ORIGIN, credentials: true })
   await app.register(errorHandler)

@@ -1,5 +1,5 @@
 import * as grpc from '@grpc/grpc-js'
-import { HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
+import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
 import { requestContext } from '../lib/request-context.js'
 
 /**
@@ -61,7 +61,7 @@ export function mapGrpcError(error: Pick<grpc.ServiceError, 'code' | 'details'>)
     case grpc.status.UNAUTHENTICATED:
       return new HttpError(401, error.details || 'Unauthenticated', 'UNAUTHENTICATED')
     case grpc.status.PERMISSION_DENIED:
-      return new HttpError(403, error.details || 'Forbidden', 'FORBIDDEN')
+      return new ForbiddenError(error.details || 'Forbidden')
     case grpc.status.UNAVAILABLE:
       return new HttpError(503, 'vertice-api is unavailable', 'UPSTREAM_UNAVAILABLE')
     default:

@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify'
-import { parseId } from '../../lib/net.js'
+import { parseId, parseRequiredId } from '../../lib/net.js'
 import { exerciseInputSchema, exerciseListQuerySchema } from './schemas.js'
 import * as exerciseService from './service.js'
 import { getExerciseProgress } from '../workout-sessions/service.js'
+import { assertIsTrainersClient } from '../clients/service.js'
 
 // Exercise visibility (starter set vs. a trainer's private exercises), the starter-set
 // refusals and the in-use delete refusal are enforced by vertice-api from the forwarded
@@ -22,8 +23,12 @@ export default async function exerciseRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string }; Querystring: { clientId?: string } }>(
     '/:id/progress',
     async (req) => {
-      const clientId = req.user!.role === 'CLIENT' ? req.user!.id : Number(req.query.clientId)
-      return getExerciseProgress(parseId(req.params.id), clientId)
+      const user = req.user!
+      const exerciseId = parseId(req.params.id)
+      // A CLIENT only ever sees their own history; anyone else must name the client.
+      const clientId = user.role === 'CLIENT' ? user.id : parseRequiredId(req.query.clientId, 'clientId')
+      if (user.role === 'TRAINER') await assertIsTrainersClient(user.id, clientId)
+      return getExerciseProgress(exerciseId, clientId)
     },
   )
 

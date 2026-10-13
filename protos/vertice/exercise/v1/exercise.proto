@@ -8,7 +8,9 @@ option java_package = "com.vertice.api.generated.grpc.exercise.v1";
 option java_multiple_files = true;
 
 service ExerciseService {
+  // The 14 launch muscle groups in catalog order. Needs no caller identity.
   rpc ListMuscleGroups(ListMuscleGroupsRequest) returns (ListMuscleGroupsResponse);
+  // The caller's own exercises plus the shared starter set, optionally filtered and searched.
   rpc ListExercises(ListExercisesRequest) returns (ListExercisesResponse);
   rpc GetExercise(GetExerciseRequest) returns (ExerciseResponse);
   rpc CreateExercise(ExerciseRequest) returns (ExerciseResponse);
@@ -29,27 +31,35 @@ message ListMuscleGroupsResponse {
 }
 
 message ExerciseResponse {
+  // Was the single MuscleGroup enum, replaced by muscle_groups.
   reserved 5;
   reserved "muscle_group";
   int64 id = 1;
   string name = 2;
   string description = 3;
   string video_url = 4;
+  // Primary group first (starter exercises only), then the rest by id. Trainer-created exercises
+  // have no primary group, so theirs come out in id order.
   repeated MuscleGroupResponse muscle_groups = 6;
+  // True for the shared starter set, which cannot be changed or deleted.
   bool is_starter = 7;
 }
 
 message ExerciseRequest {
+  // Was the single MuscleGroup enum, replaced by muscle_group_ids.
   reserved 4;
   reserved "muscle_group";
   string name = 1;
   string description = 2;
   string video_url = 3;
+  // At least one; duplicates are collapsed. None becomes a primary group.
   repeated int64 muscle_group_ids = 5;
 }
 
 message ListExercisesRequest {
+  // 0 = no filter.
   int64 muscle_group_id = 1;
+  // Case-insensitive substring of the name; empty = no filter; at most 100 characters.
   string search = 2;
 }
 

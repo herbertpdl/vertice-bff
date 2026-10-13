@@ -1,11 +1,15 @@
 import type { FastifyInstance } from 'fastify'
-import { parseId } from '../../lib/net.js'
-import { ForbiddenError, ValidationError } from '../../lib/errors.js'
-import { assertOwnsWorkout } from '../../lib/ownership.js'
+import { parseId, parseRequiredId } from '../../lib/net.js'
+import {
+  assertExerciseSetInWorkout,
+  assertOwnsPlan,
+  assertOwnsWorkout,
+  assertOwnsWorkoutLog,
+  assertPlanBelongsToClient,
+} from '../../lib/ownership.js'
 import { currentWeekStartDate } from '../../lib/dates.js'
 import { recordSetLogSchema } from './schemas.js'
 import * as sessionService from './service.js'
-import * as workoutService from '../workouts/service.js'
 import * as planService from '../training-plans/service.js'
 import { assertIsTrainersClient } from '../clients/service.js'
 
@@ -18,16 +22,13 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
     async (req) => {
       const workoutId = parseId(req.params.workoutId)
       const user = req.user!
-      const clientId = user.role === 'CLIENT' ? user.id : Number(req.query.clientId)
-      if (!clientId) throw new ValidationError('clientId is required for trainers')
+      const clientId = user.role === 'CLIENT' ? user.id : parseRequiredId(req.query.clientId, 'clientId')
 
-      await assertOwnsWorkout(user, workoutId)
+      const plan = await assertOwnsWorkout(user, workoutId)
       if (user.role === 'TRAINER') {
         // assertOwnsWorkout already confirmed the plan belongs to this trainer;
         // the requested client must also belong to that same plan.
-        const workout = await workoutService.getWorkout(workoutId)
-        const plan = await planService.getTrainingPlan(workout.trainingPlanId)
-        if (plan.clientId !== clientId) throw new ForbiddenError('That client is not assigned to this workout')
+        assertPlanBelongsToClient(plan, clientId)
       }
 
       const weekStartDate = req.query.weekStartDate ?? currentWeekStartDate()
@@ -44,17 +45,21 @@ export async function workoutLogRoutes(app: FastifyInstance) {
     '/',
     async (req) => {
       const user = req.user!
-      const clientId = user.role === 'CLIENT' ? user.id : Number(req.query.clientId)
-      if (!clientId) throw new ValidationError('clientId is required for trainers')
-      if (!req.query.trainingPlanId) throw new ValidationError('trainingPlanId is required')
+      const clientId = user.role === 'CLIENT' ? user.id : parseRequiredId(req.query.clientId, 'clientId')
+      const trainingPlanId = parseRequiredId(req.query.trainingPlanId, 'trainingPlanId')
 
       if (user.role === 'TRAINER') {
         await assertIsTrainersClient(user.id, clientId)
       }
+      // The plan must be the caller's and must belong to the requested client, so a
+      // trainer cannot read their client's logs under a plan another trainer wrote.
+      const plan = await planService.getTrainingPlan(trainingPlanId)
+      assertOwnsPlan(user, plan)
+      assertPlanBelongsToClient(plan, clientId)
 
       return sessionService.listWorkoutLogs({
         clientId,
-        trainingPlanId: Number(req.query.trainingPlanId),
+        trainingPlanId,
         weekStartDate: req.query.weekStartDate ?? currentWeekStartDate(),
       })
     },
@@ -68,12 +73,16 @@ export async function workoutSessionActionRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { workoutLogId: string } }>('/:workoutLogId/sets', async (req, reply) => {
     const workoutLogId = parseId(req.params.workoutLogId)
+    const log = await assertOwnsWorkoutLog(req.user!, workoutLogId)
     const body = recordSetLogSchema.parse(req.body)
+    await assertExerciseSetInWorkout(body.exerciseSetId, log.workoutId)
     reply.status(201)
     return sessionService.recordSetLog(workoutLogId, body.exerciseSetId, body.weight, body.reps)
   })
 
   app.post<{ Params: { workoutLogId: string } }>('/:workoutLogId/complete', async (req) => {
-    return sessionService.completeWorkoutLog(parseId(req.params.workoutLogId))
+    const workoutLogId = parseId(req.params.workoutLogId)
+    await assertOwnsWorkoutLog(req.user!, workoutLogId)
+    return sessionService.completeWorkoutLog(workoutLogId)
   })
 }

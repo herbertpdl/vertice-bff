@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { parseId } from '../../lib/net.js'
-import { assertOwnsWorkout, assertOwnsWorkoutExercise } from '../../lib/ownership.js'
+import { assertCanUseExercises, assertOwnsWorkout, assertOwnsWorkoutExercise } from '../../lib/ownership.js'
 import { workoutExerciseCreateSchema, workoutExerciseUpdateSchema } from './schemas.js'
 import { replaceWorkoutExercisesSchema } from '../workouts/schemas.js'
 import * as workoutExerciseService from './service.js'
@@ -23,6 +23,7 @@ export async function workoutExercisesUnderWorkoutRoutes(app: FastifyInstance) {
       const workoutId = parseId(req.params.workoutId)
       await assertOwnsWorkout(req.user!, workoutId)
       const body = workoutExerciseCreateSchema.parse(req.body)
+      await assertCanUseExercises(req.user!, [body.exerciseId])
       reply.status(201)
       return workoutExerciseService.createWorkoutExercise(workoutId, body)
     },
@@ -39,6 +40,7 @@ export async function workoutExercisesUnderWorkoutRoutes(app: FastifyInstance) {
       const workoutId = parseId(req.params.workoutId)
       await assertOwnsWorkout(req.user!, workoutId)
       const body = replaceWorkoutExercisesSchema.parse(req.body)
+      await assertCanUseExercises(req.user!, body.exercises.map((e) => e.exerciseId))
       return workoutService.replaceWorkoutExercises(workoutId, body.exercises)
     },
   )
