@@ -56,10 +56,10 @@ cp .env.example .env
 | `PORT` | `3000` | HTTP port the BFF listens on |
 | `HOST` | `0.0.0.0` | HTTP host to bind |
 | `LOG_LEVEL` | `info` | Pino log level (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) |
-| `CORS_ORIGIN` | `http://localhost:5173` | Allowed CORS origin (the `vertice-web-react` dev server) |
+| `CORS_ORIGIN` | `http://localhost:8081` | Comma-separated browser origins allowed to call the BFF directly. Only needed for browser clients such as Expo web (`vertice-mobile` `npm run web`, Metro on `:8081`). `vertice-web-react` doesn't need an entry: its Next server proxies to the BFF server-side. An empty value allows no browser origin |
 | `VERTICE_API_GRPC_HOST` | `localhost` | Host of the `vertice-api` gRPC server |
 | `VERTICE_API_GRPC_PORT` | `9090` | Port of the `vertice-api` gRPC server |
-| `JWT_SECRET` | `dev-secret-change-me` | Secret used to sign/verify auth tokens issued by the BFF |
+| `JWT_SECRET` | `vertice-dev-jwt-secret-do-not-use-in-production` (only when `NODE_ENV` is unset, `development` or `test`) | HS256 secret used to sign/verify auth tokens issued by the BFF; must equal vertice-api's. For any other `NODE_ENV` (`production`, `staging`, ...; trimmed and case-insensitive) there is no default: the BFF refuses to start if it is missing, has leading/trailing whitespace, is shorter than 32 bytes, or is a known placeholder/dev value (mirrors vertice-api's `JwtSecretGuard`). Generate one with `openssl rand -base64 48` |
 | `JWT_EXPIRES_IN` | `8h` | Auth token expiry |
 
 ## Running locally

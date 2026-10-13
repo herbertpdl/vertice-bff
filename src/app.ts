@@ -27,7 +27,7 @@ export async function buildApp() {
   const app = Fastify({
     logger: {
       level: env.LOG_LEVEL,
-      transport: process.env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
+      transport: env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
     },
   })
 
