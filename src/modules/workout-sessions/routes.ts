@@ -1,16 +1,16 @@
 import type { FastifyInstance } from 'fastify'
 import { parseId, parseRequiredId } from '../../lib/net.js'
-import { ForbiddenError, ValidationError } from '../../lib/errors.js'
+import { ForbiddenError } from '../../lib/errors.js'
 import {
   assertExerciseSetInWorkout,
   assertOwnsPlan,
   assertOwnsWorkout,
   assertOwnsWorkoutLog,
+  assertPlanBelongsToClient,
 } from '../../lib/ownership.js'
 import { currentWeekStartDate } from '../../lib/dates.js'
 import { recordSetLogSchema } from './schemas.js'
 import * as sessionService from './service.js'
-import * as workoutService from '../workouts/service.js'
 import * as planService from '../training-plans/service.js'
 import { assertIsTrainersClient } from '../clients/service.js'
 
@@ -23,15 +23,12 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
     async (req) => {
       const workoutId = parseId(req.params.workoutId)
       const user = req.user!
-      const clientId = user.role === 'CLIENT' ? user.id : Number(req.query.clientId)
-      if (!clientId) throw new ValidationError('clientId is required for trainers')
+      const clientId = user.role === 'CLIENT' ? user.id : parseRequiredId(req.query.clientId, 'clientId')
 
-      await assertOwnsWorkout(user, workoutId)
+      const plan = await assertOwnsWorkout(user, workoutId)
       if (user.role === 'TRAINER') {
         // assertOwnsWorkout already confirmed the plan belongs to this trainer;
         // the requested client must also belong to that same plan.
-        const workout = await workoutService.getWorkout(workoutId)
-        const plan = await planService.getTrainingPlan(workout.trainingPlanId)
         if (plan.clientId !== clientId) throw new ForbiddenError('That client is not assigned to this workout')
       }
 
@@ -59,7 +56,7 @@ export async function workoutLogRoutes(app: FastifyInstance) {
       // trainer cannot read their client's logs under a plan another trainer wrote.
       const plan = await planService.getTrainingPlan(trainingPlanId)
       assertOwnsPlan(user, plan)
-      if (plan.clientId !== clientId) throw new ForbiddenError('That training plan does not belong to this client')
+      assertPlanBelongsToClient(plan, clientId)
 
       return sessionService.listWorkoutLogs({
         clientId,

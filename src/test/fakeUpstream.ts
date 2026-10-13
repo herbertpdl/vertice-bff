@@ -1,5 +1,6 @@
-import { NotFoundError } from '../lib/errors.js'
-import { signToken, type Role } from '../lib/jwt.js'
+import { ForbiddenError, NotFoundError } from '../lib/errors.js'
+import { signToken, verifyToken, type Role } from '../lib/jwt.js'
+import { requestContext } from '../lib/request-context.js'
 
 /**
  * A small in-memory vertice-api for route tests. Use it with the grpcCall mock:
@@ -11,6 +12,7 @@ import { signToken, type Role } from '../lib/jwt.js'
  * trainer B owns client B. Every id below belongs to exactly one of them, so a test
  * can put "the other tenant's id" in any path, query or body slot. Replies use the
  * proto-loader wire shape (int64 as string) so the real services map them.
+ * `GetExercise` reads the caller from the forwarded token, like vertice-api does.
  */
 
 export const ids = {
@@ -24,6 +26,10 @@ export const ids = {
   planA: 100,
   planB: 101,
   planA2: 102,
+  /** Client A's plan written by trainer B (a previous trainer): not trainer A's to read. */
+  planBForClientA: 103,
+  /** Trainer A's plan for client B, who is no longer on trainer A's roster. */
+  planAForFormerClientB: 104,
   workoutA: 200,
   workoutB: 201,
   workoutExerciseA: 300,
@@ -32,7 +38,10 @@ export const ids = {
   exerciseSetB: 401,
   workoutLogA: 500,
   workoutLogB: 501,
+  /** Starter exercise, visible to everyone. */
   exercise: 1,
+  /** Trainer B's private exercise, used in no workout. */
+  privateExerciseB: 2,
 } as const
 
 export type Actor = 'admin' | 'trainerA' | 'trainerB' | 'clientA' | 'clientB'
@@ -56,6 +65,8 @@ const plans = [
   { id: ids.planA, trainerId: ids.trainerA, clientId: ids.clientA },
   { id: ids.planB, trainerId: ids.trainerB, clientId: ids.clientB },
   { id: ids.planA2, trainerId: ids.trainerA, clientId: ids.clientA2 },
+  { id: ids.planBForClientA, trainerId: ids.trainerB, clientId: ids.clientA },
+  { id: ids.planAForFormerClientB, trainerId: ids.trainerA, clientId: ids.clientB },
 ]
 const workouts = [
   { id: ids.workoutA, trainingPlanId: ids.planA },
@@ -145,13 +156,37 @@ const workoutLogRes = (l: (typeof workoutLogs)[number]) => ({
   startedAt: `${today}T08:00:00Z`,
   completedAt: '',
 })
-const exerciseRes = {
-  id: str(ids.exercise),
-  name: 'Supino',
+const exercises = [
+  { id: ids.exercise, ownerId: null as number | null },
+  { id: ids.privateExerciseB, ownerId: ids.trainerB as number | null },
+]
+const exerciseRes = (e: (typeof exercises)[number] = exercises[0]!) => ({
+  id: str(e.id),
+  name: `Exercise ${e.id}`,
   description: '',
   videoUrl: '',
   muscleGroups: [{ id: '1', name: 'Peito' }],
-  isStarter: true,
+  isStarter: e.ownerId === null,
+})
+
+/** The verified caller, read from the token `grpcCall` would forward upstream. */
+function caller() {
+  const token = requestContext.getStore()?.bearerToken
+  return token ? verifyToken(token) : undefined
+}
+
+/** Mirrors vertice-api's `ExerciseService.getExercise` visibility rule. */
+function getVisibleExercise(id: unknown) {
+  const exercise = find(exercises, id, 'Exercise')
+  const user = caller()
+  const visible =
+    user?.role === 'CLIENT'
+      ? // Every fixture workout exercise uses the starter exercise.
+        exercise.id === ids.exercise &&
+        workouts.some((w) => find(plans, w.trainingPlanId, 'TrainingPlan').clientId === user.id)
+      : exercise.ownerId === null || (user?.role === 'TRAINER' && exercise.ownerId === user.id)
+  if (!visible) throw new ForbiddenError(`You do not have access to exercise ${exercise.id}`)
+  return exerciseRes(exercise)
 }
 
 type Req = Record<string, unknown>
@@ -168,10 +203,10 @@ const handlers: Record<string, (req: Req) => unknown> = {
 
   // ExerciseService
   ListMuscleGroups: () => ({ muscleGroups: [{ id: '1', name: 'Peito' }] }),
-  ListExercises: () => ({ exercises: [exerciseRes] }),
-  GetExercise: () => exerciseRes,
-  CreateExercise: () => exerciseRes,
-  UpdateExercise: () => exerciseRes,
+  ListExercises: () => ({ exercises: [exerciseRes()] }),
+  GetExercise: (r) => getVisibleExercise(r.id),
+  CreateExercise: () => exerciseRes(),
+  UpdateExercise: () => exerciseRes(),
   DeleteExercise: () => ({}),
 
   // TrainingPlanService

@@ -15,7 +15,9 @@ const grpcCallMock = vi.mocked(grpcCall)
  * - 403 for every role outside `roles` (and no upstream call), when `roles` is set;
  * - `ok`: the owning caller gets a 2xx, so the denials below are not a broken fake;
  * - `denied`: another tenant's id in path, query or body is refused (403 unless
- *   `status` says otherwise) and no write RPC reaches upstream;
+ *   `status` says otherwise) and no write RPC reaches upstream. Body ids that only
+ *   have to fit the request (a set of the log's workout, an exercise visible to the
+ *   trainer) are 400 whether foreign or missing, so they are no existence oracle;
  * - `scoped`: an id the route ignores by design (e.g. a CLIENT's `clientId`) is
  *   replaced with the caller's own before it goes upstream.
  *
@@ -53,6 +55,7 @@ interface RouteCase {
 }
 
 const workoutBody = { name: 'Treino', dayOfWeek: 'MONDAY' }
+const withExercises = (...exerciseIds: number[]) => ({ exercises: exerciseIds.map((exerciseId) => ({ exerciseId })) })
 const setBody = { setNumber: 1, strategy: 'STRAIGHT' }
 const planBody = { name: 'Plano', startDate: '2026-11-01', endDate: '2027-01-31', level: 'BEGINNER' }
 const setLogBody = { exerciseSetId: ids.exerciseSetA, weight: '20', reps: 10 }
@@ -236,13 +239,31 @@ const routes: RouteCase[] = [
   {
     route: 'POST /api/training-plans/:planId/workouts',
     roles: ['TRAINER', 'ADMIN'],
-    ok: { as: 'trainerA', url: `/api/training-plans/${ids.planA}/workouts`, body: workoutBody },
+    ok: {
+      as: 'trainerA',
+      url: `/api/training-plans/${ids.planA}/workouts`,
+      body: { ...workoutBody, ...withExercises(ids.exercise) },
+    },
     denied: [
       {
         as: 'trainerA',
         url: `/api/training-plans/${ids.planB}/workouts`,
         body: workoutBody,
         why: "path: another trainer's plan",
+      },
+      {
+        as: 'trainerA',
+        url: `/api/training-plans/${ids.planA}/workouts`,
+        body: { ...workoutBody, ...withExercises(ids.exercise, ids.privateExerciseB) },
+        why: "body: another trainer's private exercise in the nested tree",
+        status: 400,
+      },
+      {
+        as: 'trainerA',
+        url: `/api/training-plans/${ids.planA}/workouts`,
+        body: { ...workoutBody, ...withExercises(9999) },
+        why: 'body: an exercise that does not exist (same answer as a private one)',
+        status: 400,
       },
     ],
   },
@@ -316,7 +337,8 @@ const routes: RouteCase[] = [
     ],
   },
 
-  // workout exercises (body exerciseId: catalog visibility is enforced upstream)
+  // workout exercises. Body exerciseIds are resolved through GetExercise with the caller's
+  // token (assertCanUseExercises): vertice-api's workout-exercise writes don't check visibility.
   {
     route: 'GET /api/workouts/:workoutId/exercises',
     ok: { as: 'clientA', url: `/api/workouts/${ids.workoutA}/exercises` },
@@ -336,12 +358,26 @@ const routes: RouteCase[] = [
         body: { exerciseId: ids.exercise, order: 0 },
         why: "path: another trainer's workout",
       },
+      {
+        as: 'trainerA',
+        url: `/api/workouts/${ids.workoutA}/exercises`,
+        body: { exerciseId: ids.privateExerciseB, order: 0 },
+        why: "body: another trainer's private exercise",
+        status: 400,
+      },
+      {
+        as: 'trainerA',
+        url: `/api/workouts/${ids.workoutA}/exercises`,
+        body: { exerciseId: 9999, order: 0 },
+        why: 'body: an exercise that does not exist (same answer as a private one)',
+        status: 400,
+      },
     ],
   },
   {
     route: 'PUT /api/workouts/:workoutId/exercises',
     roles: ['TRAINER', 'ADMIN'],
-    ok: { as: 'trainerA', url: `/api/workouts/${ids.workoutA}/exercises`, body: { exercises: [] } },
+    ok: { as: 'trainerA', url: `/api/workouts/${ids.workoutA}/exercises`, body: withExercises(ids.exercise) },
     denied: [
       {
         as: 'trainerA',
@@ -349,8 +385,23 @@ const routes: RouteCase[] = [
         body: { exercises: [] },
         why: "path: another trainer's workout",
       },
+      {
+        as: 'trainerA',
+        url: `/api/workouts/${ids.workoutA}/exercises`,
+        body: withExercises(ids.exercise, ids.privateExerciseB),
+        why: "body: another trainer's private exercise",
+        status: 400,
+      },
+      {
+        as: 'trainerA',
+        url: `/api/workouts/${ids.workoutA}/exercises`,
+        body: withExercises(9999),
+        why: 'body: an exercise that does not exist (same answer as a private one)',
+        status: 400,
+      },
     ],
   },
+  // The PATCH body has no exerciseId (the schema drops one), so there is no body id to check.
   {
     route: 'PATCH /api/workout-exercises/:id',
     roles: ['TRAINER', 'ADMIN'],
@@ -458,6 +509,16 @@ const routes: RouteCase[] = [
         as: 'trainerA',
         url: `/api/workout-logs?clientId=${ids.clientA}&trainingPlanId=${ids.planB}`,
         why: "query: another trainer's plan",
+      },
+      {
+        as: 'trainerA',
+        url: `/api/workout-logs?clientId=${ids.clientB}&trainingPlanId=${ids.planAForFormerClientB}`,
+        why: "query: the trainer's own plan, but for a client no longer on their roster",
+      },
+      {
+        as: 'trainerA',
+        url: `/api/workout-logs?clientId=${ids.clientA}&trainingPlanId=${ids.planBForClientA}`,
+        why: "query: the client's own plan, but written by another (previous) trainer",
       },
       {
         as: 'trainerA',
