@@ -110,7 +110,7 @@ A basic health check is available at `GET /health`.
 | Script | Description |
 |---|---|
 | `npm run dev` | Run the server in watch mode with `tsx` |
-| `npm run dev:docker` | Same as `dev`, but using polling-based file watching (for Docker bind mounts where native filesystem events aren't reliable, e.g. Docker Desktop on macOS) |
+| `npm run dev:docker` | Same as `dev`, but with polling-based file watching (`CHOKIDAR_USEPOLLING=true`; for Docker bind mounts where native filesystem events aren't reliable, e.g. Docker Desktop on macOS) |
 | `npm run build` | Type-check and compile to `dist/` |
 | `npm start` | Run the compiled output from `dist/` (`node dist/server.js`) |
 | `npm run typecheck` | Type-check without emitting output |
