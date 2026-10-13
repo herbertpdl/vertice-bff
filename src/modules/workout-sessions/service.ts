@@ -73,6 +73,12 @@ export async function getOrStartWorkoutLog(
   return toWorkoutLog(res)
 }
 
+/** One log by id (404 when missing), so routes can check who owns it before writing into it. */
+export async function getWorkoutLog(id: number): Promise<WorkoutLog> {
+  const res = await grpcCall<{ id: number }, WorkoutLogResponse>(workoutSessionClient, 'GetWorkoutLog', { id })
+  return toWorkoutLog(res)
+}
+
 export async function recordSetLog(
   workoutLogId: number,
   exerciseSetId: number,

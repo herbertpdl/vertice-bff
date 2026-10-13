@@ -13,7 +13,7 @@ Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), 
 
 `PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — emitted by `PUT /workouts/:workoutId/exercises`, when a client has already recorded data under the workout (the `message` names the blocking exercise and set number), and by `DELETE /exercises/:id`, while any workout uses the exercise. The `message` is vertice-api's verbatim. Distinct from `VALIDATION_ERROR` ("fix the payload").
 
-Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. All list/detail endpoints auto-scope to the caller (a `CLIENT` only ever sees their own data; a `TRAINER` only sees their own students/plans).
+Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Every id a route accepts (path, query or body) is checked against the caller: a `CLIENT` only reaches their own plans, workouts and workout logs; a `TRAINER` only their own plans and their own clients (`TrainerClientService.IsTrainersClient`). Another user's id is **403 `FORBIDDEN`**. A `CLIENT`'s `clientId` query parameter is ignored and replaced with their own id. `ADMIN` bypasses the plan/workout/log ownership checks but still has to name a client where a route needs one. `src/test/route-authorization.test.ts` pins this per route.
 
 ## Known MVP limitation
 `POST /auth/login` only checks that the email exists — vertice-api's gRPC surface has no password-verification RPC yet, so **any password is accepted for an existing account**. Fine for local testing; do not treat this as real auth.
@@ -67,7 +67,8 @@ There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is g
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or ADMIN` (CLIENT); 400 `VALIDATION_ERROR` for a non-numeric/0/negative/repeated `muscleGroupId` or `q` >100 chars (field `details`); 404 `NOT_FOUND` for an unknown `muscleGroupId`.
 - `GET /exercises/:id` (any role, upstream decides) → `Exercise`. TRAINER: starter or own; ADMIN: starter only; CLIENT: only an exercise used by a workout in one of their own plans.
   - Errors: 403 `FORBIDDEN` `You do not have access to exercise <id>`; 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
-- `GET /exercises/:id/progress?clientId=` → `{weekStartDate, weight}[]` (weight-over-time for a graph). CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
+- `GET /exercises/:id/progress?clientId=` → `{weekStartDate, weight}[]` (weight-over-time for a graph). CLIENT role ignores `clientId` and uses their own id; TRAINER and ADMIN must pass it.
+  - Errors: 400 `VALIDATION_ERROR` `clientId is required` / `Invalid clientId: <value>` (TRAINER, ADMIN); 403 `FORBIDDEN` `This client is not one of your clients` (TRAINER).
 - `POST /exercises` `{name, description?, videoUrl?, muscleGroupIds}` (TRAINER only) → `201` `Exercise` (`isStarter: false`, private to the caller).
   - `name` 1..255 chars (must not be blank); `description` ≤255, default `""`; `videoUrl` `""` or an http(s) URL ≤500, default `""`; `muscleGroupIds` at least one positive integer id — duplicates are dropped. A trainer-created exercise has no primary group, so its `muscleGroups` come back in id order whatever order was sent. Duplicate names are allowed.
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER` (CLIENT, ADMIN); 400 `VALIDATION_ERROR` with field `details` for Zod failures (`name` missing/empty/too long, `description`/`videoUrl` too long, `videoUrl` not a URL, `muscleGroupIds` missing/empty/non-positive — a body with only the old `muscleGroup` fails here); 400 `VALIDATION_ERROR` with a flat upstream message for `name: must not be blank`, `videoUrl: must be a valid http(s) URL`, `muscleGroupIds: unknown muscle group <id>`.
@@ -82,6 +83,7 @@ There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is g
 - `GET /?clientId=` → `TrainingPlan[]`. CLIENT: own plans only. TRAINER: own plans, optionally filtered by `clientId`.
 - `GET /:id` → `TrainingPlan & { workouts: Workout[] }` (nested workouts included for the plan-detail screen)
 - `POST /` `{name, description, clientId, startDate: "YYYY-MM-DD", endDate, level: "BEGINNER"|"INTERMEDIATE"|"ADVANCED"}` (TRAINER)
+  - Errors: 403 `FORBIDDEN` `This client is not one of your clients` when `clientId` is not the trainer's client. vertice-api also requires an active trainer–client link and answers 409 `PRECONDITION_FAILED` without one.
 - `PATCH /:id` same body minus clientId (TRAINER). A plan's client is fixed at creation: a `clientId` in the body is ignored and the stored one is sent upstream.
 - `DELETE /:id` (TRAINER)
 
@@ -135,13 +137,17 @@ There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is g
   Each `exercise` under `exercises[]` is the `Exercise` shape from the Exercises section (`muscleGroups`, `isStarter`; no `muscleGroup`).
   This auto-starts (or resumes) this week's log and merges in last time's recorded weight/reps per set (`lastPerformed`), so the UI can show "last time: 60kg × 12" inline. **This is the single call the workout-execution screen needs.**
 - `POST /workout-sessions/:workoutLogId/sets` `{exerciseSetId, weight, reps}` (CLIENT) → records one set's actual performance
+  - Errors: 403 `FORBIDDEN` `You do not have access to this workout log` (another client's log); 400 `VALIDATION_ERROR` `exerciseSetId does not belong to this workout log` when the set is not one of the log's workout's sets. A missing set gets the same 400, so the answer never tells "someone else's set" from "no such set". vertice-api enforces the same rule (409 `PRECONDITION_FAILED`); the BFF check answers first. 404 `NOT_FOUND` for an unknown log.
 - `POST /workout-sessions/:workoutLogId/complete` (CLIENT) → marks the log done
-- `GET /workout-logs?trainingPlanId=&weekStartDate=&clientId=` — **`trainingPlanId` is required** by vertice-api (this RPC is scoped to one plan + one week, not a general history query). CLIENT uses own id; TRAINER must pass `clientId` (must be their student). Use this to render "which workouts are done this week."
+  - Errors: 403 `FORBIDDEN` `You do not have access to this workout log`; 404 `NOT_FOUND` for an unknown log.
+- `GET /workout-logs?trainingPlanId=&weekStartDate=&clientId=` — **`trainingPlanId` is required** by vertice-api (this RPC is scoped to one plan + one week, not a general history query). CLIENT uses own id; TRAINER and ADMIN must pass `clientId` (for a TRAINER, one of their clients). The plan must belong to that client and to the caller. Use this to render "which workouts are done this week."
+  - Errors: 400 `VALIDATION_ERROR` `clientId is required` / `trainingPlanId is required` / `Invalid <param>: <value>`; 403 `FORBIDDEN` `This client is not one of your clients`, `You do not have access to this training plan` (another trainer's or client's plan) or `That training plan does not belong to this client`; 404 `NOT_FOUND` for an unknown plan.
 
 `WorkoutLog` = `{id, workoutId, clientId, weekStartDate, startedAt, completedAt}` (`completedAt` is `""` until completed).
 
 ## Feedback
 - `POST /workout-logs/:workoutLogId/feedback` `{text}` (CLIENT)
+  - Errors: 403 `FORBIDDEN` `You do not have access to this workout log` (another client's log); 404 `NOT_FOUND` for an unknown log.
 - `GET /feedback` (TRAINER) → `EnrichedFeedback[]` = `WorkoutFeedback & {clientName, workoutName, trainingPlanName}`, newest first. **Not** scoped to one client — returns the whole trainer's feedback. Screens that need one student's feedback (e.g. the student-detail page) filter this client-side by `clientId`; the trainer's total feedback volume is small enough that this is fine for now. No `?clientId=` param was added — revisit if that assumption stops holding.
 
 ## Dashboard (TRAINER)

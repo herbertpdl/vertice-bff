@@ -4,6 +4,7 @@ import { assertOwnsPlan } from '../../lib/ownership.js'
 import { trainingPlanInputSchema, trainingPlanUpdateSchema } from './schemas.js'
 import * as planService from './service.js'
 import * as workoutService from '../workouts/service.js'
+import { assertIsTrainersClient } from '../clients/service.js'
 
 export default async function trainingPlanRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
@@ -32,6 +33,7 @@ export default async function trainingPlanRoutes(app: FastifyInstance) {
     { preHandler: app.requireRole('TRAINER', 'ADMIN') },
     async (req, reply) => {
       const body = trainingPlanInputSchema.parse(req.body)
+      if (req.user!.role === 'TRAINER') await assertIsTrainersClient(req.user!.id, body.clientId)
       reply.status(201)
       return planService.createTrainingPlan(req.user!.id, body)
     },
