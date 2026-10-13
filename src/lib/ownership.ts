@@ -1,4 +1,4 @@
-import { ForbiddenError, NotFoundError, ValidationError } from './errors.js'
+import { ForbiddenError, HttpError, ValidationError } from './errors.js'
 import type { AuthUser } from './jwt.js'
 import * as planService from '../modules/training-plans/service.js'
 import * as workoutService from '../modules/workouts/service.js'
@@ -56,15 +56,12 @@ export async function assertOwnsWorkoutLog(user: AuthUser, workoutLogId: number)
  * a clean error first.
  */
 export async function assertExerciseSetInWorkout(exerciseSetId: number, workoutId: number): Promise<void> {
-  const invalid = () => new ValidationError('exerciseSetId does not belong to this workout log')
-  try {
+  const message = 'exerciseSetId does not belong to this workout log'
+  const we = await withoutExistenceOracle(message, async () => {
     const set = await exerciseSetService.getExerciseSet(exerciseSetId)
-    const we = await workoutExerciseService.getWorkoutExercise(set.workoutExerciseId)
-    if (we.workoutId !== workoutId) throw invalid()
-  } catch (err) {
-    if (err instanceof NotFoundError || err instanceof ForbiddenError) throw invalid()
-    throw err
-  }
+    return workoutExerciseService.getWorkoutExercise(set.workoutExerciseId)
+  })
+  if (we.workoutId !== workoutId) throw new ValidationError(message)
 }
 
 /**
@@ -79,15 +76,25 @@ export async function assertExerciseSetInWorkout(exerciseSetId: number, workoutI
 export async function assertCanUseExercises(user: AuthUser, exerciseIds: number[]): Promise<void> {
   if (user.role !== 'TRAINER') return
   await Promise.all(
-    [...new Set(exerciseIds)].map(async (id) => {
-      try {
-        await exerciseService.getExercise(id)
-      } catch (err) {
-        if (err instanceof NotFoundError || err instanceof ForbiddenError) {
-          throw new ValidationError(`exerciseId ${id} is not available to you`)
-        }
-        throw err
-      }
-    }),
+    [...new Set(exerciseIds)].map((id) =>
+      withoutExistenceOracle(`exerciseId ${id} is not available to you`, () => exerciseService.getExercise(id)),
+    ),
   )
+}
+
+/**
+ * Runs an upstream lookup and answers both "not found" (404) and "not yours"
+ * (403) with the same 400 `message`, so a caller cannot probe which ids exist.
+ * Matches on the status code, not the class, so it holds for every HttpError
+ * `mapGrpcError` can build. Anything else (e.g. 503) passes through.
+ */
+async function withoutExistenceOracle<T>(message: string, lookup: () => Promise<T>): Promise<T> {
+  try {
+    return await lookup()
+  } catch (err) {
+    if (err instanceof HttpError && (err.statusCode === 403 || err.statusCode === 404)) {
+      throw new ValidationError(message)
+    }
+    throw err
+  }
 }

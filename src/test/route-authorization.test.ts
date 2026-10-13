@@ -5,7 +5,11 @@ import { grpcCall } from '../grpc/call.js'
 import type { Role } from '../lib/jwt.js'
 import { bearer, fakeGrpcCall, ids, isWriteRpc, type Actor } from './fakeUpstream.js'
 
-vi.mock('../grpc/call.js', () => ({ grpcCall: vi.fn() }))
+// Keep the real mapGrpcError: the fake upstream raises its errors through it.
+vi.mock('../grpc/call.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../grpc/call.js')>()),
+  grpcCall: vi.fn(),
+}))
 const grpcCallMock = vi.mocked(grpcCall)
 
 /**

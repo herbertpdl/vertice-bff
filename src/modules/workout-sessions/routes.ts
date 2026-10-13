@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify'
 import { parseId, parseRequiredId } from '../../lib/net.js'
-import { ForbiddenError } from '../../lib/errors.js'
 import {
   assertExerciseSetInWorkout,
   assertOwnsPlan,
@@ -29,7 +28,7 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
       if (user.role === 'TRAINER') {
         // assertOwnsWorkout already confirmed the plan belongs to this trainer;
         // the requested client must also belong to that same plan.
-        if (plan.clientId !== clientId) throw new ForbiddenError('That client is not assigned to this workout')
+        assertPlanBelongsToClient(plan, clientId)
       }
 
       const weekStartDate = req.query.weekStartDate ?? currentWeekStartDate()

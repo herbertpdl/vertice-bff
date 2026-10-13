@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as grpc from '@grpc/grpc-js'
 import { grpcCall, mapGrpcError } from './call.js'
-import { HttpError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
+import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
 import { requestContext } from '../lib/request-context.js'
 
 /** A stand-in grpc-js client that records the metadata of the last call. */
@@ -74,6 +74,8 @@ describe('mapGrpcError', () => {
   it('mapGrpcError maps PERMISSION_DENIED to 403 FORBIDDEN with the upstream message verbatim', () => {
     const details = 'You do not have access to exercise 12'
     const err = mapGrpcError({ code: grpc.status.PERMISSION_DENIED, details })
+    // A ForbiddenError, like the BFF's own refusals, so callers can treat both alike.
+    expect(err).toBeInstanceOf(ForbiddenError)
     expect(err).toBeInstanceOf(HttpError)
     expect(err.statusCode).toBe(403)
     expect(err.code).toBe('FORBIDDEN')
@@ -82,6 +84,7 @@ describe('mapGrpcError', () => {
 
   it('maps NOT_FOUND to 404', () => {
     const err = mapGrpcError({ code: grpc.status.NOT_FOUND, details: 'Workout' })
+    expect(err).toBeInstanceOf(NotFoundError)
     expect(err.statusCode).toBe(404)
     expect(err.code).toBe('NOT_FOUND')
   })

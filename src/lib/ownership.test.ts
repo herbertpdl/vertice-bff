@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { grpcCall } from '../grpc/call.js'
+import * as grpc from '@grpc/grpc-js'
+import { grpcCall, mapGrpcError } from '../grpc/call.js'
 import { ForbiddenError } from './errors.js'
 import type { AuthUser } from './jwt.js'
 import { requestContext } from './request-context.js'
 import { assertCanUseExercises, assertExerciseSetInWorkout, assertOwnsWorkoutLog } from './ownership.js'
 import { bearer, fakeGrpcCall, ids, userOf, type Actor } from '../test/fakeUpstream.js'
 
-vi.mock('../grpc/call.js', () => ({ grpcCall: vi.fn() }))
+// Keep the real mapGrpcError: the fake upstream raises its errors through it.
+vi.mock('../grpc/call.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../grpc/call.js')>()),
+  grpcCall: vi.fn(),
+}))
 const grpcCallMock = vi.mocked(grpcCall)
 
 const user = (actor: Actor): AuthUser => ({ ...userOf(actor), email: `user${userOf(actor).id}@vertice.test` })
@@ -49,7 +54,7 @@ describe('assertExerciseSetInWorkout', () => {
   it('answers a refused set lookup with the same 400 as a missing or foreign one', async () => {
     const expected = { statusCode: 400, message: 'exerciseSetId does not belong to this workout log' }
     grpcCallMock.mockImplementationOnce(async () => {
-      throw new ForbiddenError('You do not have access to exercise set 400')
+      throw mapGrpcError({ code: grpc.status.PERMISSION_DENIED, details: 'You do not have access to exercise set 400' })
     })
     await expect(assertExerciseSetInWorkout(ids.exerciseSetA, ids.workoutA)).rejects.toMatchObject(expected)
     await expect(assertExerciseSetInWorkout(9999, ids.workoutA)).rejects.toMatchObject(expected)
@@ -74,6 +79,30 @@ describe('assertCanUseExercises', () => {
       message: `exerciseId ${ids.privateExerciseB} is not available to you`,
     })
     await expect(run(9999)).rejects.toMatchObject({ statusCode: 400, message: 'exerciseId 9999 is not available to you' })
+  })
+
+  it('turns a real upstream PERMISSION_DENIED, mapped by mapGrpcError, into the same 400 as NOT_FOUND', async () => {
+    const answers: unknown[] = []
+    for (const code of [grpc.status.PERMISSION_DENIED, grpc.status.NOT_FOUND]) {
+      grpcCallMock.mockImplementationOnce(async () => {
+        throw mapGrpcError({ code, details: 'You do not have access to exercise 7' })
+      })
+      answers.push(
+        await asCaller('trainerA', () => assertCanUseExercises(user('trainerA'), [7])).catch((err: unknown) => err),
+      )
+    }
+    for (const err of answers) {
+      expect(err).toMatchObject({ statusCode: 400, code: 'VALIDATION_ERROR', message: 'exerciseId 7 is not available to you' })
+    }
+  })
+
+  it('lets an upstream outage through instead of hiding it as a 400', async () => {
+    grpcCallMock.mockImplementationOnce(async () => {
+      throw mapGrpcError({ code: grpc.status.UNAVAILABLE, details: '' })
+    })
+    await expect(
+      asCaller('trainerA', () => assertCanUseExercises(user('trainerA'), [ids.exercise])),
+    ).rejects.toMatchObject({ statusCode: 503 })
   })
 
   it('skips the lookup for an ADMIN', async () => {

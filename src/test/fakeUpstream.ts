@@ -1,4 +1,5 @@
-import { ForbiddenError, NotFoundError } from '../lib/errors.js'
+import { status } from '@grpc/grpc-js'
+import { mapGrpcError } from '../grpc/call.js'
 import { signToken, verifyToken, type Role } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
 
@@ -13,7 +14,20 @@ import { requestContext } from '../lib/request-context.js'
  * can put "the other tenant's id" in any path, query or body slot. Replies use the
  * proto-loader wire shape (int64 as string) so the real services map them.
  * `GetExercise` reads the caller from the forwarded token, like vertice-api does.
+ * Failures are gRPC statuses sent through the real `mapGrpcError`, so routes see
+ * exactly the errors a real upstream produces. Test files must therefore keep the
+ * real `mapGrpcError` when mocking `grpc/call.js`:
+ *
+ *   vi.mock('../grpc/call.js', async (importOriginal) => ({
+ *     ...(await importOriginal<typeof import('../grpc/call.js')>()),
+ *     grpcCall: vi.fn(),
+ *   }))
  */
+/** Throws what `grpcCall` would reject with for this upstream status. */
+function upstreamError(code: status, details: string): never {
+  throw mapGrpcError({ code, details })
+}
+
 
 export const ids = {
   admin: 1,
@@ -100,7 +114,7 @@ const today = new Date().toISOString().slice(0, 10)
 
 function find<T extends { id: number }>(rows: T[], id: unknown, what: string): T {
   const row = rows.find((r) => r.id === Number(id))
-  if (!row) throw new NotFoundError(what)
+  if (!row) upstreamError(status.NOT_FOUND, what)
   return row
 }
 
@@ -185,7 +199,7 @@ function getVisibleExercise(id: unknown) {
         exercise.id === ids.exercise &&
         workouts.some((w) => find(plans, w.trainingPlanId, 'TrainingPlan').clientId === user.id)
       : exercise.ownerId === null || (user?.role === 'TRAINER' && exercise.ownerId === user.id)
-  if (!visible) throw new ForbiddenError(`You do not have access to exercise ${exercise.id}`)
+  if (!visible) upstreamError(status.PERMISSION_DENIED, `You do not have access to exercise ${exercise.id}`)
   return exerciseRes(exercise)
 }
 
