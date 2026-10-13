@@ -62,5 +62,12 @@ they map onto upstream RPCs — see `docs/specs/create-workout-with-exercises/sp
 references in docs are GitHub links (`https://github.com/herbertpdl/<repo>/blob/main/<path>`),
 not `../<repo>/...` relative paths; same-repo references stay relative.
 
+Every spec that touches more than one repo has a **"Merge and deploy order"** section listing
+the repos in the order their PRs merge and deploy, and why (which side needs the other already
+live). The default is `vertice-api` → `vertice-bff` → `vertice-web-react` / `vertice-mobile`:
+the API adds RPCs before the BFF calls them, and the BFF exposes endpoints before a client
+uses them. State any deviation explicitly (e.g. a removal goes clients first, API last), plus
+the rollback order.
+
 
 `docs/api-contract.md` documents the full REST surface (request/response shapes, role requirements, and the same upstream-limitation notes as the code comments) and is generally reliable for endpoint-level detail — but it predates the `students`→`clients` rename and still refers to a `/students` route; treat anything mentioning `/students` there as referring to what is now `/clients`.

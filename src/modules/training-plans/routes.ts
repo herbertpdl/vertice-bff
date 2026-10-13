@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { parseId } from '../../lib/net.js'
 import { assertOwnsPlan } from '../../lib/ownership.js'
-import { trainingPlanInputSchema } from './schemas.js'
+import { trainingPlanInputSchema, trainingPlanUpdateSchema } from './schemas.js'
 import * as planService from './service.js'
 import * as workoutService from '../workouts/service.js'
 
@@ -43,8 +43,8 @@ export default async function trainingPlanRoutes(app: FastifyInstance) {
     async (req) => {
       const existing = await planService.getTrainingPlan(parseId(req.params.id))
       assertOwnsPlan(req.user!, existing)
-      const body = trainingPlanInputSchema.parse(req.body)
-      return planService.updateTrainingPlan(existing.id, body)
+      const body = trainingPlanUpdateSchema.parse(req.body)
+      return planService.updateTrainingPlan(existing.id, { ...body, clientId: existing.clientId })
     },
   )
 

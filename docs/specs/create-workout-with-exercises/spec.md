@@ -162,6 +162,16 @@ workout is refused, not just ones that would drop that set — upstream cannot t
 entry from a new one (api spec §0, last bullet). The trainer's only path from there is the
 one-at-a-time endpoints in 2.3.
 
+## Merge and deploy order
+
+1. `vertice-api` — `CreateWorkoutWithExercises` / `ReplaceWorkoutExercises` and
+   `FAILED_PRECONDITION` for the recorded-data refusal (already on `main`).
+2. `vertice-bff` (this spec) — proto sync, the changed `POST` and the new `PUT`. Needs the API
+   deployed first: against an older API both endpoints fail with `UNIMPLEMENTED` (502).
+3. `vertice-web-react` — the workout editor that calls them. Needs this BFF deployed first.
+
+Rollback goes in reverse order (web, then BFF, then API).
+
 ## 4. Code changes (checklist)
 
 - `protos/vertice/plan/v1/workout.proto` — replace with the upstream copy (§1).
