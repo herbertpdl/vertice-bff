@@ -82,7 +82,7 @@ There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is g
 - `GET /?clientId=` → `TrainingPlan[]`. CLIENT: own plans only. TRAINER: own plans, optionally filtered by `clientId`.
 - `GET /:id` → `TrainingPlan & { workouts: Workout[] }` (nested workouts included for the plan-detail screen)
 - `POST /` `{name, description, clientId, startDate: "YYYY-MM-DD", endDate, level: "BEGINNER"|"INTERMEDIATE"|"ADVANCED"}` (TRAINER)
-- `PATCH /:id` same body minus clientId (TRAINER)
+- `PATCH /:id` same body minus clientId (TRAINER). A plan's client is fixed at creation: a `clientId` in the body is ignored and the stored one is sent upstream.
 - `DELETE /:id` (TRAINER)
 
 `TrainingPlan` = `{id, name, description, trainerId, clientId, startDate, endDate, level}`
