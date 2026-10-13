@@ -14,7 +14,7 @@ Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web-react`
 ## Commands
 
 - `npm run dev` — run with hot reload (tsx watch)
-- `npm run dev:docker` — same, but with polling-based file watching (for Docker Desktop bind mounts where inotify doesn't propagate)
+- `npm run dev:docker` — same `tsx watch`, but with polling-based file watching (`CHOKIDAR_USEPOLLING=true`, for Docker Desktop bind mounts where inotify doesn't propagate)
 - `npm run build` / `npm start` — compile to `dist/` and run the compiled output
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run lint` — ESLint (flat config, `eslint.config.js`, typescript-eslint recommended rules)
