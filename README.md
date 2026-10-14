@@ -24,7 +24,9 @@ src/
   config/env.ts          environment variable parsing/validation (zod)
   grpc/                  proto loading and gRPC client instances for vertice-api
   lib/                   shared helpers (JWT, error types, date/ownership utils, net)
-  plugins/               Fastify plugins (authentication, error handling)
+  plugins/               Fastify plugins (authentication, error handling, rate limits)
+  ops/                   one-off operations run from scripts/ (e.g. issuing setup tokens)
+scripts/                 operator CLIs (`npm run ops:*`)
   modules/                one folder per resource (routes/schemas/service), e.g.
                           auth, students, exercises, training-plans, workouts,
                           workout-exercises, exercise-sets, workout-sessions,
@@ -61,6 +63,10 @@ cp .env.example .env
 | `VERTICE_API_GRPC_PORT` | `9090` | Port of the `vertice-api` gRPC server |
 | `JWT_SECRET` | `vertice-dev-jwt-secret-do-not-use-in-production` (only when `NODE_ENV` is unset, `development` or `test`) | HS256 secret used to sign/verify auth tokens issued by the BFF; must equal vertice-api's. For any other `NODE_ENV` (`production`, `staging`, ...; trimmed and case-insensitive) there is no default: the BFF refuses to start if it is missing, has leading/trailing whitespace, is shorter than 32 bytes, or is a known placeholder/dev value (mirrors vertice-api's `JwtSecretGuard`). Generate one with `openssl rand -base64 48` |
 | `JWT_EXPIRES_IN` | `8h` | Auth token expiry |
+| `VERIFY_PASSWORDS` | `true` | Login checks the password through vertice-api's `VerifyCredentials`. `false` restores the old email-only login (any password works) for the rollout window, until every existing client has a setup link (see [Operations](#operations)). The BFF logs a warning at startup when it is `false`, and refuses to start with `false` unless `NODE_ENV` is unset, `development` or `test` |
+| `TRUST_PROXY` | `false` | Fastify `trustProxy`. Leave `false` when clients connect to the BFF directly. Behind a reverse proxy or load balancer, set it to the proxy's address(es)/CIDR(s), comma-separated (e.g. `10.0.0.0/8`, or `loopback` for a proxy on the same host), so `req.ip`, which the rate limits key on, is the real client. `true` trusts every `X-Forwarded-For` hop: only when nothing can reach the BFF except through a proxy that overwrites that header. A bare hop count (`1`) is refused: this Fastify version treats a number as "trust nothing" |
+| `RATE_LIMIT_GLOBAL_MAX` / `RATE_LIMIT_GLOBAL_WINDOW_MS` | `300` / `60000` | Loose per-IP bucket over every route |
+| `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW_MS` | `5` / `900000` | Strict per-IP and per-email buckets on `/auth/login`, `/auth/register` and `/auth/password[/setup]`: the request after `AUTH_RATE_LIMIT_MAX` counted attempts in the window gets `429`. Login and password setup count failures only; register counts every attempt. See [`docs/api-contract.md`](docs/api-contract.md#rate-limits) |
 
 ## Running locally
 
@@ -116,6 +122,38 @@ A basic health check is available at `GET /health`.
 | `npm run typecheck` | Type-check without emitting output |
 | `npm run lint` | Run ESLint |
 | `npm test` | Run the test suite with Vitest |
+| `npm run ops:issue-setup-tokens [-- --dry-run]` | Issue a password setup link to every CLIENT (see [Operations](#operations)) |
+
+## Operations
+
+### Issuing setup links to existing clients (password verification rollout)
+
+Clients created before password setup tokens got a random password nobody knows, so once login
+verifies passwords they can't get in. Before turning `VERIFY_PASSWORDS` on in a shared
+environment (or right after, in dev), give each of them a setup link:
+
+```sh
+# Who would get a link (issues nothing):
+npm run -s ops:issue-setup-tokens -- --dry-run
+# Issue them; one CSV line per client on stdout:
+npm run -s ops:issue-setup-tokens > setup-links.csv
+```
+
+- It reads the same `.env` as the BFF (`VERTICE_API_GRPC_HOST`/`PORT`) and lists every CLIENT with
+  `ListUsers(role=CLIENT)`. Not `ListUsersWithoutPassword`: legacy clients have a random password
+  hash, so they don't show up there.
+- Output is CSV on stdout, `userId,email,linkPath,expiresAt`; `linkPath` is
+  `/definir-senha?token=…`, to prefix with the web app's origin. Progress and errors go to
+  stderr. Nothing is logged.
+- **The links are credentials**: anyone holding one can set that client's password. Send each
+  link only to its client, and delete the file afterwards. Tokens expire after 72h (vertice-api
+  `PASSWORD_SETUP_TOKEN_TTL`) and are single-use.
+- Every run issues a new token per client and invalidates that client's previous unused one, so
+  only the latest run's links work. It also issues one to clients who already set their own
+  password, so run it once, at migration time. A trainer can re-issue a single client's link with
+  `POST /api/clients/:id/setup-token` while that client has no password.
+- vertice-api has no role restriction on these RPCs yet (P1-01); once it does, the script needs
+  the BFF's service identity.
 
 ## API
 
@@ -124,8 +162,7 @@ Authenticated routes expect `Authorization: Bearer <token>`. Error responses sha
 shape: `{ "error": { "code": "...", "message": "...", "details": {} } }`.
 
 See [`docs/api-contract.md`](docs/api-contract.md) for the full list of endpoints, request/response
-shapes, roles, and known MVP limitations (e.g. `POST /auth/login` currently only checks that the
-email exists, since `vertice-api` does not yet expose password verification over gRPC).
+shapes, roles, rate limits and known MVP limitations.
 
 ## gRPC contract
 
