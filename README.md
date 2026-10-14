@@ -6,7 +6,7 @@ responses for the frontend's screens.
 
 ## Tech stack
 
-- Node.js (>= 22), TypeScript
+- Node.js 22 (pinned in `.nvmrc`; `engines.node` is `>=22 <23`), TypeScript
 - [Fastify](https://fastify.dev/) — HTTP server
 - [`@grpc/grpc-js`](https://github.com/grpc/grpc-node) + [`@grpc/proto-loader`](https://github.com/grpc/grpc-node/tree/master/packages/proto-loader) — gRPC client to `vertice-api`
 - [Zod](https://zod.dev/) — request validation
@@ -41,7 +41,7 @@ Each module under `src/modules/*` typically has:
 
 ## Prerequisites
 
-- Node.js >= 22
+- Node.js 22 (`nvm use` picks it up from `.nvmrc`)
 - A running `vertice-api` instance reachable over gRPC (defaults to `localhost:9090`)
 
 ## Setup
@@ -125,6 +125,13 @@ A basic health check is available at `GET /health`.
 | `npm run lint` | Run ESLint |
 | `npm test` | Run the test suite with Vitest |
 | `npm run ops:issue-setup-tokens [-- --dry-run]` | Issue a password setup link to every CLIENT (see [Operations](#operations)) |
+
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`, on the Node
+version in `.nvmrc`: `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`
+and `npm audit --omit=dev --audit-level=high`. The tests mock the upstream, so CI needs no
+running `vertice-api` or Postgres. Run the same commands locally before opening a PR.
 
 ## Operations
 
