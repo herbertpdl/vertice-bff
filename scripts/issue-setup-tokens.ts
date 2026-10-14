@@ -9,21 +9,25 @@
  */
 import { issueSetupTokens } from '../src/ops/issue-setup-tokens.js'
 import { grpcTarget } from '../src/config/env.js'
+import { userClient } from '../src/grpc/clients.js'
 
 const args = process.argv.slice(2)
 const unknown = args.filter((arg) => arg !== '--dry-run')
 if (unknown.length > 0) {
   process.stderr.write(`Unknown argument(s): ${unknown.join(' ')}\nUsage: issue-setup-tokens [--dry-run]\n`)
-  process.exit(2)
+  process.exit(2) // nothing written to stdout yet
 }
 const dryRun = args.includes('--dry-run')
 
 process.stderr.write(`${dryRun ? '[dry run] listing' : 'Issuing setup tokens for'} every CLIENT via ${grpcTarget}\n`)
+// exitCode, not process.exit(): exiting right away could cut off stdout writes still being
+// flushed to a pipe, i.e. lose issued links. The open gRPC channel is closed so Node can exit.
 try {
   const count = await issueSetupTokens({ dryRun, write: (line) => process.stdout.write(`${line}\n`) })
   process.stderr.write(`${dryRun ? 'Would issue' : 'Issued'} ${count} setup token(s)\n`)
-  process.exit(0)
 } catch (err) {
   process.stderr.write(`Failed: ${err instanceof Error ? err.message : String(err)}\n`)
-  process.exit(1)
+  process.exitCode = 1
+} finally {
+  userClient.close()
 }

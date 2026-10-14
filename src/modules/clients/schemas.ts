@@ -1,8 +1,9 @@
 import { z } from 'zod'
+import { emailSchema } from '../auth/schemas.js'
 
 export const clientCreateSchema = z.object({
   name: z.string().min(1),
-  email: z.string().trim().toLowerCase().email(),
+  email: emailSchema,
   // No password: the client chooses their own through the setup token the
   // create response returns (see clients/service.ts createClient()). A
   // `password` key in the body is stripped, never sent upstream.
