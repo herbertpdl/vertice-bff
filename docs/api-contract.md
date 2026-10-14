@@ -78,8 +78,7 @@ A trainer's roster = distinct clients across their training plans (User has no d
 
 `ClientDetail` = `{id, name, email, cpf, role}` (`cpf` masked; no `cref`).
 
-- **`GET /`** → `ClientSummary[]` = `{id, name, email, activePlanCount, currentPlan, lastWorkoutAt, weekActivity}`, for the roster/list screen. **No `cpf`, `cref` or `role`.**
-  - `email` is **deprecated**: it stays only until vertice-web-react's roster stops showing and searching it (P1-03 web step), then it is removed from this response. Don't build on it; the detail routes keep the email.
+- **`GET /`** → `ClientSummary[]` = `{id, name, activePlanCount, currentPlan, lastWorkoutAt, weekActivity}`, for the roster/list screen. **No `email`, `cpf`, `cref` or `role`** (P1-03); the detail routes carry the email.
   - `currentPlan`: `{id, name, endDate} | null` — the student's date-active training plan (`startDate <= today <= endDate`) among the trainer's plans for them; `null` if none is currently active (shown as a "Sem plano" tag in the UI). If more than one plan is active at once, the most recently started one is returned.
   - `lastWorkoutAt`: ISO timestamp of the student's most recent *completed* workout log, or `null`. **Scoped to the current week only** — see limitation note below.
   - `weekActivity`: `{date, dayOfWeek, completed}[]`, always 5 entries for Monday–Friday of the current week, `completed` true if a workout log finished on that calendar date. Powers the 5-dot weekly-activity indicator.
@@ -111,8 +110,8 @@ A trainer's roster = distinct clients across their training plans (User has no d
 - `DELETE /:id`
 
 ### What vertice-web-react must change (P1-03, web step)
-Nothing above breaks the current web: the roster keeps `email`, and the detail page renders whatever `cpf` string it gets (now the mask). The web PR must:
-1. **Roster** (`src/app/(app)/alunos/AlunosContent.tsx`): stop showing `student.email` under the name and stop searching by it (search by name only; placeholder "Buscar por nome..."). Type `GET /clients` as `ClientSummary` (`{id, name, email?, activePlanCount, currentPlan, lastWorkoutAt, weekActivity}`, `src/lib/api/types.ts`), not `StudentOverview extends User`, so nothing reads `cpf`/`cref`/`role` from it. Once that is live, the BFF drops `email` from `GET /clients` and vertice-api moves `ListClientsForTrainer` to its summary view.
+The detail page renders whatever `cpf` string it gets (now the mask). The web PR must:
+1. **Roster** (`src/app/(app)/alunos/AlunosContent.tsx`, done in vertice-web-react #45): no email under the name, search by name only, and `GET /clients` typed `ClientSummary` (`{id, name, activePlanCount, currentPlan, lastWorkoutAt, weekActivity}`, `src/lib/api/types.ts`), so nothing reads `email`/`cpf`/`cref`/`role` from it. With that live, the BFF dropped `email` from `GET /clients`, and vertice-api moves `ListClientsForTrainer` to its summary view.
 2. **Student detail** (`src/app/(app)/alunos/[studentId]/StudentDetailContent.tsx`): `overview.student.cpf` is now masked (`***.***.***-25`). Show it as is, with a "mostrar" toggle that fetches `GET /clients/:id?reveal=cpf` (`fetchStudent(id, { revealCpf: true })` in `src/lib/api/students.ts`) and shows that response's `cpf`. Don't cache the revealed CPF beyond the page (no long-lived React Query entry); hiding it again drops it.
 3. **`/auth/me`** (`src/lib/api/auth.ts`, `User` in `src/lib/api/types.ts`): no `cpf` any more. Use a `Me` type `{id, name, email, cref, role}`; nothing in the web reads `cpf` from it today.
 4. **Error copy**: key on `code`, never on `message` (already true for 409 `CONFLICT` in `RegisterForm`/`NewStudentDialog`). The `error.message` fallbacks (`PlanDialog`, `NewStudentDialog`, `LoginForm`, `RegisterForm`) now show fixed English text for non-validation errors; replace them with Portuguese copy per code.

@@ -115,7 +115,7 @@ describe('client personal data (P1-03)', () => {
   const maskedCpfOf = (id: number) => `***.***.***-${cpfOf(id).slice(-2)}`
 
   describe('GET /clients', () => {
-    it('returns a ClientSummary per client: no cpf, no cref, nothing spread from upstream', async () => {
+    it('returns a ClientSummary per client: no email, no cpf, no cref, nothing spread from upstream', async () => {
       const res = await get('/api/clients')
       expect(res.statusCode, res.body).toBe(200)
       const roster = res.json()
@@ -128,7 +128,6 @@ describe('client personal data (P1-03)', () => {
             "id": 100,
             "name": "Plan 100",
           },
-          "email": "user20@vertice.test",
           "id": 20,
           "lastWorkoutAt": null,
           "name": "Client A",
@@ -137,21 +136,25 @@ describe('client personal data (P1-03)', () => {
       `)
       for (const entry of roster) {
         expect(Object.keys(entry).sort()).toEqual(
-          ['activePlanCount', 'currentPlan', 'email', 'id', 'lastWorkoutAt', 'name', 'weekActivity'].sort(),
+          ['activePlanCount', 'currentPlan', 'id', 'lastWorkoutAt', 'name', 'weekActivity'].sort(),
         )
       }
-      expect(res.body).not.toMatch(/cpf|cref|52998224/i)
+      // The fake upstream still answers with the contact view (email set), so this proves the BFF
+      // drops the email itself rather than relying on vertice-api's summary view.
+      expect(res.body).not.toMatch(/email|cpf|cref|@vertice\.test|52998224/i)
     })
 
-    it('drops a CPF even if upstream sends one (an older vertice-api, or a view change)', async () => {
+    it('drops an email and a CPF even if upstream sends them (an older vertice-api, or a view change)', async () => {
       grpcCallMock.mockImplementation(async (client, method, request, options) => {
         const res = (await fakeGrpcCall(client, method, request, options)) as { clients?: object[] }
         if (method !== 'ListClientsForTrainer') return res as never
-        return { clients: res.clients!.map((c) => ({ ...c, cpf: '52998224725', cref: 'CREF-1' })) } as never
+        return {
+          clients: res.clients!.map((c) => ({ ...c, email: 'leak@example.com', cpf: '52998224725', cref: 'CREF-1' })),
+        } as never
       })
       const res = await get('/api/clients')
       expect(res.statusCode, res.body).toBe(200)
-      expect(res.body).not.toMatch(/cpf|cref|52998224725/i)
+      expect(res.body).not.toMatch(/email|leak@example\.com|cpf|cref|52998224725/i)
     })
   })
 
