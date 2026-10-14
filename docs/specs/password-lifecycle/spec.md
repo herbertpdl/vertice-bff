@@ -57,7 +57,9 @@ limiter holds at most `AUTH_RATE_LIMIT_MAX_KEYS` (default 1M, ~230 MB measured) 
 when full: new clients get 429 until buckets expire, tracked ones keep working, and a spray can't
 flush a victim's counter. Sweeps delete at most 1,000 expired buckets per call.
 
-Residual risk: once the cap is reached, clients the limiter isn't already tracking get 429 until windows expire. Reaching it takes many distinct networks: each IPv6 /48 or IPv4 /24 can hold only about `2 × AUTH_RATE_LIMIT_NETWORK_MAX` keys per route per window (≈200 by default), so filling 1M keys needs roughly 5,000 distinct /48s (or /24s) failing at full rate on one route, or about 1,250 spread over all four strict routes. That is within reach of a large botnet or a cheap pool of IPv6 allocations; the remedies then are a shared store, a CAPTCHA/proof-of-work step, or blocking at the edge.
+Shared networks: the network bucket is shared by everyone behind the same IPv4 /24 or IPv6 /48 — carrier-grade NAT, an office or university network, a mobile carrier's /48. One abuser on that network can use it up (about 100 failures in 15 minutes by default) and lock everyone else on it out of that route for the rest of the window, even with correct passwords. Raise `AUTH_RATE_LIMIT_NETWORK_MAX` if many users sit behind shared networks. The long-term fix is a shared store plus a CAPTCHA or proof-of-work step instead of a hard network limit.
+
+Residual risk: once the cap is reached, clients the limiter isn't already tracking get 429 until windows expire. Reaching it takes many distinct networks: each IPv6 /48 or IPv4 /24 can mint only about `2 × AUTH_RATE_LIMIT_NETWORK_MAX` keys per route per window, but keys from consecutive windows overlap, so it can hold about `4 × AUTH_RATE_LIMIT_NETWORK_MAX` (≈400 by default; 399 measured). Filling 1M keys therefore needs roughly 2,500 distinct /48s (or /24s) failing at full rate on one route, or about 625 spread over all four strict routes. That is within reach of a large botnet or a cheap pool of IPv6 allocations; the remedies then are a shared store, a CAPTCHA/proof-of-work step, or blocking at the edge.
 
 ## Merge and deploy order
 
