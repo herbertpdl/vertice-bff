@@ -7,9 +7,29 @@ import { trainerClientClient } from '../../grpc/clients.js'
 import { grpcCall } from '../../grpc/call.js'
 import { ForbiddenError, PreconditionFailedError } from '../../lib/errors.js'
 import { currentWeekStartDate } from '../../lib/dates.js'
+import { maskCpf } from '../../lib/cpf.js'
 
-export interface ClientSummary extends userService.User {
-  activePlanCount: number
+/**
+ * One client as the detail screens see them (`GET /clients/:id`, the overview's `student`,
+ * `PATCH /clients/:id`, `POST /clients`). `cpf` is masked (`***.***.***-25`) unless the trainer
+ * asked for it with `GET /clients/:id?reveal=cpf`.
+ */
+export interface ClientDetail {
+  id: number
+  name: string
+  email: string
+  cpf: string
+  role: userService.Role
+}
+
+export function toClientDetail(user: userService.User, { revealCpf = false } = {}): ClientDetail {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    cpf: revealCpf ? user.cpf : maskCpf(user.cpf),
+    role: user.role,
+  }
 }
 
 export interface ClientCreateInput {
@@ -18,7 +38,7 @@ export interface ClientCreateInput {
   cpf?: string
 }
 
-export interface CreatedClient extends userService.User {
+export interface CreatedClient extends ClientDetail {
   /**
    * First-access token for the client to choose a password; the web builds the link from it.
    * `null` when the client was created but the token couldn't be issued: the trainer re-issues
@@ -55,7 +75,7 @@ export async function createClient(
     password: '', // none: the client sets it with the setup token
     cpf: input.cpf ?? '',
   })
-  const client = userService.toUser(res)
+  const client = toClientDetail(userService.toUser(res))
 
   let setup: userService.PasswordSetupToken | null = null
   try {
@@ -95,7 +115,18 @@ export interface WeekActivityDay {
   completed: boolean
 }
 
-export interface ClientRosterEntry extends ClientSummary {
+/**
+ * One roster entry (`GET /clients`). Built field by field, never spread from the upstream user, so
+ * nothing upstream adds (CPF, CREF) reaches the list. `email` stays only until the web roster stops
+ * showing and searching it (P1-03, web step); then it goes too, and vertice-api's
+ * `ListClientsForTrainer` drops to its summary view.
+ */
+export interface ClientSummary {
+  id: number
+  name: string
+  /** Deprecated: kept for the current web roster only, removed once the web no longer reads it. */
+  email: string
+  activePlanCount: number
   currentPlan: CurrentPlanInfo | null
   lastWorkoutAt: string | null
   weekActivity: WeekActivityDay[]
@@ -104,8 +135,8 @@ export interface ClientRosterEntry extends ClientSummary {
 const WEEKDAY_LABELS: WeekdayLabel[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY']
 
 /**
- * Roster view for the clients list screen: extends the plain client summary
- * with each client's current (date-active) training plan, their most recent
+ * Roster view for the clients list screen: each client's id and name (see
+ * `ClientSummary`: no CPF) with their current (date-active) training plan, their most recent
  * workout completion, and which weekdays this week had a completed workout
  * (5 dots: Monday–Friday).
  *
@@ -126,7 +157,7 @@ const WEEKDAY_LABELS: WeekdayLabel[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURS
  * rather than a stale older date — we only surface activity we can actually
  * confirm.
  */
-export async function listClientsOverviewForTrainer(trainerId: number): Promise<ClientRosterEntry[]> {
+export async function listClientsOverviewForTrainer(trainerId: number): Promise<ClientSummary[]> {
   const today = new Date().toISOString().slice(0, 10)
   const weekStartDate = currentWeekStartDate()
   const weekDates = WEEKDAY_LABELS.map((dayOfWeek, i) => ({ dayOfWeek, date: addDays(weekStartDate, i) }))
@@ -173,7 +204,9 @@ export async function listClientsOverviewForTrainer(trainerId: number): Promise<
     const weekActivity = weekDates.map((d) => ({ ...d, completed: completedDates.has(d.date) }))
 
     return {
-      ...client,
+      id: client.id,
+      name: client.name,
+      email: client.email,
       activePlanCount: countByClient.get(client.id) ?? 0,
       currentPlan: activePlan ? { id: activePlan.id, name: activePlan.name, endDate: activePlan.endDate } : null,
       lastWorkoutAt,
@@ -205,7 +238,8 @@ function addDays(isoDate: string, days: number): string {
 // (shared by both the weekly-activity roster view above and the adherence calc below)
 
 export interface ClientOverview {
-  student: userService.User
+  /** CPF always masked here; the reveal is `GET /clients/:id?reveal=cpf`. */
+  student: ClientDetail
   activePlan: {
     id: number
     name: string
@@ -236,11 +270,12 @@ export interface ClientOverview {
  * to get it from the current API surface.
  */
 export async function getClientOverview(trainerId: number, studentId: number): Promise<ClientOverview> {
-  const [student, plans] = await Promise.all([
+  const [user, plans] = await Promise.all([
     userService.getUser(studentId),
     planService.listTrainingPlans({ trainerId, clientId: studentId }),
   ])
 
+  const student = toClientDetail(user)
   const today = new Date().toISOString().slice(0, 10)
   const activePlan = plans
     .filter((p) => p.startDate <= today && today <= p.endDate)

@@ -83,6 +83,22 @@ const users: { id: number; name: string; role: Role }[] = [
   { id: ids.clientA2, name: 'Client A2', role: 'CLIENT' },
 ]
 
+/**
+ * Adds `count` extra users of `role` (ids from 1000 up), e.g. to page past `ListUsers`' 100-user
+ * cap. Returns their ids and a function that removes them again (call it in `afterEach`).
+ */
+export function addFakeUsers(count: number, role: Role = 'CLIENT'): { ids: number[]; remove: () => void } {
+  const first = 1000 + users.length
+  const added = Array.from({ length: count }, (_, i) => ({ id: first + i, name: `Extra ${first + i}`, role }))
+  users.push(...added)
+  return {
+    ids: added.map((u) => u.id),
+    remove: () => {
+      for (const u of added) users.splice(users.indexOf(u), 1)
+    },
+  }
+}
+
 /** Every fixture user's password, except client A2's: a trainer-created client who hasn't set one yet. */
 export const FAKE_PASSWORD = 'correct-horse-battery'
 const withoutPassword = new Set<number>([ids.clientA2])
@@ -130,6 +146,8 @@ export function bearer(actor: Actor) {
 }
 
 export const emailOf = (id: number) => `user${id}@vertice.test`
+/** Each fixture user's CPF: its last two digits are the user id (mod 100), so a mask is predictable. */
+export const cpfOf = (id: number) => `529982247${String(id % 100).padStart(2, '0')}`
 const str = (n: number) => String(n)
 const today = new Date().toISOString().slice(0, 10)
 
@@ -139,12 +157,17 @@ function find<T extends { id: number }>(rows: T[], id: unknown, what: string): T
   return row
 }
 
-const userRes = (u: (typeof users)[number]) => ({
+/**
+ * vertice-api's user views (P1-03): every RPC fills one, leaving the other fields empty. detail =
+ * every field; contact = id, name, role, email; summary = id, name, role.
+ */
+type UserView = 'detail' | 'contact' | 'summary'
+const userRes = (u: (typeof users)[number], view: UserView) => ({
   id: str(u.id),
   name: u.name,
-  email: emailOf(u.id),
-  cpf: '',
-  cref: '',
+  email: view === 'summary' ? '' : emailOf(u.id),
+  cpf: view === 'detail' ? cpfOf(u.id) : '',
+  cref: view === 'detail' && u.role === 'TRAINER' ? `CREF-${u.id}` : '',
   role: u.role,
 })
 const planRes = (p: (typeof plans)[number]) => ({
@@ -229,6 +252,7 @@ export type UpstreamCaller = AuthUser | 'service:bff' | 'service:ops' | 'anonymo
 export const upstreamCallers: { method: string; caller: UpstreamCaller }[] = []
 export const resetUpstreamCallers = () => {
   upstreamCallers.length = 0
+  listUsersPageCalls.length = 0
 }
 
 /** The verified caller of the current call, read from the token `grpcCall` forwards upstream. */
@@ -319,16 +343,49 @@ function getOwnedExercise(id: unknown, verb: 'changed' | 'deleted') {
 }
 
 type Req = Record<string, unknown>
+
+/** vertice-api's `GetUser` rule: detail for the user themself, ADMIN or their active trainer. */
+function canSeeDetail(userId: number): boolean {
+  const user = caller()
+  if (!user) return false
+  return (
+    user.id === userId ||
+    user.role === 'ADMIN' ||
+    trainerClients.some(([t, c]) => t === user.id && c === userId)
+  )
+}
+
+/** Mirrors vertice-api's paginated `ListUsers`: keyset over id, page size 0 → 100, capped at 100. */
+const LIST_USERS_MAX_PAGE = 100
+export const listUsersPageCalls: { pageSize: number; pageToken: string }[] = []
+function listUsers(r: Req) {
+  const pageSize = Number(r.pageSize ?? 0)
+  const pageToken = String(r.pageToken ?? '')
+  listUsersPageCalls.push({ pageSize, pageToken })
+  if (pageSize < 0) upstreamError(status.INVALID_ARGUMENT, 'page_size: must not be negative')
+  const after = pageToken === '' ? 0 : Number(/^after-(\d+)$/.exec(pageToken)?.[1] ?? NaN)
+  if (Number.isNaN(after)) upstreamError(status.INVALID_ARGUMENT, 'page_token: malformed')
+  const limit = Math.min(pageSize || LIST_USERS_MAX_PAGE, LIST_USERS_MAX_PAGE)
+  const matching = users
+    .filter((u) => (!r.role || r.role === 'ROLE_UNSPECIFIED' || r.role === u.role) && u.id > after)
+    .sort((a, b) => a.id - b.id)
+  const page = matching.slice(0, limit)
+  return {
+    users: page.map((u) => userRes(u, 'contact')),
+    nextPageToken: matching.length > limit ? `after-${page.at(-1)!.id}` : '',
+  }
+}
 const byNumber = (value: unknown, actual: number) => !Number(value) || Number(value) === actual
 
 const handlers: Record<string, (req: Req) => unknown> = {
   // UserService
-  ListUsers: (r) => ({
-    users: users.filter((u) => !r.role || r.role === 'ROLE_UNSPECIFIED' || r.role === u.role).map(userRes),
-  }),
-  GetUser: (r) => userRes(find(users, r.id, 'User')),
-  CreateUser: (r) => ({ ...userRes(users[3]!), id: '99', email: r.email, role: r.role }),
-  UpdateUser: (r) => userRes(find(users, r.id, 'User')),
+  ListUsers: (r) => listUsers(r),
+  GetUser: (r) => {
+    const user = find(users, r.id, 'User')
+    return userRes(user, canSeeDetail(user.id) ? 'detail' : 'summary')
+  },
+  CreateUser: (r) => ({ ...userRes(users[3]!, 'contact'), id: '99', email: r.email, role: r.role }),
+  UpdateUser: (r) => userRes(find(users, r.id, 'User'), 'detail'),
   DeleteUser: () => ({}),
   SetUserPassword: () => ({}),
   VerifyCredentials: (r) => {
@@ -336,7 +393,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
     if (!user || withoutPassword.has(user.id) || r.password !== FAKE_PASSWORD) {
       upstreamError(status.UNAUTHENTICATED, 'Invalid email or password')
     }
-    return userRes(user)
+    return userRes(user, 'contact')
   },
   // Any id: the user `CreateClientForTrainer` just created (id 99) isn't in the fixtures.
   CreatePasswordSetupToken: (r) => ({
@@ -353,7 +410,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
   ListUsersWithoutPassword: (r) => ({
     users: users
       .filter((u) => withoutPassword.has(u.id) && (!r.role || r.role === 'ROLE_UNSPECIFIED' || r.role === u.role))
-      .map(userRes),
+      .map((u) => userRes(u, 'summary')),
   }),
 
   // ExerciseService
@@ -454,11 +511,11 @@ const handlers: Record<string, (req: Req) => unknown> = {
   ListWorkoutFeedback: () => ({ workoutFeedback: [] }),
 
   // TrainerClientService
-  CreateClientForTrainer: (r) => ({ ...userRes(users[3]!), id: '99', email: r.email }),
+  CreateClientForTrainer: (r) => ({ ...userRes(users[3]!, 'detail'), id: '99', email: r.email, cpf: r.cpf }),
   ListClientsForTrainer: (r) => ({
     clients: trainerClients
       .filter(([t]) => t === Number(r.trainerId))
-      .map(([, c]) => userRes(find(users, c, 'User'))),
+      .map(([, c]) => userRes(find(users, c, 'User'), 'contact')),
   }),
   IsTrainersClient: (r) => ({
     isClient: trainerClients.some(([t, c]) => t === Number(r.trainerId) && c === Number(r.clientId)),

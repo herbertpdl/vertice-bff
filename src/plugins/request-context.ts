@@ -10,7 +10,7 @@ import { requestContext } from '../lib/request-context.js'
  * continuation of the hook chain, which is exactly what `done` is.
  */
 export default fp(async function requestContextPlugin(app) {
-  app.addHook('onRequest', (_request, _reply, done) => {
-    requestContext.run({}, done)
+  app.addHook('onRequest', (request, _reply, done) => {
+    requestContext.run({ log: request.log }, done)
   })
 })

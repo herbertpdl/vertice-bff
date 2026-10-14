@@ -24,7 +24,7 @@ export default async function authRoutes(app: FastifyInstance) {
   })
 
   app.get('/me', { preHandler: app.authenticate }, async (req) => {
-    return userService.getUser(req.user!.id)
+    return userService.toMe(await userService.getUser(req.user!.id))
   })
 
   app.post(

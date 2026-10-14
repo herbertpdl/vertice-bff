@@ -15,3 +15,13 @@ export const clientUpdateSchema = z.object({
   email: z.string().email(),
   cpf: z.string().optional(),
 })
+
+/**
+ * `GET /clients/:id` query. `reveal=cpf` returns the CPF in full instead of masked; nothing else
+ * is accepted, so a typo is a 400 rather than a silently masked answer.
+ */
+export const clientDetailQuerySchema = z
+  .object({
+    reveal: z.literal('cpf').optional(),
+  })
+  .strict()

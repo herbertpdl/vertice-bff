@@ -6,12 +6,14 @@ import { buildApp } from '../../app.js'
 import { env } from '../../config/env.js'
 import { grpcCall, mapGrpcError } from '../../grpc/call.js'
 import {
+  addFakeUsers,
   bearer,
   emailOf,
   FAKE_PASSWORD,
   fakeGrpcCall,
   fakeUpstreamProfile,
   ids,
+  listUsersPageCalls,
   resetUpstreamCallers,
   setupTokenFor,
   upstreamCallers,
@@ -124,6 +126,36 @@ describe('auth routes', () => {
         expect(res.statusCode).toBe(401)
         expect(res.json()).toEqual({ error: { code: 'UNAUTHORIZED', message: 'Invalid email or password' } })
       })
+
+      describe('with more users than one ListUsers page (100)', () => {
+        let extra: ReturnType<typeof addFakeUsers>
+        beforeEach(() => {
+          extra = addFakeUsers(230)
+          resetUpstreamCallers()
+        })
+        afterEach(() => extra.remove())
+
+        it('finds a user on a later page', async () => {
+          const last = extra.ids.at(-1)!
+          const res = await login(emailOf(last).toUpperCase(), 'anything')
+          expect(res.statusCode, res.body).toBe(200)
+          expect(res.json().user.id).toBe(last)
+          expect(listUsersPageCalls.map((c) => c.pageToken)).toEqual(['', expect.any(String), expect.any(String)])
+          expect(new Set(upstreamCallers.map((c) => c.caller))).toEqual(new Set(['anonymous']))
+        })
+
+        it('stops paging at the page that has the user', async () => {
+          const res = await login(emailOf(ids.clientA), 'anything')
+          expect(res.statusCode, res.body).toBe(200)
+          expect(listUsersPageCalls).toHaveLength(1)
+        })
+
+        it('reads every page before refusing an unknown email', async () => {
+          const res = await login('nobody@vertice.test', 'anything')
+          expect(res.statusCode).toBe(401)
+          expect(listUsersPageCalls).toHaveLength(3)
+        })
+      })
     })
   })
 
@@ -135,6 +167,21 @@ describe('auth routes', () => {
       expect(res.statusCode, res.body).toBe(201)
       expect(upstreamMethods()).toEqual(['CreateUser'])
       expect(upstreamRequest('CreateUser')).toMatchObject({ email: 'nova@vertice.test', role: 'TRAINER' })
+    })
+
+    it.each([
+      ['CPF already in use: 529.982.247-25'],
+      ['Email already in use: nova@vertice.test'],
+      ['CPF already in use'],
+    ])('answers a duplicate (%j upstream) with one fixed 409 that names no value', async (details) => {
+      grpcCallMock.mockImplementation(async (_client, method) => {
+        if (method === 'CreateUser') throw mapGrpcError({ code: status.ALREADY_EXISTS, details })
+        throw new Error(`unexpected ${method}`)
+      })
+      const res = await post('/api/auth/register', { ...body, cpf: '52998224725' })
+      expect(res.statusCode).toBe(409)
+      expect(res.json()).toEqual({ error: { code: 'CONFLICT', message: 'Email or CPF already in use' } })
+      expect(res.body).not.toMatch(/\d|@/)
     })
 
     it('refuses role CLIENT with a 400: clients are created by their trainer', async () => {
@@ -152,6 +199,22 @@ describe('auth routes', () => {
       const res = await post('/api/auth/register', { ...body, password })
       expect(res.statusCode).toBe(400)
       expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('GET /auth/me', () => {
+    it("returns the caller's own account without their CPF", async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: bearer('trainerA') })
+      expect(res.statusCode, res.body).toBe(200)
+      // Upstream sends the detail view (CPF included) to the user themself; the BFF drops it.
+      expect(res.json()).toEqual({
+        id: ids.trainerA,
+        name: 'Trainer A',
+        email: emailOf(ids.trainerA),
+        cref: `CREF-${ids.trainerA}`,
+        role: 'TRAINER',
+      })
+      expect(res.body).not.toMatch(/cpf/i)
     })
   })
 

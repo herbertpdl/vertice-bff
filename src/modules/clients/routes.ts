@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { parseId } from '../../lib/net.js'
-import { clientCreateSchema, clientUpdateSchema } from './schemas.js'
+import { clientCreateSchema, clientDetailQuerySchema, clientUpdateSchema } from './schemas.js'
 import * as clientService from './service.js'
 import * as userService from '../users/service.js'
 
@@ -12,10 +12,17 @@ export default async function clientRoutes(app: FastifyInstance) {
 
   app.get('/', async (req) => clientService.listClientsOverviewForTrainer(req.user!.id))
 
+  // CPF masked unless `?reveal=cpf`. The reveal has no extra gate beyond the route's (TRAINER, one
+  // of your clients), but every one is logged: who saw whose CPF, never the value.
   app.get<{ Params: { id: string } }>('/:id', async (req) => {
     const id = parseId(req.params.id)
+    const { reveal } = clientDetailQuerySchema.parse(req.query)
     await clientService.assertIsTrainersClient(req.user!.id, id)
-    return userService.getUser(id)
+    const client = clientService.toClientDetail(await userService.getUser(id), { revealCpf: reveal === 'cpf' })
+    if (reveal === 'cpf') {
+      req.log.info({ audit: 'client.cpf.reveal', actorId: req.user!.id, clientId: id }, 'Client CPF revealed')
+    }
+    return client
   })
 
   app.get<{ Params: { id: string } }>('/:id/overview', async (req) => {
@@ -41,7 +48,7 @@ export default async function clientRoutes(app: FastifyInstance) {
     const id = parseId(req.params.id)
     await clientService.assertIsTrainersClient(req.user!.id, id)
     const body = clientUpdateSchema.parse(req.body)
-    return userService.updateUser(id, { ...body, role: 'CLIENT' })
+    return clientService.toClientDetail(await userService.updateUser(id, { ...body, role: 'CLIENT' }))
   })
 
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {

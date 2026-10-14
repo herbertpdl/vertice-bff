@@ -8,7 +8,12 @@ option java_package = "com.vertice.api.generated.grpc.trainerclient.v1";
 option java_multiple_files = true;
 
 service TrainerClientService {
+  // TRAINER for their own trainer_id, or ADMIN (any trainer). Returns the new client in the detail
+  // view: the caller is now their active trainer.
   rpc CreateClientForTrainer(CreateClientForTrainerRequest) returns (vertice.user.v1.UserResponse);
+  // The trainer's active clients in the contact view (id, name, role, email): never cpf or cref.
+  // Email stays only until vertice-bff's roster stops showing it (P1-03); then this becomes the
+  // summary view.
   rpc ListClientsForTrainer(ListClientsForTrainerRequest) returns (ListClientsForTrainerResponse);
   rpc IsTrainersClient(IsTrainersClientRequest) returns (IsTrainersClientResponse);
 }

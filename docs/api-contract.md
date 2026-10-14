@@ -14,9 +14,26 @@ All error responses have the shape:
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "...", "details": {} } }
 ```
-Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_UNAVAILABLE` (503).
+Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503).
 
-`PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — emitted by `PUT /workouts/:workoutId/exercises`, when a client has already recorded data under the workout (the `message` names the blocking exercise and set number), and by `DELETE /exercises/:id`, while any workout uses the exercise. The `message` is vertice-api's verbatim. Distinct from `VALIDATION_ERROR` ("fix the payload").
+**Key on `code`, not on `message`.** Messages are English and meant for logs and debugging. When vertice-api refuses a call, the BFF relays vertice-api's own text only for `INVALID_ARGUMENT`, as a 400 `VALIDATION_ERROR` whose `message` is the field error (`name: must not be blank`). Every other upstream refusal gets a fixed message, and the upstream text goes to the BFF's log only, with emails and CPFs redacted:
+
+| Upstream gRPC status | HTTP | `code` | `message` |
+|---|---|---|---|
+| `INVALID_ARGUMENT` | 400 | `VALIDATION_ERROR` | vertice-api's field error, as is |
+| `NOT_FOUND` | 404 | `NOT_FOUND` | `Resource not found` |
+| `PERMISSION_DENIED` | 403 | `FORBIDDEN` | `You do not have access to this resource` |
+| `FAILED_PRECONDITION` | 409 | `PRECONDITION_FAILED` | `The resource's current state does not allow this request` |
+| `ALREADY_EXISTS` | 409 | `CONFLICT` | `Email or CPF already in use` (the same for both, so it never says which one is taken) |
+| `UNAUTHENTICATED` | 401 | `UNAUTHENTICATED` | `Session no longer valid` |
+| `UNAVAILABLE` | 503 | `UPSTREAM_UNAVAILABLE` | `vertice-api is unavailable` |
+| anything else (`UNKNOWN`, `INTERNAL`, ...) | 502 | `UPSTREAM_ERROR` | `Upstream error` |
+
+`details` is only set on the BFF's own validation errors (Zod field errors and the like), never from upstream. The BFF's own refusals (`Requires role: TRAINER`, `This client is not one of your clients`, ...) keep their specific messages.
+
+`PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — emitted by `PUT /workouts/:workoutId/exercises`, when a client has already recorded data under the workout, and by `DELETE /exercises/:id`, while any workout uses the exercise. Distinct from `VALIDATION_ERROR` ("fix the payload").
+
+**Headers.** Every response carries API security headers (`@fastify/helmet`): `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: default-src 'none';frame-ancestors 'none'` (the BFF serves no HTML), `Strict-Transport-Security`, `Referrer-Policy: no-referrer` and helmet's other defaults. Every `/api/*` response, errors included, is `Cache-Control: no-store`.
 
 Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Every id a route accepts (path, query or body) is checked against the caller: a `CLIENT` only reaches their own plans, workouts and workout logs; a `TRAINER` only their own plans and their own clients (`TrainerClientService.IsTrainersClient`). Another user's id is **403 `FORBIDDEN`**. A `CLIENT`'s `clientId` query parameter is ignored and replaced with their own id. `src/test/route-authorization.test.ts` pins this per route.
 
@@ -50,24 +67,30 @@ Passwords follow vertice-api's policy everywhere one is set: **at least 8 charac
 
 - `POST /login` `{email, password}` → `{token, user: {id,name,email,role}}`. The password is checked by vertice-api (`VerifyCredentials`). A wrong password, an unknown email and an account with no password yet all get the **same** `401 {"error":{"code":"UNAUTHORIZED","message":"Invalid email or password"}}`.
   - Rollout flag: with `VERIFY_PASSWORDS=false` (development/test only; the BFF refuses to start with it anywhere else) login only checks that the email exists, the old MVP behaviour. Default is `true`.
-- `POST /register` `{name, email, password, role: "TRAINER", cpf, cref?}` → `201`, same shape as login. **Only `TRAINER`**: `role: "CLIENT"` is `400 VALIDATION_ERROR` (clients are created by their trainer, `POST /clients`). **`cpf` is required** (vertice-api rejects empty/invalid CPF). `cref` is optional (trainer license number). A taken email is `409 CONFLICT` from vertice-api.
-- `GET /me` (auth) → full `User` `{id,name,email,cpf,cref,role}`
+- `POST /register` `{name, email, password, role: "TRAINER", cpf, cref?}` → `201`, same shape as login. **Only `TRAINER`**: `role: "CLIENT"` is `400 VALIDATION_ERROR` (clients are created by their trainer, `POST /clients`). **`cpf` is required** (vertice-api rejects empty/invalid CPF). `cref` is optional (trainer license number). A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`, the same body for both.
+- `GET /me` (auth) → `{id, name, email, cref, role}`: the caller's own account. **No `cpf`** (no screen shows it; P1-03). `cref` is `""` for anyone but a trainer who set one.
 - `POST /password` (auth, any role) `{currentPassword, newPassword}` → `204`. Changes the caller's own password after re-checking the current one. A wrong `currentPassword` is **`400 INVALID_CURRENT_PASSWORD`**, not a 401: the session is still valid, so clients must not log out on it.
 - `POST /password/setup` (public) `{token, newPassword}` → `204`. First access: the client chooses a password with the setup token from `POST /clients` (or `POST /clients/:id/setup-token`), then logs in normally. An unknown, expired (72h) or already used token is **`400 INVALID_SETUP_TOKEN`** (vertice-api's `UNAUTHENTICATED`, mapped so clients don't read it as a logout). The token is single-use, and issuing a new one invalidates the previous one.
 
 ## Students — `/students` (TRAINER only)
 A trainer's roster = distinct clients across their training plans (User has no direct trainer link). **This means a newly created student with no training plan yet does not appear in `GET /` until a plan is created for them** — this is pre-existing behavior of the roster derivation, not something the endpoints below change.
-- **`GET /`** → `StudentOverview[]` = `User & {activePlanCount, currentPlan, lastWorkoutAt, weekActivity}`, for the roster/list screen:
+**CPF.** No list carries a CPF. The detail shapes (`ClientDetail`, below) carry it **masked**, `***.***.***-25` (only the two check digits; `""` when the client has none), except `GET /:id?reveal=cpf`.
+
+`ClientDetail` = `{id, name, email, cpf, role}` (`cpf` masked; no `cref`).
+
+- **`GET /`** → `ClientSummary[]` = `{id, name, email, activePlanCount, currentPlan, lastWorkoutAt, weekActivity}`, for the roster/list screen. **No `cpf`, `cref` or `role`.**
+  - `email` is **deprecated**: it stays only until vertice-web-react's roster stops showing and searching it (P1-03 web step), then it is removed from this response. Don't build on it; the detail routes keep the email.
   - `currentPlan`: `{id, name, endDate} | null` — the student's date-active training plan (`startDate <= today <= endDate`) among the trainer's plans for them; `null` if none is currently active (shown as a "Sem plano" tag in the UI). If more than one plan is active at once, the most recently started one is returned.
   - `lastWorkoutAt`: ISO timestamp of the student's most recent *completed* workout log, or `null`. **Scoped to the current week only** — see limitation note below.
   - `weekActivity`: `{date, dayOfWeek, completed}[]`, always 5 entries for Monday–Friday of the current week, `completed` true if a workout log finished on that calendar date. Powers the 5-dot weekly-activity indicator.
 
   Limitation: vertice-api's `ListWorkoutLogs` RPC is scoped to one `trainingPlanId` + one `weekStartDate` at a time (no general "this client's workout history" query), so — mirroring the dashboard module's `completedToday` logic — `lastWorkoutAt`/`weekActivity` only reflect the *current* week's logs across all of the trainer's plans for that client. A student whose last completed workout falls in an earlier week shows `lastWorkoutAt: null` and an all-empty week strip here, rather than a stale older date.
-- `GET /:id` → `User` (403 if not one of your students)
+- `GET /:id` → `ClientDetail` with the CPF masked (403 if not one of your clients).
+  - `GET /:id?reveal=cpf` → the same, with the CPF in full. TRAINER only, through the same "one of your clients" check (an ADMIN or CLIENT gets 403 by role, another trainer's client 403). Every reveal is logged (`audit: "client.cpf.reveal"`, the trainer's id and the client's id, never the value). Any other query (`reveal=email`, a repeated `reveal`, an unknown key) is `400 VALIDATION_ERROR`.
 - **`GET /:id/overview`** → aggregation for the student-detail header (active plan, this-week progress, last workout, adherence). One call instead of orchestrating training-plans + workouts + workout-logs from the frontend:
   ```json
   {
-    "student": { "...User" },
+    "student": { "...ClientDetail, cpf masked" },
     "activePlan": { "id": 0, "name": "", "level": "BEGINNER", "startDate": "", "endDate": "" } | null,
     "thisWeek": { "completed": 0, "total": 0 },
     "lastWorkoutAt": "2026-08-26T16:52:17.169082Z" | null,
@@ -75,17 +98,25 @@ A trainer's roster = distinct clients across their training plans (User has no d
   }
   ```
   `activePlan` is the plan whose `[startDate, endDate]` contains today (most recently started one wins if more than one overlaps); everything else is zeroed/null when the student has no active plan. `thisWeek` counts completed vs. total workouts in the active plan for the current ISO week. `adherence4Weeks` is an **approximation**: vertice-api's `ListWorkoutLogs` RPC is scoped to one plan + one week (no general history query), so this re-fetches logs for the last 4 Mondays (clamped to weeks on/after the plan's start date), treats the plan's workout list as the recurring weekly schedule, and computes `completed / (workoutsPerWeek × weeksElapsed) × 100`, capped at 100. `lastWorkoutAt` is the latest `completedAt` found in that same 4-week lookback window (not a true all-time last-workout value — there's no cheaper way to get that from the current API surface).
-- `POST /` `{name, email, cpf?}` → `201` `User & {setup}` — creates a CLIENT user **without a password** and issues a first-access token. A `password` in the body is ignored (never sent upstream): the client chooses their own.
+- `POST /` `{name, email, cpf?}` → `201` `ClientDetail & {setup}` (CPF masked) — creates a CLIENT user **without a password** and issues a first-access token. A `password` in the body is ignored (never sent upstream): the client chooses their own.
   ```json
   {
-    "id": 42, "name": "Ana", "email": "ana@example.com", "cpf": "", "cref": "", "role": "CLIENT",
+    "id": 42, "name": "Ana", "email": "ana@example.com", "cpf": "***.***.***-25", "role": "CLIENT",
     "setup": { "token": "<43-char base64url>", "expiresAt": "2026-10-16T18:00:00Z" } | null
   }
   ```
-  The web builds the link the trainer shares from the token: `/definir-senha?token=<token>` (the page posts it to `POST /auth/password/setup`). The token is shown once (vertice-api only stores its hash) and expires after 72h. There is no email delivery yet. `setup` is `null` only when the client was created but issuing the token failed; re-issue it with the route below rather than re-creating the client (that would be a 409 on the email).
+  The web builds the link the trainer shares from the token: `/definir-senha?token=<token>` (the page posts it to `POST /auth/password/setup`). The token is shown once (vertice-api only stores its hash) and expires after 72h. There is no email delivery yet. `setup` is `null` only when the client was created but issuing the token failed; re-issue it with the route below rather than re-creating the client (that would be a 409 `CONFLICT`).
 - `POST /:id/setup-token` (**TRAINER only**, one of your clients) → `201` `{token, expiresAt}`. Re-issues the first-access link; the previous one stops working. Only while the client has no password yet: once they set one it is **`409 PRECONDITION_FAILED`**, since a trainer-issued link would let the trainer reset the client's password. (Clients created before setup tokens existed have a random password, so they get their link from ops: `npm run ops:issue-setup-tokens`, see the README.) Errors: 403 `Requires role: TRAINER` (ADMIN, CLIENT); 403 `This client is not one of your clients`.
-- `PATCH /:id` `{name, email, cpf?}`
+- `PATCH /:id` `{name, email, cpf?}` → `ClientDetail` (CPF masked). A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`.
 - `DELETE /:id`
+
+### What vertice-web-react must change (P1-03, web step)
+Nothing above breaks the current web: the roster keeps `email`, and the detail page renders whatever `cpf` string it gets (now the mask). The web PR must:
+1. **Roster** (`src/app/(app)/alunos/AlunosContent.tsx`): stop showing `student.email` under the name and stop searching by it (search by name only; placeholder "Buscar por nome..."). Type `GET /clients` as `ClientSummary` (`{id, name, email?, activePlanCount, currentPlan, lastWorkoutAt, weekActivity}`, `src/lib/api/types.ts`), not `StudentOverview extends User`, so nothing reads `cpf`/`cref`/`role` from it. Once that is live, the BFF drops `email` from `GET /clients` and vertice-api moves `ListClientsForTrainer` to its summary view.
+2. **Student detail** (`src/app/(app)/alunos/[studentId]/StudentDetailContent.tsx`): `overview.student.cpf` is now masked (`***.***.***-25`). Show it as is, with a "mostrar" toggle that fetches `GET /clients/:id?reveal=cpf` (`fetchStudent(id, { revealCpf: true })` in `src/lib/api/students.ts`) and shows that response's `cpf`. Don't cache the revealed CPF beyond the page (no long-lived React Query entry); hiding it again drops it.
+3. **`/auth/me`** (`src/lib/api/auth.ts`, `User` in `src/lib/api/types.ts`): no `cpf` any more. Use a `Me` type `{id, name, email, cref, role}`; nothing in the web reads `cpf` from it today.
+4. **Error copy**: key on `code`, never on `message` (already true for 409 `CONFLICT` in `RegisterForm`/`NewStudentDialog`). The `error.message` fallbacks (`PlanDialog`, `NewStudentDialog`, `LoginForm`, `RegisterForm`) now show fixed English text for non-validation errors; replace them with Portuguese copy per code.
+5. **Caching**: set `Cache-Control: no-store` and `Vary: Cookie` on the web's own `/api/bff` and `/api/auth` route responses (plan step 3), whatever `relayBffResponse` copies from the BFF. The proxy already forwards the query string, so `?reveal=cpf` reaches the BFF.
 
 ## Exercises (catalog) — `/exercises`, `/muscle-groups`
 The catalog is the shared **starter set** (`isStarter: true`, read-only for everyone) plus each trainer's own exercises. **Trainer-created exercises are private; the starter set is shared.** A trainer sees the starter set and their own exercises only; an ADMIN sees the starter set only. Visibility, ordering and search are decided by vertice-api from the caller's identity — the BFF has no exercise-ownership check of its own and returns lists in upstream order.
@@ -104,16 +135,16 @@ There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is g
   - `q` — optional name search (case-insensitive substring), trimmed, ≤100 chars. Empty = no filter.
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or ADMIN` (CLIENT); 400 `VALIDATION_ERROR` for a non-numeric/0/negative/repeated `muscleGroupId` or `q` >100 chars (field `details`); 404 `NOT_FOUND` for an unknown `muscleGroupId`.
 - `GET /exercises/:id` (any role, upstream decides) → `Exercise`. TRAINER: starter or own; ADMIN: starter only; CLIENT: only an exercise used by a workout in one of their own plans.
-  - Errors: 403 `FORBIDDEN` `You do not have access to exercise <id>`; 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
+  - Errors: 403 `FORBIDDEN` (not visible to you; vertice-api's refusal, fixed message); 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
 - `GET /exercises/:id/progress?clientId=` (TRAINER, CLIENT) → `{weekStartDate, weight}[]` (weight-over-time for a graph). CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or CLIENT` (ADMIN); 400 `VALIDATION_ERROR` `clientId is required` / `Invalid clientId: <value>` (TRAINER); 403 `FORBIDDEN` `This client is not one of your clients` (TRAINER).
 - `POST /exercises` `{name, description?, videoUrl?, muscleGroupIds}` (TRAINER only) → `201` `Exercise` (`isStarter: false`, private to the caller).
   - `name` 1..255 chars (must not be blank); `description` ≤255, default `""`; `videoUrl` `""` or an http(s) URL ≤500, default `""`; `muscleGroupIds` at least one positive integer id — duplicates are dropped. A trainer-created exercise has no primary group, so its `muscleGroups` come back in id order whatever order was sent. Duplicate names are allowed.
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER` (CLIENT, ADMIN); 400 `VALIDATION_ERROR` with field `details` for Zod failures (`name` missing/empty/too long, `description`/`videoUrl` too long, `videoUrl` not a URL, `muscleGroupIds` missing/empty/non-positive — a body with only the old `muscleGroup` fails here); 400 `VALIDATION_ERROR` with a flat upstream message for `name: must not be blank`, `videoUrl: must be a valid http(s) URL`, `muscleGroupIds: unknown muscle group <id>`.
 - `PATCH /exercises/:id` (TRAINER only), same body as `POST` — **full replacement** of name, description, video URL and the whole group list → `200` `Exercise`.
-  - Errors: as `POST`, plus 403 `FORBIDDEN` `Exercise <id> belongs to the shared starter set and cannot be changed` (starter row); 403 `You do not have access to exercise <id>` (another trainer's); 404 `NOT_FOUND`.
+  - Errors: as `POST`, plus 403 `FORBIDDEN` for a starter row or another trainer's exercise (vertice-api's refusal, fixed message: the two are not told apart); 404 `NOT_FOUND`.
 - `DELETE /exercises/:id` (TRAINER only) → `204`, no body.
-  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER`; 403 `Exercise <id> belongs to the shared starter set and cannot be deleted` (starter row); 403 `You do not have access to exercise <id>` (another trainer's); 404 `NOT_FOUND`; **409 `PRECONDITION_FAILED` `Exercise <id> is used by a workout and cannot be deleted`** while any workout references it — remove it from those workouts first.
+  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER`; 403 `FORBIDDEN` for a starter row or another trainer's exercise (fixed message); 404 `NOT_FOUND`; **409 `PRECONDITION_FAILED`** while any workout references it — remove it from those workouts first.
 
 403 means "never allowed for you" (fix nothing, hide the action); 409 means "not right now" (the state can change).
 

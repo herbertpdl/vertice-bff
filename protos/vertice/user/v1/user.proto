@@ -8,28 +8,47 @@ option java_package = "com.vertice.api.generated.grpc.user.v1";
 option java_multiple_files = true;
 
 service UserService {
+  // Every RPC authorizes the caller from its token (P1-01); a refused caller gets PERMISSION_DENIED.
+  // The full subject -> RPC matrix is in vertice-api's CLAUDE.md.
+
+  // Every RPC returns UserResponse in one of three views (P1-03): detail (every field), contact
+  // (id, name, role, email) or summary (id, name, role). Fields outside the view are empty.
+
+  // ADMIN or service:ops (anonymous only under the local profile). Contact view: the ops script
+  // hands each setup link to its client by email, and the local dev login matches users by email.
+  // Paginated, ordered by id: see ListUsersRequest.
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  // Detail for the user themself, ADMIN, or the target's active trainer. A trainer with any
+  // training plan for the target (e.g. a former client) gets the summary view.
   rpc GetUser(GetUserRequest) returns (UserResponse);
+  // service:bff only (registration), and never with role ADMIN. Contact view.
   rpc CreateUser(UserCreateRequest) returns (UserResponse);
+  // ADMIN; or the user themself / the target's active trainer, without changing the role. Detail view.
   rpc UpdateUser(UpdateUserRequest) returns (UserResponse);
+  // The user themself or ADMIN.
   rpc DeleteUser(DeleteUserRequest) returns (google.protobuf.Empty);
+  // The user themself or ADMIN.
   rpc SetUserPassword(SetUserPasswordRequest) returns (google.protobuf.Empty);
 
-  // The RPCs below are service-level, meant for vertice-bff only (role restriction comes with P1-01).
+  // The RPCs below back login and first-access password links.
 
   // Checks an email/password pair and returns the user it belongs to. The email is matched
   // case-insensitively. A wrong password, an unknown email and a user with no password set all fail
   // the same way: UNAUTHENTICATED "Invalid email or password".
+  // service:bff, or a user checking their own email (re-check before a password change). Contact view.
   rpc VerifyCredentials(VerifyCredentialsRequest) returns (UserResponse);
   // Issues a single-use token that lets the user set their own password (first access). Issuing a
   // new token invalidates the user's previous unused ones. NOT_FOUND when the user doesn't exist.
+  // service:ops, ADMIN, or a TRAINER for their active client who has no password yet.
   rpc CreatePasswordSetupToken(CreatePasswordSetupTokenRequest) returns (CreatePasswordSetupTokenResponse);
   // Sets the password of the token's user and consumes the token. An unknown, expired or already
   // used token fails the same way: UNAUTHENTICATED "Invalid or expired password setup token".
+  // service:bff only.
   rpc SetPasswordWithToken(SetPasswordWithTokenRequest) returns (google.protobuf.Empty);
   // Users who have no password yet (e.g. clients created by a trainer), optionally filtered by role,
-  // so a setup token can be issued to each of them.
-  rpc ListUsersWithoutPassword(ListUsersRequest) returns (ListUsersResponse);
+  // so a setup token can be issued to each of them. ADMIN and service:ops see everyone; a TRAINER
+  // only their own active clients. Summary view, not paginated.
+  rpc ListUsersWithoutPassword(ListUsersWithoutPasswordRequest) returns (ListUsersResponse);
 }
 
 enum Role {
@@ -39,6 +58,9 @@ enum Role {
   CLIENT = 3;
 }
 
+// One shape for every view, so older clients keep decoding it. id, name and role are always set.
+// email is set in the contact and detail views; cpf and cref only in the detail view (cref is
+// also empty for anyone but a TRAINER who set one).
 message UserResponse {
   int64 id = 1;
   string name = 2;
@@ -68,11 +90,26 @@ message UserCreateRequest {
 }
 
 message ListUsersRequest {
+  // ROLE_UNSPECIFIED lists every role.
+  Role role = 1;
+  // Users per page. 0 means the default (100); anything above the maximum (100) is lowered to it;
+  // a negative value is INVALID_ARGUMENT.
+  int32 page_size = 2;
+  // next_page_token from the previous page; empty for the first page. Opaque: pass it back as is.
+  // A malformed token is INVALID_ARGUMENT.
+  string page_token = 3;
+}
+
+message ListUsersWithoutPasswordRequest {
+  // ROLE_UNSPECIFIED lists every role.
   Role role = 1;
 }
 
 message ListUsersResponse {
   repeated UserResponse users = 1;
+  // Pass as page_token to get the next page. Empty on the last page. Always empty for
+  // ListUsersWithoutPassword, which isn't paginated.
+  string next_page_token = 2;
 }
 
 message GetUserRequest {
