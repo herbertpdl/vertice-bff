@@ -1,7 +1,17 @@
-import { status } from '@grpc/grpc-js'
-import { mapGrpcError } from '../grpc/call.js'
-import { signToken, verifyToken, type Role } from '../lib/jwt.js'
-import { requestContext } from '../lib/request-context.js'
+import { Metadata, status } from '@grpc/grpc-js'
+import jwt from 'jsonwebtoken'
+import { env } from '../config/env.js'
+import { mapGrpcError, withCallerIdentity } from '../grpc/call.js'
+import {
+  SERVICE_ROLE,
+  SERVICE_SUBJECT,
+  signToken,
+  TOKEN_AUDIENCE,
+  TOKEN_ISSUER,
+  verifyToken,
+  type AuthUser,
+  type Role,
+} from '../lib/jwt.js'
 
 /**
  * A small in-memory vertice-api for route tests. Use it with the grpcCall mock:
@@ -13,6 +23,9 @@ import { requestContext } from '../lib/request-context.js'
  * trainer B owns client B. Every id below belongs to exactly one of them, so a test
  * can put "the other tenant's id" in any path, query or body slot. Replies use the
  * proto-loader wire shape (int64 as string) so the real services map them.
+ * Every call must carry a bearer token, as `grpcCall` attaches it (`withCallerIdentity`): a
+ * valid user token, or the BFF's service token on an RPC in `SERVICE_TOKEN_RPCS`. Anything else
+ * fails loudly, and each call's caller is recorded in `upstreamCallers`.
  * `GetExercise` reads the caller from the forwarded token, like vertice-api does.
  * Failures are gRPC statuses sent through the real `mapGrpcError`, so routes see
  * exactly the errors a real upstream produces. Test files must therefore keep the
@@ -112,7 +125,7 @@ export function userOf(actor: Actor) {
 
 export function bearer(actor: Actor) {
   const u = userOf(actor)
-  return { authorization: `Bearer ${signToken({ id: u.id, name: u.name, email: emailOf(u.id), role: u.role })}` }
+  return { authorization: `Bearer ${signToken({ id: u.id, role: u.role })}` }
 }
 
 export const emailOf = (id: number) => `user${id}@vertice.test`
@@ -190,10 +203,53 @@ const exerciseRes = (e: (typeof exercises)[number] = exercises[0]!) => ({
   isStarter: e.ownerId === null,
 })
 
-/** The verified caller, read from the token `grpcCall` would forward upstream. */
-function caller() {
-  const token = requestContext.getStore()?.bearerToken
-  return token ? verifyToken(token) : undefined
+/**
+ * RPCs vertice-api has to accept from the BFF's service token, i.e. the ones the BFF makes with no
+ * user behind them: login (`VerifyCredentials`; `ListUsers` under `VERIFY_PASSWORDS=false`),
+ * register (`CreateUser`), password setup (`SetPasswordWithToken`) and the setup-token ops script
+ * (`ListUsers`, `CreatePasswordSetupToken`).
+ */
+export const SERVICE_TOKEN_RPCS: ReadonlySet<string> = new Set([
+  'VerifyCredentials',
+  'CreateUser',
+  'SetPasswordWithToken',
+  'ListUsers',
+  'CreatePasswordSetupToken',
+])
+
+export type UpstreamCaller = AuthUser | 'service'
+
+/** The caller of every call the fake served, in order. Cleared with `resetUpstreamCallers()`. */
+export const upstreamCallers: { method: string; caller: UpstreamCaller }[] = []
+export const resetUpstreamCallers = () => {
+  upstreamCallers.length = 0
+}
+
+/** The verified caller of the current call, read from the token `grpcCall` forwards upstream. */
+let currentCaller: UpstreamCaller | undefined
+
+function caller(): AuthUser | undefined {
+  return currentCaller === 'service' ? undefined : currentCaller
+}
+
+/** What vertice-api will check: a scoped token, and the service token only where it is allowed. */
+function authenticateCall(method: string, metadata: Metadata): UpstreamCaller {
+  const [header] = withCallerIdentity(metadata).get('authorization')
+  const token = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice('Bearer '.length) : ''
+  if (!token) throw new Error(`fakeUpstream: ${method} was called without a bearer token`)
+  const claims = jwt.verify(token, env.JWT_SECRET, {
+    algorithms: ['HS256'],
+    issuer: TOKEN_ISSUER,
+    audience: TOKEN_AUDIENCE,
+  }) as jwt.JwtPayload
+  if (claims.sub !== SERVICE_SUBJECT) return verifyToken(token)
+  if (claims.role !== SERVICE_ROLE || typeof claims.exp !== 'number') {
+    throw new Error(`fakeUpstream: ${method} got a malformed service token`)
+  }
+  if (!SERVICE_TOKEN_RPCS.has(method)) {
+    throw new Error(`fakeUpstream: ${method} was called with the service token instead of a user's`)
+  }
+  return 'service'
 }
 
 /** Mirrors vertice-api's `ExerciseService.getExercise` visibility rule. */
@@ -355,9 +411,24 @@ const handlers: Record<string, (req: Req) => unknown> = {
 export const isWriteRpc = (method: string) =>
   /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart)/.test(method)
 
-/** Drop-in implementation for the mocked `grpcCall`; unknown methods fail loudly. */
-export async function fakeGrpcCall(_client: unknown, method: string, request: unknown): Promise<never> {
+/**
+ * Drop-in implementation for the mocked `grpcCall`; unknown methods, and calls without a valid
+ * caller token, fail loudly.
+ */
+export async function fakeGrpcCall(
+  _client: unknown,
+  method: string,
+  request: unknown,
+  metadata: Metadata = new Metadata(),
+): Promise<never> {
   const handler = handlers[method]
   if (!handler) throw new Error(`fakeUpstream: no handler for ${method}`)
-  return handler((request ?? {}) as Req) as never
+  const callerOfCall = authenticateCall(method, metadata)
+  upstreamCallers.push({ method, caller: callerOfCall })
+  currentCaller = callerOfCall
+  try {
+    return handler((request ?? {}) as Req) as never
+  } finally {
+    currentCaller = undefined
+  }
 }

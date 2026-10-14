@@ -33,7 +33,7 @@ const patchBody = {
 describe('training plan routes', () => {
   let app: FastifyInstance
   const bearer = (role: Role, id = TRAINER_ID) => ({
-    authorization: `Bearer ${signToken({ id, name: 'U', email: 'u@vertice.test', role })}`,
+    authorization: `Bearer ${signToken({ id, role })}`,
   })
 
   beforeAll(async () => {

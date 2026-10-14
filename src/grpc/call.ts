@@ -1,11 +1,12 @@
 import * as grpc from '@grpc/grpc-js'
 import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
+import { serviceToken } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
 
 /**
  * Promisifies a grpc-js callback-style unary call and maps gRPC status codes to HttpErrors.
- * The caller's verified bearer token, when the call runs inside a request, is attached as
- * `authorization` metadata (see `withCallerIdentity`).
+ * Every call carries `authorization` metadata: the caller's verified bearer token, or the BFF's
+ * service token when no user is behind the call (see `withCallerIdentity`).
  */
 export function grpcCall<TRequest, TResponse>(
   client: grpc.Client,
@@ -30,16 +31,17 @@ export function grpcCall<TRequest, TResponse>(
 }
 
 /**
- * Attaches `authorization: Bearer <token>` from the request context, so vertice-api can tell
- * who is calling. Outside a request, or before `app.authenticate` has verified a token
- * (`/health`, `/auth/login`, `/auth/register`), nothing is attached and the call is anonymous.
- * A caller-supplied `authorization` is never overwritten. Mutates and returns `metadata`.
+ * Attaches `authorization: Bearer <token>`, so vertice-api can tell who is calling: the user token
+ * `app.authenticate` verified and put in the request context, or, when there is none, the BFF's
+ * short-lived service token (`serviceToken`). That covers routes that don't authenticate
+ * (`/auth/login`, `/auth/register`, `/auth/password/setup`) and calls outside a request (ops
+ * scripts). An unverified `Authorization` header is never relayed, and a caller-supplied
+ * `authorization` is never overwritten. Mutates and returns `metadata`.
  */
 export function withCallerIdentity(metadata: grpc.Metadata): grpc.Metadata {
-  const token = requestContext.getStore()?.bearerToken
-  if (token && metadata.get('authorization').length === 0) {
-    metadata.set('authorization', `Bearer ${token}`)
-  }
+  if (metadata.get('authorization').length > 0) return metadata
+  const token = requestContext.getStore()?.bearerToken ?? serviceToken()
+  metadata.set('authorization', `Bearer ${token}`)
   return metadata
 }
 

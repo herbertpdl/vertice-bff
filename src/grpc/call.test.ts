@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as grpc from '@grpc/grpc-js'
 import { grpcCall, mapGrpcError } from './call.js'
 import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
+import { serviceToken } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
 
 /** A stand-in grpc-js client that records the metadata of the last call. */
@@ -25,10 +26,16 @@ describe('grpcCall', () => {
     expect(stub.seen!.get('authorization')).toEqual(['Bearer abc'])
   })
 
-  it('grpcCall sends no authorization metadata outside a request context', async () => {
+  it('grpcCall sends the service token outside a request context (ops scripts)', async () => {
     const stub = stubClient()
     await grpcCall(stub as unknown as grpc.Client, 'Ping', {})
-    expect(stub.seen!.get('authorization')).toEqual([])
+    expect(stub.seen!.get('authorization')).toEqual([`Bearer ${serviceToken()}`])
+  })
+
+  it('grpcCall sends the service token in a request no user token was verified for (login, register)', async () => {
+    const stub = stubClient()
+    await requestContext.run({}, () => grpcCall(stub as unknown as grpc.Client, 'Ping', {}))
+    expect(stub.seen!.get('authorization')).toEqual([`Bearer ${serviceToken()}`])
   })
 
   it('grpcCall keeps caller-supplied metadata and adds the bearer to it', async () => {

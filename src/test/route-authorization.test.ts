@@ -2,8 +2,21 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { FastifyInstance, RouteOptions } from 'fastify'
 import { buildApp } from '../app.js'
 import { grpcCall } from '../grpc/call.js'
-import type { Role } from '../lib/jwt.js'
-import { bearer, emailOf, FAKE_PASSWORD, fakeGrpcCall, ids, isWriteRpc, setupTokenFor, type Actor } from './fakeUpstream.js'
+import { Metadata } from '@grpc/grpc-js'
+import { serviceToken, type Role } from '../lib/jwt.js'
+import {
+  bearer,
+  emailOf,
+  FAKE_PASSWORD,
+  fakeGrpcCall,
+  ids,
+  isWriteRpc,
+  resetUpstreamCallers,
+  setupTokenFor,
+  upstreamCallers,
+  userOf,
+  type Actor,
+} from './fakeUpstream.js'
 
 // Keep the real mapGrpcError: the fake upstream raises its errors through it.
 vi.mock('../grpc/call.js', async (importOriginal) => ({
@@ -17,7 +30,9 @@ const grpcCallMock = vi.mocked(grpcCall)
  * route has none). For each entry the suite asserts:
  * - 401 without a token (and no upstream call), unless `public`;
  * - 403 for every role outside `roles` (and no upstream call), when `roles` is set;
- * - `ok`: the owning caller gets a 2xx, so the denials below are not a broken fake;
+ * - `ok`: the owning caller gets a 2xx, so the denials below are not a broken fake, and
+ *   every upstream call carries that caller's token (the BFF's service token on a public
+ *   route; the fake upstream refuses calls with neither);
  * - `denied`: another tenant's id in path, query or body is refused (403 unless
  *   `status` says otherwise) and no write RPC reaches upstream. Body ids that only
  *   have to fit the request (a set of the log's workout, an exercise visible to the
@@ -681,6 +696,7 @@ describe('route authorization', () => {
   beforeEach(() => {
     grpcCallMock.mockReset()
     grpcCallMock.mockImplementation(fakeGrpcCall)
+    resetUpstreamCallers()
   })
 
   const send = (method: string, call: Partial<Call> & { url: string }) =>
@@ -700,13 +716,29 @@ describe('route authorization', () => {
     expect(new Set(tabled).size).toBe(tabled.length)
   })
 
+  it('the fake upstream refuses a call without a valid token, and the service token on a user RPC', async () => {
+    const withAuthorization = (value: string) => {
+      const metadata = new Metadata()
+      metadata.set('authorization', value)
+      return metadata
+    }
+    await expect(fakeGrpcCall(null, 'GetUser', { id: ids.clientA }, withAuthorization('Bearer forged'))).rejects.toThrow()
+    await expect(
+      fakeGrpcCall(null, 'GetUser', { id: ids.clientA }, withAuthorization(`Bearer ${serviceToken()}`)),
+    ).rejects.toThrow(/service token instead of a user's/)
+    await expect(
+      fakeGrpcCall(null, 'VerifyCredentials', { email: emailOf(ids.clientA), password: FAKE_PASSWORD }),
+    ).resolves.toBeDefined()
+  })
+
   describe.each(routes)('$route', (rc) => {
     const method = rc.route.split(' ')[0]!
 
     if (rc.public) {
-      it('is reachable without a token', async () => {
+      it('is reachable without a token, and calls upstream with the service token', async () => {
         const res = await send(method, { ...rc.ok, as: undefined })
         expect(res.statusCode, res.body).toBeLessThan(300)
+        expect(upstreamCallers.map((c) => c.caller).filter((c) => c !== 'service')).toEqual([])
       })
     } else {
       it('is 401 without a token and never calls upstream', async () => {
@@ -716,10 +748,15 @@ describe('route authorization', () => {
         expect(grpcCallMock).not.toHaveBeenCalled()
       })
 
-      it('lets the owning caller through', async () => {
+      it("lets the owning caller through, and calls upstream with the caller's token", async () => {
         const res = await send(method, rc.ok)
         expect(res.statusCode, res.body).toBeGreaterThanOrEqual(200)
         expect(res.statusCode, res.body).toBeLessThan(300)
+        const { id, role } = userOf((rc.ok as Call).as)
+        expect(upstreamCallers.length).toBe(grpcCallMock.mock.calls.length)
+        for (const { method: rpc, caller } of upstreamCallers) {
+          expect(caller, rpc).toEqual({ id, role })
+        }
       })
     }
 

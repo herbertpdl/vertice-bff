@@ -1,10 +1,20 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { status } from '@grpc/grpc-js'
+import jwt from 'jsonwebtoken'
 import { buildApp } from '../../app.js'
 import { env } from '../../config/env.js'
 import { grpcCall, mapGrpcError } from '../../grpc/call.js'
-import { bearer, emailOf, FAKE_PASSWORD, fakeGrpcCall, ids, setupTokenFor } from '../../test/fakeUpstream.js'
+import {
+  bearer,
+  emailOf,
+  FAKE_PASSWORD,
+  fakeGrpcCall,
+  ids,
+  resetUpstreamCallers,
+  setupTokenFor,
+  upstreamCallers,
+} from '../../test/fakeUpstream.js'
 
 // Keep the real mapGrpcError: the fake upstream raises its errors through it.
 vi.mock('../../grpc/call.js', async (importOriginal) => ({
@@ -42,6 +52,24 @@ describe('auth routes', () => {
       expect(res.statusCode, res.body).toBe(200)
       expect(res.json()).toMatchObject({ token: expect.any(String), user: { id: ids.clientA, role: 'CLIENT' } })
       expect(upstreamRequest('VerifyCredentials')).toEqual({ email: emailOf(ids.clientA), password: FAKE_PASSWORD })
+    })
+
+    it('returns name and email in the body but keeps them out of the token, and logs in as the BFF', async () => {
+      resetUpstreamCallers()
+      const res = await login(emailOf(ids.clientA), FAKE_PASSWORD)
+      const { token, user } = res.json()
+      expect(user).toEqual({ id: ids.clientA, name: 'Client A', email: emailOf(ids.clientA), role: 'CLIENT' })
+      expect(jwt.decode(token)).toEqual({
+        sub: String(ids.clientA),
+        id: ids.clientA,
+        role: 'CLIENT',
+        iss: 'vertice-bff',
+        aud: 'vertice-api',
+        iat: expect.any(Number),
+        exp: expect.any(Number),
+      })
+      // No user is behind the login call itself: VerifyCredentials goes out with the service token.
+      expect(upstreamCallers).toEqual([{ method: 'VerifyCredentials', caller: 'service' }])
     })
 
     it('answers a wrong password, an unknown email and a user without a password with the same 401 body', async () => {

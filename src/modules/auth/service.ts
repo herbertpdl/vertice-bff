@@ -1,12 +1,27 @@
 import * as userService from '../users/service.js'
 import { env } from '../../config/env.js'
-import { signToken, type AuthUser } from '../../lib/jwt.js'
+import { signToken, type Role } from '../../lib/jwt.js'
 import { HttpError, UnauthorizedError } from '../../lib/errors.js'
 import { PASSWORD_MAX_BYTES } from './schemas.js'
 
-function session(user: userService.User): { token: string; user: AuthUser } {
-  const authUser: AuthUser = { id: user.id, name: user.name, email: user.email, role: user.role }
-  return { token: signToken(authUser), user: authUser }
+/** The `user` of a login/register response. Name and email are in the body, never in the token. */
+export interface SessionUser {
+  id: number
+  name: string
+  email: string
+  role: Role
+}
+
+export interface Session {
+  token: string
+  user: SessionUser
+}
+
+function session(user: userService.User): Session {
+  return {
+    token: signToken({ id: user.id, role: user.role }),
+    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+  }
 }
 
 /**
@@ -17,7 +32,7 @@ function session(user: userService.User): { token: string; user: AuthUser } {
  * email-only login for the rollout window: it finds the user by scanning `ListUsers` and
  * accepts any non-empty password.
  */
-export async function login(email: string, password: string): Promise<{ token: string; user: AuthUser }> {
+export async function login(email: string, password: string): Promise<Session> {
   if (!env.VERIFY_PASSWORDS) {
     const user = await userService.findUserByEmail(email)
     if (!user) throw new UnauthorizedError(userService.INVALID_CREDENTIALS_MESSAGE)
@@ -38,7 +53,7 @@ export async function register(input: {
   role: 'TRAINER'
   cpf?: string
   cref?: string
-}): Promise<{ token: string; user: AuthUser }> {
+}): Promise<Session> {
   // No pre-check by email: vertice-api's unique email index refuses a duplicate (ALREADY_EXISTS → 409).
   return session(await userService.createUser(input))
 }
