@@ -22,6 +22,8 @@ Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web-react`
 - `npm test` — Vitest (`vitest run`); unit tests live next to the code as `*.test.ts` (e.g. `src/modules/workouts/schemas.test.ts`, `src/grpc/call.test.ts`) and don't spin up gRPC
 - `docker build .` / the provided `Dockerfile` — containerized dev, runs `npm run dev:docker`
 
+Node 22 (`.nvmrc`, `engines.node` `>=22 <23`, `node:22-alpine` in the Dockerfile). CI (`.github/workflows/ci.yml`, job `build-and-test`) runs `npm ci`, typecheck, lint, test, build and `npm audit --omit=dev --audit-level=high` on every PR and push to `main`; tests must stay runnable without vertice-api, Postgres or a `.env`.
+
 Single-file / single-test runs use standard Vitest filtering: `npx vitest run src/grpc/call.test.ts` or `npx vitest run -t "name"`.
 
 ## Architecture

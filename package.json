@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Backend for Frontend for vertice-web, bridging HTTP/JSON to the vertice-api gRPC service",
   "engines": {
-    "node": ">=22"
+    "node": ">=22 <23"
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
