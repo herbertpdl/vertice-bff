@@ -1,11 +1,11 @@
-import { randomUUID } from 'node:crypto'
+import type { FastifyBaseLogger } from 'fastify'
 import * as userService from '../users/service.js'
 import * as planService from '../training-plans/service.js'
 import * as workoutService from '../workouts/service.js'
 import * as sessionService from '../workout-sessions/service.js'
 import { trainerClientClient } from '../../grpc/clients.js'
 import { grpcCall } from '../../grpc/call.js'
-import { ForbiddenError } from '../../lib/errors.js'
+import { ForbiddenError, PreconditionFailedError } from '../../lib/errors.js'
 import { currentWeekStartDate } from '../../lib/dates.js'
 
 export interface ClientSummary extends userService.User {
@@ -16,20 +16,35 @@ export interface ClientCreateInput {
   name: string
   email: string
   cpf?: string
-  password?: string
+}
+
+export interface CreatedClient extends userService.User {
+  /**
+   * First-access token for the client to choose a password; the web builds the link from it.
+   * `null` when the client was created but the token couldn't be issued: the trainer re-issues
+   * it with `POST /clients/:id/setup-token`.
+   */
+  setup: userService.PasswordSetupToken | null
 }
 
 /**
  * Creates a CLIENT user and links them to the trainer's roster via
  * vertice-api's TrainerClientService.CreateClientForTrainer RPC — this is
  * the source of truth for the trainer/client relationship (User has no
- * direct trainer/client link of its own). The design's "Novo aluno" flow is
- * invite-based (name/email/cpf only, no password field) — there is no
- * email-invite system in this stack yet, so when no password is supplied we
- * generate one server-side. The client never sees it; a real invite/reset
- * flow would replace this later.
+ * direct trainer/client link of its own). The client is created without a
+ * password (the design's "Novo aluno" flow has no password field), then a
+ * password setup token is issued for the trainer to share. There is no email
+ * delivery in this stack yet, so the token travels in the response.
+ *
+ * The token is issued after the create: if that second call fails the client
+ * already exists, so the create still succeeds, with `setup: null`, rather
+ * than inviting a retry that would hit the duplicate-email 409.
  */
-export async function createClient(trainerId: number, input: ClientCreateInput): Promise<userService.User> {
+export async function createClient(
+  trainerId: number,
+  input: ClientCreateInput,
+  log: FastifyBaseLogger,
+): Promise<CreatedClient> {
   const res = await grpcCall<
     { trainerId: number; name: string; email: string; password: string; cpf: string },
     userService.UserResponse
@@ -37,10 +52,33 @@ export async function createClient(trainerId: number, input: ClientCreateInput):
     trainerId,
     name: input.name,
     email: input.email,
-    password: input.password ?? randomUUID(),
+    password: '', // none: the client sets it with the setup token
     cpf: input.cpf ?? '',
   })
-  return userService.toUser(res)
+  const client = userService.toUser(res)
+
+  let setup: userService.PasswordSetupToken | null = null
+  try {
+    setup = await userService.createPasswordSetupToken(client.id)
+  } catch (err) {
+    log.warn({ err, clientId: client.id }, 'Client created, but issuing the password setup token failed')
+  }
+  return { ...client, setup }
+}
+
+/**
+ * Re-issues a client's first-access token (the previous one stops working). Only while the
+ * client has no password: once they chose one, a trainer-issued link would let the trainer
+ * reset it and take over the account. (Password reset is P1-06.) Legacy clients, created with
+ * a random password before setup tokens, don't count as "without password"; ops issues theirs
+ * (`npm run ops:issue-setup-tokens`).
+ */
+export async function reissueSetupToken(clientId: number): Promise<userService.PasswordSetupToken> {
+  const pending = await userService.listUsersWithoutPassword('CLIENT')
+  if (!pending.some((user) => user.id === clientId)) {
+    throw new PreconditionFailedError('This client has already set a password')
+  }
+  return userService.createPasswordSetupToken(clientId)
 }
 
 export interface CurrentPlanInfo {

@@ -17,6 +17,8 @@ message CreateClientForTrainerRequest {
   int64 trainer_id = 1;
   string name = 2;
   string email = 3;
+  // Optional. Empty creates the client without a password; they set one with a password setup
+  // token (UserService.CreatePasswordSetupToken).
   string password = 4;
   string cpf = 5;
 }

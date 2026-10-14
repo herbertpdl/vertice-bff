@@ -3,7 +3,7 @@ import type { FastifyInstance, RouteOptions } from 'fastify'
 import { buildApp } from '../app.js'
 import { grpcCall } from '../grpc/call.js'
 import type { Role } from '../lib/jwt.js'
-import { bearer, fakeGrpcCall, ids, isWriteRpc, type Actor } from './fakeUpstream.js'
+import { bearer, emailOf, FAKE_PASSWORD, fakeGrpcCall, ids, isWriteRpc, setupTokenFor, type Actor } from './fakeUpstream.js'
 
 // Keep the real mapGrpcError: the fake upstream raises its errors through it.
 vi.mock('../grpc/call.js', async (importOriginal) => ({
@@ -71,17 +71,37 @@ const routes: RouteCase[] = [
   {
     route: 'POST /api/auth/login',
     public: true,
-    ok: { url: '/api/auth/login', body: { email: `user${ids.clientA}@vertice.test`, password: 'x' } },
+    ok: { url: '/api/auth/login', body: { email: emailOf(ids.clientA), password: FAKE_PASSWORD } },
   },
   {
     route: 'POST /api/auth/register',
     public: true,
     ok: {
       url: '/api/auth/register',
-      body: { name: 'Novo', email: 'novo@vertice.test', password: 'secret1', role: 'CLIENT' },
+      body: { name: 'Novo', email: 'novo@vertice.test', password: 'secret-123', role: 'TRAINER' },
     },
   },
   { route: 'GET /api/auth/me', ok: { as: 'clientA', url: '/api/auth/me' } },
+  {
+    // Self only: the user id comes from the token, never from the request.
+    route: 'POST /api/auth/password',
+    ok: { as: 'clientA', url: '/api/auth/password', body: { currentPassword: FAKE_PASSWORD, newPassword: 'nova-senha-1' } },
+    scoped: [
+      {
+        as: 'clientA',
+        url: '/api/auth/password',
+        body: { currentPassword: FAKE_PASSWORD, newPassword: 'nova-senha-1', id: ids.clientB, userId: ids.clientB },
+        why: 'body: a userId is ignored',
+        rpc: 'SetUserPassword',
+        sends: { id: ids.clientA },
+      },
+    ],
+  },
+  {
+    route: 'POST /api/auth/password/setup',
+    public: true,
+    ok: { url: '/api/auth/password/setup', body: { token: setupTokenFor(ids.clientA2), newPassword: 'nova-senha-1' } },
+  },
 
   // clients
   { route: 'GET /api/clients', roles: ['TRAINER', 'ADMIN'], ok: { as: 'trainerA', url: '/api/clients' } },
@@ -103,6 +123,14 @@ const routes: RouteCase[] = [
     route: 'POST /api/clients',
     roles: ['TRAINER', 'ADMIN'],
     ok: { as: 'trainerA', url: '/api/clients', body: { name: 'Novo', email: 'novo@vertice.test' } },
+  },
+  {
+    route: 'POST /api/clients/:id/setup-token',
+    roles: ['TRAINER'],
+    ok: { as: 'trainerA', url: `/api/clients/${ids.clientA2}/setup-token` },
+    denied: [
+      { as: 'trainerA', url: `/api/clients/${ids.clientB}/setup-token`, why: "path: another trainer's client" },
+    ],
   },
   {
     route: 'PATCH /api/clients/:id',
@@ -637,6 +665,8 @@ describe('route authorization', () => {
 
   beforeAll(async () => {
     app = await buildApp({
+      // Hundreds of requests from one IP: keep the rate limits out of the authorization checks.
+      rateLimits: { globalMax: 1_000_000, authMax: 1_000_000 },
       onRoute: (route: RouteOptions) => {
         for (const method of [route.method].flat()) {
           if (method !== 'HEAD' && method !== 'OPTIONS') registered.add(routeKey(method, route.url))

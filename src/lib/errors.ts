@@ -49,3 +49,10 @@ export class PreconditionFailedError extends HttpError {
     super(409, message, 'PRECONDITION_FAILED')
   }
 }
+
+/** A rate limit was hit; the caller should wait `Retry-After` seconds. */
+export class TooManyRequestsError extends HttpError {
+  constructor(message = 'Too many attempts, try again later') {
+    super(429, message, 'RATE_LIMITED')
+  }
+}

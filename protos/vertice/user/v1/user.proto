@@ -14,6 +14,22 @@ service UserService {
   rpc UpdateUser(UpdateUserRequest) returns (UserResponse);
   rpc DeleteUser(DeleteUserRequest) returns (google.protobuf.Empty);
   rpc SetUserPassword(SetUserPasswordRequest) returns (google.protobuf.Empty);
+
+  // The RPCs below are service-level, meant for vertice-bff only (role restriction comes with P1-01).
+
+  // Checks an email/password pair and returns the user it belongs to. The email is matched
+  // case-insensitively. A wrong password, an unknown email and a user with no password set all fail
+  // the same way: UNAUTHENTICATED "Invalid email or password".
+  rpc VerifyCredentials(VerifyCredentialsRequest) returns (UserResponse);
+  // Issues a single-use token that lets the user set their own password (first access). Issuing a
+  // new token invalidates the user's previous unused ones. NOT_FOUND when the user doesn't exist.
+  rpc CreatePasswordSetupToken(CreatePasswordSetupTokenRequest) returns (CreatePasswordSetupTokenResponse);
+  // Sets the password of the token's user and consumes the token. An unknown, expired or already
+  // used token fails the same way: UNAUTHENTICATED "Invalid or expired password setup token".
+  rpc SetPasswordWithToken(SetPasswordWithTokenRequest) returns (google.protobuf.Empty);
+  // Users who have no password yet (e.g. clients created by a trainer), optionally filtered by role,
+  // so a setup token can be issued to each of them.
+  rpc ListUsersWithoutPassword(ListUsersRequest) returns (ListUsersResponse);
 }
 
 enum Role {
@@ -43,6 +59,8 @@ message UserRequest {
 message UserCreateRequest {
   string name = 1;
   string email = 2;
+  // Required by CreateUser. CreateClientForTrainer may leave it empty: the user is then created
+  // without a password and sets one through a password setup token.
   string password = 3;
   string cpf = 4;
   string cref = 5;
@@ -72,5 +90,26 @@ message DeleteUserRequest {
 
 message SetUserPasswordRequest {
   int64 id = 1;
+  string password = 2;
+}
+
+message VerifyCredentialsRequest {
+  string email = 1;
+  string password = 2;
+}
+
+message CreatePasswordSetupTokenRequest {
+  int64 user_id = 1;
+}
+
+message CreatePasswordSetupTokenResponse {
+  // The raw token, URL-safe. Only its hash is stored, so this is the one time it can be read.
+  string token = 1;
+  // ISO-8601 instant after which the token is rejected.
+  string expires_at = 2;
+}
+
+message SetPasswordWithTokenRequest {
+  string token = 1;
   string password = 2;
 }

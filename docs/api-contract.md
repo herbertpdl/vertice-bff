@@ -2,28 +2,42 @@
 
 Base URL (dev): `http://localhost:3000/api`
 
-All endpoints except `/auth/login` and `/auth/register` require:
+All endpoints except `/auth/login`, `/auth/register` and `/auth/password/setup` require:
 `Authorization: Bearer <token>`
 
 All error responses have the shape:
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "...", "details": {} } }
 ```
-Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `UPSTREAM_UNAVAILABLE` (503).
+Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_UNAVAILABLE` (503).
 
 `PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — emitted by `PUT /workouts/:workoutId/exercises`, when a client has already recorded data under the workout (the `message` names the blocking exercise and set number), and by `DELETE /exercises/:id`, while any workout uses the exercise. The `message` is vertice-api's verbatim. Distinct from `VALIDATION_ERROR` ("fix the payload").
 
 Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Every id a route accepts (path, query or body) is checked against the caller: a `CLIENT` only reaches their own plans, workouts and workout logs; a `TRAINER` only their own plans and their own clients (`TrainerClientService.IsTrainersClient`). Another user's id is **403 `FORBIDDEN`**. A `CLIENT`'s `clientId` query parameter is ignored and replaced with their own id. `ADMIN` bypasses the plan/workout/log ownership checks but still has to name a client where a route needs one. `src/test/route-authorization.test.ts` pins this per route.
 
-## Known MVP limitation
-`POST /auth/login` only checks that the email exists — vertice-api's gRPC surface has no password-verification RPC yet, so **any password is accepted for an existing account**. Fine for local testing; do not treat this as real auth.
+## Rate limits
+- **Global:** every route shares a loose per-IP bucket (default 300 requests per minute; `RATE_LIMIT_GLOBAL_MAX`/`RATE_LIMIT_GLOBAL_WINDOW_MS`).
+- **Auth (strict):** separate buckets per route, per IP and (where the body has one) per email, default 5 per 15 minutes (`AUTH_RATE_LIMIT_MAX`/`AUTH_RATE_LIMIT_WINDOW_MS`). Once a bucket is full the next request is `429 RATE_LIMITED`, whatever its credentials, until the window ends.
+  - `POST /auth/login` (IP + email) and `POST /auth/password/setup` (IP) count **failed** attempts only: a response below 400 gives the attempt back, so the 6th failure in 15 minutes is a 429 and a gym full of clients on one IP can still log in.
+  - `POST /auth/register` (IP + email) counts **every** attempt: a successful sign-up is what a spammer repeats.
+  - `POST /auth/password` (IP + user) counts failed attempts.
+  - A 5xx (upstream down) never counts.
+- Per-IP means the client's address (IPv6 by /64). vertice-web-react calls the BFF from its server, so it **must forward the browser's IP as `X-Forwarded-For`**, and the BFF must run with `TRUST_PROXY` set to the web server's address; otherwise every web user shares one bucket. `X-Forwarded-For` from any other peer is ignored. See `docs/specs/password-lifecycle/spec.md`, "Client IPs and the rate limits".
+- Per-IP keys are aggregated too: each route also has a bucket per client **network** (IPv6 /48, IPv4 /24, default 20 × the per-IP limit = 100 failures per 15 minutes), so rotating addresses within one network doesn't buy more attempts.
+- Shared networks: the network bucket is shared by everyone behind the same IPv4 /24 or IPv6 /48 — carrier-grade NAT, an office or university network, a mobile carrier's /48. One abuser on that network can use it up (about 100 failures in 15 minutes by default) and lock everyone else on it out of that route for the rest of the window, even with correct passwords. Raise `AUTH_RATE_LIMIT_NETWORK_MAX` if many users sit behind shared networks. The long-term fix is a shared store plus a CAPTCHA or proof-of-work step instead of a hard network limit.
+- Counters live in the BFF process (one instance today). Keys are fixed-size (normalized IPs, SHA-256 of the email; a malformed email gets no email bucket, a non-IP gets one shared `invalid` bucket), at most `AUTH_RATE_LIMIT_MAX_KEYS` of them (default 1M, ~230 MB). When full, a request that needs a new key gets `429 RATE_LIMITED` until older buckets expire (fail closed); clients already tracked are unaffected. Residual risk: once the cap is reached, clients the limiter isn't already tracking get 429 until windows expire. Reaching it takes many distinct networks: each IPv6 /48 or IPv4 /24 can mint only about `2 × AUTH_RATE_LIMIT_NETWORK_MAX` keys per route per window, but keys from consecutive windows overlap, so it can hold about `4 × AUTH_RATE_LIMIT_NETWORK_MAX` (≈400 by default; 399 measured). Filling 1M keys therefore needs roughly 2,500 distinct /48s (or /24s) failing at full rate on one route, or about 625 spread over all four strict routes. That is within reach of a large botnet or a cheap pool of IPv6 allocations; the remedies then are a shared store, a CAPTCHA/proof-of-work step, or blocking at the edge.
 
 ---
 
 ## Auth — `/auth`
-- `POST /login` `{email, password}` → `{token, user: {id,name,email,role}}`
-- `POST /register` `{name, email, password, role: "TRAINER"|"CLIENT", cpf, cref?}` → same shape as login. **`cpf` is required** (vertice-api rejects empty/invalid CPF). `cref` is optional (trainer license number).
+Passwords follow vertice-api's policy everywhere one is set: **at least 8 characters, at most 72 UTF-8 bytes, not blank**. A violation is `400 VALIDATION_ERROR`, checked in the BFF before any upstream call. Emails are trimmed and lower-cased.
+
+- `POST /login` `{email, password}` → `{token, user: {id,name,email,role}}`. The password is checked by vertice-api (`VerifyCredentials`). A wrong password, an unknown email and an account with no password yet all get the **same** `401 {"error":{"code":"UNAUTHORIZED","message":"Invalid email or password"}}`.
+  - Rollout flag: with `VERIFY_PASSWORDS=false` (development/test only; the BFF refuses to start with it anywhere else) login only checks that the email exists, the old MVP behaviour. Default is `true`.
+- `POST /register` `{name, email, password, role: "TRAINER", cpf, cref?}` → `201`, same shape as login. **Only `TRAINER`**: `role: "CLIENT"` is `400 VALIDATION_ERROR` (clients are created by their trainer, `POST /clients`). **`cpf` is required** (vertice-api rejects empty/invalid CPF). `cref` is optional (trainer license number). A taken email is `409 CONFLICT` from vertice-api.
 - `GET /me` (auth) → full `User` `{id,name,email,cpf,cref,role}`
+- `POST /password` (auth, any role) `{currentPassword, newPassword}` → `204`. Changes the caller's own password after re-checking the current one. A wrong `currentPassword` is **`400 INVALID_CURRENT_PASSWORD`**, not a 401: the session is still valid, so clients must not log out on it.
+- `POST /password/setup` (public) `{token, newPassword}` → `204`. First access: the client chooses a password with the setup token from `POST /clients` (or `POST /clients/:id/setup-token`), then logs in normally. An unknown, expired (72h) or already used token is **`400 INVALID_SETUP_TOKEN`** (vertice-api's `UNAUTHENTICATED`, mapped so clients don't read it as a logout). The token is single-use, and issuing a new one invalidates the previous one.
 
 ## Students — `/students` (TRAINER only)
 A trainer's roster = distinct clients across their training plans (User has no direct trainer link). **This means a newly created student with no training plan yet does not appear in `GET /` until a plan is created for them** — this is pre-existing behavior of the roster derivation, not something the endpoints below change.
@@ -45,7 +59,15 @@ A trainer's roster = distinct clients across their training plans (User has no d
   }
   ```
   `activePlan` is the plan whose `[startDate, endDate]` contains today (most recently started one wins if more than one overlaps); everything else is zeroed/null when the student has no active plan. `thisWeek` counts completed vs. total workouts in the active plan for the current ISO week. `adherence4Weeks` is an **approximation**: vertice-api's `ListWorkoutLogs` RPC is scoped to one plan + one week (no general history query), so this re-fetches logs for the last 4 Mondays (clamped to weeks on/after the plan's start date), treats the plan's workout list as the recurring weekly schedule, and computes `completed / (workoutsPerWeek × weeksElapsed) × 100`, capped at 100. `lastWorkoutAt` is the latest `completedAt` found in that same 4-week lookback window (not a true all-time last-workout value — there's no cheaper way to get that from the current API surface).
-- `POST /` `{name, email, cpf?, password?}` → creates a CLIENT user. **`password` is optional** — the "Novo aluno" flow in the design is invite-based (name/email/cpf only, no password field in the UI). When omitted, a random password is generated server-side (`crypto.randomUUID()`); there is no email-invite system in this stack yet, so this is a placeholder until one exists.
+- `POST /` `{name, email, cpf?}` → `201` `User & {setup}` — creates a CLIENT user **without a password** and issues a first-access token. A `password` in the body is ignored (never sent upstream): the client chooses their own.
+  ```json
+  {
+    "id": 42, "name": "Ana", "email": "ana@example.com", "cpf": "", "cref": "", "role": "CLIENT",
+    "setup": { "token": "<43-char base64url>", "expiresAt": "2026-10-16T18:00:00Z" } | null
+  }
+  ```
+  The web builds the link the trainer shares from the token: `/definir-senha?token=<token>` (the page posts it to `POST /auth/password/setup`). The token is shown once (vertice-api only stores its hash) and expires after 72h. There is no email delivery yet. `setup` is `null` only when the client was created but issuing the token failed; re-issue it with the route below rather than re-creating the client (that would be a 409 on the email).
+- `POST /:id/setup-token` (**TRAINER only**, one of your clients) → `201` `{token, expiresAt}`. Re-issues the first-access link; the previous one stops working. Only while the client has no password yet: once they set one it is **`409 PRECONDITION_FAILED`**, since a trainer-issued link would let the trainer reset the client's password. (Clients created before setup tokens existed have a random password, so they get their link from ops: `npm run ops:issue-setup-tokens`, see the README.) Errors: 403 `Requires role: TRAINER` (ADMIN, CLIENT); 403 `This client is not one of your clients`.
 - `PATCH /:id` `{name, email, cpf?}`
 - `DELETE /:id`
 
