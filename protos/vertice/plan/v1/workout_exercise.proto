@@ -8,10 +8,20 @@ option java_package = "com.vertice.api.generated.grpc.plan.v1";
 option java_multiple_files = true;
 
 service WorkoutExerciseService {
+  // Authorization (P1-01, matrix in vertice-api CLAUDE.md): needs a user token. The plan's trainer
+  // reads and writes it and everything under it, its client only reads, ADMIN bypasses. To anyone
+  // else a missing id and someone else's id are the same PERMISSION_DENIED; ADMIN gets NOT_FOUND.
+
+  // The plan's trainer or client, ADMIN.
   rpc ListWorkoutExercises(ListWorkoutExercisesRequest) returns (ListWorkoutExercisesResponse);
+  // The plan's trainer or client, ADMIN.
   rpc GetWorkoutExercise(GetWorkoutExerciseRequest) returns (WorkoutExerciseResponse);
+  // The plan's trainer or ADMIN. The exercise must be visible to the plan's trainer (starter set
+  // or their own): a missing one is NOT_FOUND, another trainer's PERMISSION_DENIED.
   rpc CreateWorkoutExercise(WorkoutExerciseCreateRequest) returns (WorkoutExerciseResponse);
+  // The plan's trainer or ADMIN.
   rpc UpdateWorkoutExercise(UpdateWorkoutExerciseRequest) returns (WorkoutExerciseResponse);
+  // The plan's trainer or ADMIN.
   rpc DeleteWorkoutExercise(DeleteWorkoutExerciseRequest) returns (google.protobuf.Empty);
 }
 

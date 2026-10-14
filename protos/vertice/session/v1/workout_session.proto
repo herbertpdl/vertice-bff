@@ -6,13 +6,24 @@ option java_package = "com.vertice.api.generated.grpc.session.v1";
 option java_multiple_files = true;
 
 service WorkoutSessionService {
+  // Authorization (P1-01, matrix in vertice-api CLAUDE.md): needs a user token. A log belongs to
+  // its client, who alone (with ADMIN) writes into it; the plan's trainer reads its plans' logs.
+  // A client_id in a request must be a CLIENT caller's own. To anyone but ADMIN a missing id and
+  // someone else's id are the same PERMISSION_DENIED.
+
+  // The workout's plan's trainer or client, ADMIN.
   rpc GetOrStartWorkoutLog(GetOrStartWorkoutLogRequest) returns (WorkoutLogResponse);
-  // Looks up one log by id (NOT_FOUND when missing) so callers can check who owns it.
+  // One log by id: its client, the plan's trainer, ADMIN.
   rpc GetWorkoutLog(GetWorkoutLogRequest) returns (WorkoutLogResponse);
+  // The log's client or ADMIN.
   rpc RecordSetLog(RecordSetLogRequest) returns (SetLogResponse);
+  // The log's client or ADMIN.
   rpc CompleteWorkoutLog(CompleteWorkoutLogRequest) returns (WorkoutLogResponse);
+  // The plan's trainer or client, ADMIN.
   rpc ListWorkoutLogs(ListWorkoutLogsRequest) returns (ListWorkoutLogsResponse);
+  // The workout's plan's trainer or client, ADMIN.
   rpc GetLastSetLogs(GetLastSetLogsRequest) returns (GetLastSetLogsResponse);
+  // The client themself, their active trainer, ADMIN.
   rpc GetExerciseProgress(GetExerciseProgressRequest) returns (GetExerciseProgressResponse);
 }
 

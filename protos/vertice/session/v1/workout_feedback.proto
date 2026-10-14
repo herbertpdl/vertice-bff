@@ -6,7 +6,11 @@ option java_package = "com.vertice.api.generated.grpc.session.v1";
 option java_multiple_files = true;
 
 service WorkoutFeedbackService {
+  // Authorization (P1-01, matrix in vertice-api CLAUDE.md): needs a user token.
+
+  // The log's client or ADMIN; anyone else, or a missing log, is PERMISSION_DENIED.
   rpc SubmitWorkoutFeedback(SubmitWorkoutFeedbackRequest) returns (WorkoutFeedbackResponse);
+  // TRAINER with their own trainer_id (anything else is PERMISSION_DENIED), or ADMIN.
   rpc ListWorkoutFeedback(ListWorkoutFeedbackRequest) returns (ListWorkoutFeedbackResponse);
 }
 
