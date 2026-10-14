@@ -21,7 +21,7 @@ export async function submitFeedbackRoutes(app: FastifyInstance) {
 /** Mounted at /api/feedback */
 export async function feedbackRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
-  app.addHook('preHandler', app.requireRole('TRAINER', 'ADMIN'))
+  app.addHook('preHandler', app.requireRole('TRAINER'))
 
   app.get('/', async (req) => feedbackService.listWorkoutFeedbackEnriched(req.user!.id))
 }

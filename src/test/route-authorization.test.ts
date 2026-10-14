@@ -38,7 +38,9 @@ const grpcCallMock = vi.mocked(grpcCall)
  * - `denied`: another tenant's id in path, query or body is refused (403 unless
  *   `status` says otherwise) and no write RPC reaches upstream. Body ids that only
  *   have to fit the request (a set of the log's workout, an exercise visible to the
- *   trainer) are 400 whether foreign or missing, so they are no existence oracle;
+ *   trainer) are 400 whether foreign or missing, so they are no existence oracle.
+ *   `byUpstream` marks a refusal only vertice-api can make (catalog ownership): the
+ *   named write RPC is called and refused, and its 403/404/409 is relayed as is;
  * - `scoped`: an id the route ignores by design (e.g. a CLIENT's `clientId`) is
  *   replaced with the caller's own before it goes upstream.
  *
@@ -48,6 +50,14 @@ const grpcCallMock = vi.mocked(grpcCall)
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
+/** The error code each `denied` status must carry (404/409 are upstream refusals relayed as is). */
+const errorCodeFor = {
+  400: 'VALIDATION_ERROR',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'PRECONDITION_FAILED',
+} as const
+
 interface Call {
   as: Actor
   url: string
@@ -56,7 +66,12 @@ interface Call {
 
 interface Denied extends Call {
   why: string
-  status?: 400 | 403
+  status?: keyof typeof errorCodeFor
+  /**
+   * The refusal is vertice-api's, relayed as is: the write RPC itself is the check (catalog
+   * ownership), so it is the one write call allowed to reach upstream.
+   */
+  byUpstream?: string
 }
 
 interface Scoped extends Call {
@@ -78,6 +93,7 @@ interface RouteCase {
 const workoutBody = { name: 'Treino', dayOfWeek: 'MONDAY' }
 const withExercises = (...exerciseIds: number[]) => ({ exercises: exerciseIds.map((exerciseId) => ({ exerciseId })) })
 const setBody = { setNumber: 1, strategy: 'STRAIGHT' }
+const exerciseBody = { name: 'Remada', muscleGroupIds: [1] }
 const planBody = { name: 'Plano', startDate: '2026-11-01', endDate: '2027-01-31', level: 'BEGINNER' }
 const setLogBody = { exerciseSetId: ids.exerciseSetA, weight: '20', reps: 10 }
 
@@ -121,16 +137,16 @@ const routes: RouteCase[] = [
   },
 
   // clients
-  { route: 'GET /api/clients', roles: ['TRAINER', 'ADMIN'], ok: { as: 'trainerA', url: '/api/clients' } },
+  { route: 'GET /api/clients', roles: ['TRAINER'], ok: { as: 'trainerA', url: '/api/clients' } },
   {
     route: 'GET /api/clients/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/clients/${ids.clientA}` },
     denied: [{ as: 'trainerA', url: `/api/clients/${ids.clientB}`, why: "path: another trainer's client" }],
   },
   {
     route: 'GET /api/clients/:id/overview',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/clients/${ids.clientA}/overview` },
     denied: [
       { as: 'trainerA', url: `/api/clients/${ids.clientB}/overview`, why: "path: another trainer's client" },
@@ -138,7 +154,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'POST /api/clients',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: '/api/clients', body: { name: 'Novo', email: 'novo@vertice.test' } },
   },
   {
@@ -151,7 +167,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'PATCH /api/clients/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/clients/${ids.clientA}`, body: { name: 'A', email: 'a@vertice.test' } },
     denied: [
       {
@@ -164,7 +180,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'DELETE /api/clients/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/clients/${ids.clientA}` },
     denied: [{ as: 'trainerA', url: `/api/clients/${ids.clientB}`, why: "path: another trainer's client" }],
   },
@@ -174,6 +190,7 @@ const routes: RouteCase[] = [
   { route: 'GET /api/exercises/:id', ok: { as: 'clientA', url: `/api/exercises/${ids.exercise}` } },
   {
     route: 'GET /api/exercises/:id/progress',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'trainerA', url: `/api/exercises/${ids.exercise}/progress?clientId=${ids.clientA}` },
     denied: [
       {
@@ -193,7 +210,6 @@ const routes: RouteCase[] = [
         why: 'query: clientId not a number',
         status: 400,
       },
-      { as: 'admin', url: `/api/exercises/${ids.exercise}/progress`, why: 'query: clientId missing', status: 400 },
     ],
     scoped: [
       {
@@ -210,17 +226,76 @@ const routes: RouteCase[] = [
     roles: ['TRAINER'],
     ok: { as: 'trainerA', url: '/api/exercises', body: { name: 'Remada', muscleGroupIds: [1] } },
   },
+  // Ownership of catalog writes is vertice-api's (starter set read-only, a trainer's own exercises
+  // only, in use is 409); the BFF relays its answer. The fake upstream mirrors those rules.
   {
     route: 'PATCH /api/exercises/:id',
     roles: ['TRAINER'],
-    ok: { as: 'trainerA', url: `/api/exercises/${ids.exercise}`, body: { name: 'Remada', muscleGroupIds: [1] } },
+    ok: { as: 'trainerA', url: `/api/exercises/${ids.privateExerciseA}`, body: exerciseBody },
+    denied: [
+      {
+        as: 'trainerA',
+        url: `/api/exercises/${ids.exercise}`,
+        body: exerciseBody,
+        why: 'path: a starter exercise',
+        byUpstream: 'UpdateExercise',
+      },
+      {
+        as: 'trainerA',
+        url: `/api/exercises/${ids.privateExerciseB}`,
+        body: exerciseBody,
+        why: "path: another trainer's exercise",
+        byUpstream: 'UpdateExercise',
+      },
+      {
+        as: 'trainerA',
+        url: '/api/exercises/9999',
+        body: exerciseBody,
+        why: 'path: an unknown exercise',
+        status: 404,
+        byUpstream: 'UpdateExercise',
+      },
+    ],
   },
-  { route: 'DELETE /api/exercises/:id', roles: ['TRAINER'], ok: { as: 'trainerA', url: `/api/exercises/${ids.exercise}` } },
+  {
+    route: 'DELETE /api/exercises/:id',
+    roles: ['TRAINER'],
+    ok: { as: 'trainerA', url: `/api/exercises/${ids.privateExerciseA}` },
+    denied: [
+      {
+        as: 'trainerA',
+        url: `/api/exercises/${ids.exercise}`,
+        why: 'path: a starter exercise',
+        byUpstream: 'DeleteExercise',
+      },
+      {
+        as: 'trainerA',
+        url: `/api/exercises/${ids.privateExerciseB}`,
+        why: "path: another trainer's exercise",
+        byUpstream: 'DeleteExercise',
+      },
+      {
+        as: 'trainerA',
+        url: '/api/exercises/9999',
+        why: 'path: an unknown exercise',
+        status: 404,
+        byUpstream: 'DeleteExercise',
+      },
+      {
+        as: 'trainerA',
+        url: `/api/exercises/${ids.inUseExerciseA}`,
+        why: 'path: an exercise a workout uses',
+        status: 409,
+        byUpstream: 'DeleteExercise',
+      },
+    ],
+  },
   { route: 'GET /api/muscle-groups', ok: { as: 'clientA', url: '/api/muscle-groups' } },
 
   // training plans
   {
     route: 'GET /api/training-plans',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: '/api/training-plans' },
     scoped: [
       {
@@ -234,6 +309,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'GET /api/training-plans/:id',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: `/api/training-plans/${ids.planA}` },
     denied: [
       { as: 'clientA', url: `/api/training-plans/${ids.planB}`, why: "path: another client's plan" },
@@ -242,7 +318,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'POST /api/training-plans',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: '/api/training-plans', body: { ...planBody, clientId: ids.clientA } },
     denied: [
       {
@@ -255,7 +331,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'PATCH /api/training-plans/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/training-plans/${ids.planA}`, body: planBody },
     denied: [
       { as: 'trainerA', url: `/api/training-plans/${ids.planB}`, body: planBody, why: "path: another trainer's plan" },
@@ -273,12 +349,13 @@ const routes: RouteCase[] = [
   },
   {
     route: 'DELETE /api/training-plans/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/training-plans/${ids.planA}` },
     denied: [{ as: 'trainerA', url: `/api/training-plans/${ids.planB}`, why: "path: another trainer's plan" }],
   },
   {
     route: 'GET /api/training-plans/:planId/workouts',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: `/api/training-plans/${ids.planA}/workouts` },
     denied: [
       { as: 'clientA', url: `/api/training-plans/${ids.planB}/workouts`, why: "path: another client's plan" },
@@ -287,7 +364,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'POST /api/training-plans/:planId/workouts',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: {
       as: 'trainerA',
       url: `/api/training-plans/${ids.planA}/workouts`,
@@ -320,7 +397,7 @@ const routes: RouteCase[] = [
   // workouts
   {
     route: 'GET /api/workouts',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: '/api/workouts?recent=true' },
     scoped: [
       {
@@ -334,6 +411,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'GET /api/workouts/:id',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: `/api/workouts/${ids.workoutA}` },
     denied: [
       { as: 'clientA', url: `/api/workouts/${ids.workoutB}`, why: "path: another client's workout" },
@@ -342,6 +420,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'GET /api/workouts/:id/full',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: `/api/workouts/${ids.workoutA}/full` },
     denied: [
       { as: 'clientA', url: `/api/workouts/${ids.workoutB}/full`, why: "path: another client's workout" },
@@ -350,7 +429,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'PATCH /api/workouts/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/workouts/${ids.workoutA}`, body: workoutBody },
     denied: [
       { as: 'trainerA', url: `/api/workouts/${ids.workoutB}`, body: workoutBody, why: "path: another trainer's workout" },
@@ -358,13 +437,13 @@ const routes: RouteCase[] = [
   },
   {
     route: 'DELETE /api/workouts/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/workouts/${ids.workoutA}` },
     denied: [{ as: 'trainerA', url: `/api/workouts/${ids.workoutB}`, why: "path: another trainer's workout" }],
   },
   {
     route: 'POST /api/workouts/:id/clone',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: {
       as: 'trainerA',
       url: `/api/workouts/${ids.workoutA}/clone`,
@@ -390,6 +469,7 @@ const routes: RouteCase[] = [
   // token (assertCanUseExercises): vertice-api's workout-exercise writes don't check visibility.
   {
     route: 'GET /api/workouts/:workoutId/exercises',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: `/api/workouts/${ids.workoutA}/exercises` },
     denied: [
       { as: 'clientA', url: `/api/workouts/${ids.workoutB}/exercises`, why: "path: another client's workout" },
@@ -398,7 +478,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'POST /api/workouts/:workoutId/exercises',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/workouts/${ids.workoutA}/exercises`, body: { exerciseId: ids.exercise, order: 0 } },
     denied: [
       {
@@ -425,7 +505,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'PUT /api/workouts/:workoutId/exercises',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/workouts/${ids.workoutA}/exercises`, body: withExercises(ids.exercise) },
     denied: [
       {
@@ -453,7 +533,7 @@ const routes: RouteCase[] = [
   // The PATCH body has no exerciseId (the schema drops one), so there is no body id to check.
   {
     route: 'PATCH /api/workout-exercises/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/workout-exercises/${ids.workoutExerciseA}`, body: { order: 0 } },
     denied: [
       {
@@ -466,7 +546,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'DELETE /api/workout-exercises/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/workout-exercises/${ids.workoutExerciseA}` },
     denied: [
       {
@@ -480,6 +560,7 @@ const routes: RouteCase[] = [
   // exercise sets
   {
     route: 'GET /api/workout-exercises/:workoutExerciseId/sets',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: `/api/workout-exercises/${ids.workoutExerciseA}/sets` },
     denied: [
       {
@@ -491,7 +572,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'POST /api/workout-exercises/:workoutExerciseId/sets',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/workout-exercises/${ids.workoutExerciseA}/sets`, body: setBody },
     denied: [
       {
@@ -504,7 +585,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'PATCH /api/exercise-sets/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/exercise-sets/${ids.exerciseSetA}`, body: setBody },
     denied: [
       { as: 'trainerA', url: `/api/exercise-sets/${ids.exerciseSetB}`, body: setBody, why: "path: another trainer's set" },
@@ -512,7 +593,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'DELETE /api/exercise-sets/:id',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/exercise-sets/${ids.exerciseSetA}` },
     denied: [{ as: 'trainerA', url: `/api/exercise-sets/${ids.exerciseSetB}`, why: "path: another trainer's set" }],
   },
@@ -520,6 +601,7 @@ const routes: RouteCase[] = [
   // sessions, logs and feedback
   {
     route: 'GET /api/workouts/:workoutId/session',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: `/api/workouts/${ids.workoutA}/session` },
     denied: [
       { as: 'clientA', url: `/api/workouts/${ids.workoutB}/session`, why: "path: another client's workout" },
@@ -547,6 +629,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'GET /api/workout-logs',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'trainerA', url: `/api/workout-logs?clientId=${ids.clientA}&trainingPlanId=${ids.planA}` },
     denied: [
       {
@@ -651,7 +734,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'GET /api/feedback',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: '/api/feedback' },
     scoped: [
       {
@@ -665,7 +748,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'GET /api/dashboard',
-    roles: ['TRAINER', 'ADMIN'],
+    roles: ['TRAINER'],
     ok: { as: 'trainerA', url: '/api/dashboard' },
   },
 ]
@@ -762,6 +845,32 @@ describe('route authorization', () => {
     expect([...SERVICE_TOKEN_RPCS].sort()).toEqual([...API_SERVICE_SUBJECT_RPCS['service:bff']!].sort())
   })
 
+  // ADMIN has no defined product yet (P1-02, QUAL-BFF-001): it keeps its own account and the
+  // generic catalog reads, and everything trainer- or client-scoped is a 403 by role. A future
+  // ADMIN feature needs a PRD first; extending this list without one is the regression to catch.
+  const ADMIN_ROUTES = [
+    'GET /api/auth/me',
+    'POST /api/auth/password',
+    'GET /api/exercises',
+    'GET /api/exercises/:id',
+    'GET /api/muscle-groups',
+  ]
+
+  it('admits ADMIN on the generic routes only', () => {
+    const admitted = routes.filter((r) => !r.public && (!r.roles || r.roles.includes('ADMIN'))).map((r) => r.route)
+    expect(admitted.sort()).toEqual([...ADMIN_ROUTES].sort())
+  })
+
+  it.each([
+    '/api/auth/me',
+    '/api/exercises',
+    `/api/exercises/${ids.exercise}`,
+    '/api/muscle-groups',
+  ])('lets ADMIN read GET %s', async (url) => {
+    const res = await send('GET', { as: 'admin', url })
+    expect(res.statusCode, res.body).toBe(200)
+  })
+
   describe.each(routes)('$route', (rc) => {
     const method = rc.route.split(' ')[0]!
 
@@ -803,8 +912,8 @@ describe('route authorization', () => {
       const status = d.status ?? 403
       const res = await send(method, d)
       expect(res.statusCode, res.body).toBe(status)
-      expect(res.json().error.code).toBe(status === 403 ? 'FORBIDDEN' : 'VALIDATION_ERROR')
-      expect(upstreamMethods().filter(isWriteRpc)).toEqual([])
+      expect(res.json().error.code).toBe(errorCodeFor[status])
+      expect(upstreamMethods().filter(isWriteRpc)).toEqual(d.byUpstream ? [d.byUpstream] : [])
     })
 
     it.each(rc.scoped ?? [])('scopes $as to their own data, $why', async (s) => {

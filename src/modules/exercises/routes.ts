@@ -11,6 +11,8 @@ import { assertIsTrainersClient } from '../clients/service.js'
 export default async function exerciseRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
 
+  // The catalog read stays open to ADMIN (upstream returns the starter set): it is generic,
+  // not trainer-scoped.
   app.get('/', { preHandler: app.requireRole('TRAINER', 'ADMIN') }, async (req) => {
     const query = exerciseListQuerySchema.parse(req.query)
     return exerciseService.listExercises({ muscleGroupId: query.muscleGroupId, search: query.q })
@@ -20,12 +22,14 @@ export default async function exerciseRoutes(app: FastifyInstance) {
   // workouts, and only upstream can tell.
   app.get<{ Params: { id: string } }>('/:id', async (req) => exerciseService.getExercise(parseId(req.params.id)))
 
+  // Client history is trainer-scoped: ADMIN (no defined product yet, P1-02) gets a 403.
   app.get<{ Params: { id: string }; Querystring: { clientId?: string } }>(
     '/:id/progress',
+    { preHandler: app.requireRole('TRAINER', 'CLIENT') },
     async (req) => {
       const user = req.user!
       const exerciseId = parseId(req.params.id)
-      // A CLIENT only ever sees their own history; anyone else must name the client.
+      // A CLIENT only ever sees their own history; a TRAINER must name one of their clients.
       const clientId = user.role === 'CLIENT' ? user.id : parseRequiredId(req.query.clientId, 'clientId')
       if (user.role === 'TRAINER') await assertIsTrainersClient(user.id, clientId)
       return getExerciseProgress(exerciseId, clientId)

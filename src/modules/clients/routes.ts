@@ -6,7 +6,9 @@ import * as userService from '../users/service.js'
 
 export default async function clientRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
-  app.addHook('preHandler', app.requireRole('TRAINER', 'ADMIN'))
+  // TRAINER only: every route here is scoped to "one of *your* clients", which an ADMIN has
+  // none of. ADMIN has no defined product yet (P1-02); it gets a 403 until a PRD defines it.
+  app.addHook('preHandler', app.requireRole('TRAINER'))
 
   app.get('/', async (req) => clientService.listClientsOverviewForTrainer(req.user!.id))
 
@@ -28,17 +30,12 @@ export default async function clientRoutes(app: FastifyInstance) {
     return clientService.createClient(req.user!.id, body, req.log)
   })
 
-  // TRAINER only: the ownership check is "one of *your* clients", which ADMIN has none of.
-  app.post<{ Params: { id: string } }>(
-    '/:id/setup-token',
-    { preHandler: app.requireRole('TRAINER') },
-    async (req, reply) => {
-      const id = parseId(req.params.id)
-      await clientService.assertIsTrainersClient(req.user!.id, id)
-      reply.status(201)
-      return clientService.reissueSetupToken(id)
-    },
-  )
+  app.post<{ Params: { id: string } }>('/:id/setup-token', async (req, reply) => {
+    const id = parseId(req.params.id)
+    await clientService.assertIsTrainersClient(req.user!.id, id)
+    reply.status(201)
+    return clientService.reissueSetupToken(id)
+  })
 
   app.patch<{ Params: { id: string } }>('/:id', async (req) => {
     const id = parseId(req.params.id)

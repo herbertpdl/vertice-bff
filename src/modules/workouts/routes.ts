@@ -9,6 +9,7 @@ import * as planService from '../training-plans/service.js'
 /** Mounted at /api/training-plans/:planId/workouts */
 export async function workoutsUnderPlanRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
+  app.addHook('preHandler', app.requireRole('TRAINER', 'CLIENT'))
 
   app.get<{ Params: { planId: string } }>('/', async (req) => {
     const plan = await planService.getTrainingPlan(parseId(req.params.planId))
@@ -18,13 +19,13 @@ export async function workoutsUnderPlanRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { planId: string } }>(
     '/',
-    { preHandler: app.requireRole('TRAINER', 'ADMIN') },
+    { preHandler: app.requireRole('TRAINER') },
     async (req, reply) => {
       const plan = await planService.getTrainingPlan(parseId(req.params.planId))
       assertOwnsPlan(req.user!, plan)
       // Body may carry a nested `exercises` tree; responds with FullWorkout.
       const body = workoutCreateSchema.parse(req.body)
-      await assertCanUseExercises(req.user!, body.exercises.map((e) => e.exerciseId))
+      await assertCanUseExercises(body.exercises.map((e) => e.exerciseId))
       reply.status(201)
       return workoutService.createWorkout(plan.id, body)
     },
@@ -34,13 +35,14 @@ export async function workoutsUnderPlanRoutes(app: FastifyInstance) {
 /** Mounted at /api/workouts */
 export async function workoutRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
+  app.addHook('preHandler', app.requireRole('TRAINER', 'CLIENT'))
 
   // Only `?recent=true` is supported today — it powers the workout builder's
   // clone picker (the trainer's workouts across every plan/student). There is
   // no unfiltered "list all workouts" mode.
   app.get<{ Querystring: { recent?: string } }>(
     '/',
-    { preHandler: app.requireRole('TRAINER', 'ADMIN') },
+    { preHandler: app.requireRole('TRAINER') },
     async (req) => {
       if (req.query.recent !== 'true') {
         throw new ValidationError('GET /workouts requires ?recent=true')
@@ -63,7 +65,7 @@ export async function workoutRoutes(app: FastifyInstance) {
 
   app.patch<{ Params: { id: string } }>(
     '/:id',
-    { preHandler: app.requireRole('TRAINER', 'ADMIN') },
+    { preHandler: app.requireRole('TRAINER') },
     async (req) => {
       const id = parseId(req.params.id)
       await assertOwnsWorkout(req.user!, id)
@@ -74,7 +76,7 @@ export async function workoutRoutes(app: FastifyInstance) {
 
   app.delete<{ Params: { id: string } }>(
     '/:id',
-    { preHandler: app.requireRole('TRAINER', 'ADMIN') },
+    { preHandler: app.requireRole('TRAINER') },
     async (req, reply) => {
       const id = parseId(req.params.id)
       await assertOwnsWorkout(req.user!, id)
@@ -85,7 +87,7 @@ export async function workoutRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { id: string } }>(
     '/:id/clone',
-    { preHandler: app.requireRole('TRAINER', 'ADMIN') },
+    { preHandler: app.requireRole('TRAINER') },
     async (req, reply) => {
       const id = parseId(req.params.id)
       await assertOwnsWorkout(req.user!, id)

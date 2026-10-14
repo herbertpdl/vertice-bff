@@ -66,6 +66,10 @@ export const ids = {
   exercise: 1,
   /** Trainer B's private exercise, used in no workout. */
   privateExerciseB: 2,
+  /** Trainer A's private exercise, used in no workout. */
+  privateExerciseA: 3,
+  /** Trainer A's private exercise that a workout uses (the fake has no row for that workout). */
+  inUseExerciseA: 4,
 } as const
 
 export type Actor = 'admin' | 'trainerA' | 'trainerB' | 'clientA' | 'clientB'
@@ -187,9 +191,11 @@ const workoutLogRes = (l: (typeof workoutLogs)[number]) => ({
   startedAt: `${today}T08:00:00Z`,
   completedAt: '',
 })
-const exercises = [
-  { id: ids.exercise, ownerId: null as number | null },
-  { id: ids.privateExerciseB, ownerId: ids.trainerB as number | null },
+const exercises: { id: number; ownerId: number | null; inUse?: true }[] = [
+  { id: ids.exercise, ownerId: null },
+  { id: ids.privateExerciseB, ownerId: ids.trainerB },
+  { id: ids.privateExerciseA, ownerId: ids.trainerA },
+  { id: ids.inUseExerciseA, ownerId: ids.trainerA, inUse: true },
 ]
 const exerciseRes = (e: (typeof exercises)[number] = exercises[0]!) => ({
   id: str(e.id),
@@ -290,6 +296,28 @@ function getVisibleExercise(id: unknown) {
   return exerciseRes(exercise)
 }
 
+/**
+ * Mirrors vertice-api's `ExerciseService.findOwnedOrThrow` for update and delete: TRAINER only,
+ * then existence (NOT_FOUND), then the read-only starter set, then ownership (both PERMISSION_DENIED).
+ */
+function getOwnedExercise(id: unknown, verb: 'changed' | 'deleted') {
+  const user = caller()
+  if (user?.role !== 'TRAINER') {
+    upstreamError(status.PERMISSION_DENIED, `Role ${user?.role} is not allowed to change exercises`)
+  }
+  const exercise = find(exercises, id, 'Exercise')
+  if (exercise.ownerId === null) {
+    upstreamError(
+      status.PERMISSION_DENIED,
+      `Exercise ${exercise.id} belongs to the shared starter set and cannot be ${verb}`,
+    )
+  }
+  if (exercise.ownerId !== user.id) {
+    upstreamError(status.PERMISSION_DENIED, `You do not have access to exercise ${exercise.id}`)
+  }
+  return exercise
+}
+
 type Req = Record<string, unknown>
 const byNumber = (value: unknown, actual: number) => !Number(value) || Number(value) === actual
 
@@ -333,8 +361,14 @@ const handlers: Record<string, (req: Req) => unknown> = {
   ListExercises: () => ({ exercises: [exerciseRes()] }),
   GetExercise: (r) => getVisibleExercise(r.id),
   CreateExercise: () => exerciseRes(),
-  UpdateExercise: () => exerciseRes(),
-  DeleteExercise: () => ({}),
+  UpdateExercise: (r) => exerciseRes(getOwnedExercise(r.id, 'changed')),
+  DeleteExercise: (r) => {
+    const exercise = getOwnedExercise(r.id, 'deleted')
+    if (exercise.inUse) {
+      upstreamError(status.FAILED_PRECONDITION, `Exercise ${exercise.id} is used by a workout and cannot be deleted`)
+    }
+    return {}
+  },
 
   // TrainingPlanService
   ListTrainingPlans: (r) => ({
