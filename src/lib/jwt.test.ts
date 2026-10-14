@@ -15,8 +15,8 @@ describe('signToken / verifyToken', () => {
 
   it('carries only the identity, the role and the iss/aud/exp scope (no name, no email)', () => {
     const claims = jwt.decode(signToken(user)) as jwt.JwtPayload
-    expect(Object.keys(claims).sort()).toEqual(['aud', 'exp', 'iat', 'id', 'iss', 'role', 'sub'])
-    expect(claims).toMatchObject({ sub: '1', id: 1, role: 'ADMIN', iss: 'vertice-bff', aud: 'vertice-api' })
+    expect(Object.keys(claims).sort()).toEqual(['aud', 'exp', 'iat', 'iss', 'role', 'sub'])
+    expect(claims).toMatchObject({ sub: '1', role: 'ADMIN', iss: 'vertice-bff', aud: 'vertice-api' })
     expect(claims.exp).toBeGreaterThan(claims.iat!)
   })
 
@@ -57,10 +57,25 @@ describe('signToken / verifyToken', () => {
     expect(() => verifyToken(token)).toThrow(/jwt expired/)
   })
 
+  it('reads the user id from sub', () => {
+    const token = jwt.sign({ role: 'TRAINER' }, env.JWT_SECRET, { algorithm: 'HS256', expiresIn: 60, ...scope, subject: '42' })
+    expect(verifyToken(token)).toEqual({ id: 42, role: 'TRAINER' })
+  })
+
+  it('still accepts a token minted with the legacy id claim when it equals sub', () => {
+    const token = jwt.sign({ id: 7, sub: '7', role: 'CLIENT' }, env.JWT_SECRET, { algorithm: 'HS256', expiresIn: 60, ...scope })
+    expect(verifyToken(token)).toEqual({ id: 7, role: 'CLIENT' })
+  })
+
   it.each([
-    ['a sub that is not the id', { id: 1, sub: '2', role: 'ADMIN' }, /subject invalid/],
-    ['a non-numeric id', { id: 'x', sub: 'x', role: 'ADMIN' }, /subject invalid/],
-    ['an unknown role', { id: 1, sub: '1', role: 'ROOT' }, /role invalid/],
+    ['a legacy id that is not the sub', { id: 1, sub: '2', role: 'ADMIN' }, /subject invalid/],
+    ['a legacy id that is the sub as a string', { id: '1', sub: '1', role: 'ADMIN' }, /subject invalid/],
+    ['no sub', { id: 1, role: 'ADMIN' }, /subject invalid/],
+    ['a non-numeric sub', { sub: 'x', role: 'ADMIN' }, /subject invalid/],
+    ['a zero sub', { sub: '0', role: 'ADMIN' }, /subject invalid/],
+    ['a non-canonical sub', { sub: '01', role: 'ADMIN' }, /subject invalid/],
+    ['a sub beyond the safe integers', { sub: '9007199254740993', role: 'ADMIN' }, /subject invalid/],
+    ['an unknown role', { sub: '1', role: 'ROOT' }, /role invalid/],
   ])('rejects a token with %s', (_, payload, error) => {
     const token = jwt.sign(payload, env.JWT_SECRET, { algorithm: 'HS256', expiresIn: 60, ...scope })
     expect(() => verifyToken(token)).toThrow(error)

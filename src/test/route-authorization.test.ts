@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance, RouteOptions } from 'fastify'
 import { buildApp } from '../app.js'
+import { env } from '../config/env.js'
 import { grpcCall, MissingCallerIdentityError, SERVICE_TOKEN_RPCS } from '../grpc/call.js'
 import { Metadata } from '@grpc/grpc-js'
-import { serviceToken, type Role } from '../lib/jwt.js'
+import { serviceToken, signToken, type Role } from '../lib/jwt.js'
 import {
   API_SERVICE_SUBJECT_RPCS,
   bearer,
@@ -726,13 +727,34 @@ describe('route authorization', () => {
     const user = { id: ids.clientA }
     await expect(fakeGrpcCall(null, 'GetUser', user, withAuthorization('Bearer forged'))).rejects.toThrow()
     await expect(fakeGrpcCall(null, 'GetUser', user)).rejects.toThrow(MissingCallerIdentityError)
-    await expect(fakeGrpcCall(null, 'GetUser', user, { anonymous: true })).rejects.toThrow(/without a bearer token/)
+    // Outside the VERIFY_PASSWORDS=false dev login, grpcCall itself refuses anonymous calls...
+    await expect(fakeGrpcCall(null, 'GetUser', user, { anonymous: true })).rejects.toThrow(MissingCallerIdentityError)
+    // ...and with it, the fake (like vertice-api outside its local profile) still wants a token.
+    env.VERIFY_PASSWORDS = false
+    try {
+      await expect(fakeGrpcCall(null, 'GetUser', user, { anonymous: true })).rejects.toThrow(/without a bearer token/)
+    } finally {
+      env.VERIFY_PASSWORDS = true
+    }
     await expect(
       fakeGrpcCall(null, 'ListUsers', {}, withAuthorization(`Bearer ${serviceToken()}`)),
     ).rejects.toThrow(/service:bff is not allowed to call ListUsers/)
     await expect(
       fakeGrpcCall(null, 'VerifyCredentials', { email: emailOf(ids.clientA), password: FAKE_PASSWORD }, { asService: true }),
     ).resolves.toBeDefined()
+  })
+
+  it.each([
+    ['deleted', { id: 999, role: 'CLIENT' as const }],
+    ['demoted', { id: ids.trainerA, role: 'ADMIN' as const }],
+  ])('answers 401 with a fixed body when vertice-api no longer accepts a %s user', async (_, user) => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { authorization: `Bearer ${signToken(user)}` },
+    })
+    expect(res.statusCode, res.body).toBe(401)
+    expect(res.json().error).toMatchObject({ code: 'UNAUTHENTICATED', message: 'Session no longer valid' })
   })
 
   it("pins the BFF's service-token RPCs to the API contract: exactly the three public auth RPCs", () => {

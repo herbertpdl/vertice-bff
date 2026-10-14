@@ -1,4 +1,5 @@
 import * as grpc from '@grpc/grpc-js'
+import { DEV_NODE_ENVS, env } from '../config/env.js'
 import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
 import { serviceToken } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
@@ -20,7 +21,8 @@ export interface GrpcCallOptions {
   asService?: boolean
   /**
    * With no verified user token, send no `authorization` at all. Only the `VERIFY_PASSWORDS=false`
-   * dev login uses it, and it only works against vertice-api's `local` profile.
+   * dev login uses it, and it only works against vertice-api's `local` profile. Refused unless
+   * `VERIFY_PASSWORDS` is false and `NODE_ENV` is a dev value (`DEV_NODE_ENVS`).
    */
   anonymous?: boolean
 }
@@ -63,7 +65,8 @@ export function grpcCall<TRequest, TResponse>(
  * 1. an `authorization` the caller put in `options.metadata` (the ops script's `service:ops`);
  * 2. the user token `app.authenticate` verified and put in the request context;
  * 3. the BFF's service token, only with `asService` and only on `SERVICE_TOKEN_RPCS`;
- * 4. nothing, only with `anonymous` (dev login against the API's `local` profile).
+ * 4. nothing, only with `anonymous` (dev login against the API's `local` profile), and only while
+ *    `VERIFY_PASSWORDS` is false in a dev `NODE_ENV`, so the opt-in is inert anywhere else.
  * Anything else throws `MissingCallerIdentityError`: a call without a user never silently runs
  * as the BFF. An unverified `Authorization` header is never relayed.
  */
@@ -82,9 +85,17 @@ export function withCallerIdentity(method: string, options: GrpcCallOptions = {}
     metadata.set('authorization', `Bearer ${serviceToken()}`)
     return metadata
   }
-  if (options.anonymous) return metadata
+  if (options.anonymous) {
+    if (env.VERIFY_PASSWORDS || !DEV_NODE_ENVS.includes(env.NODE_ENV)) {
+      throw new MissingCallerIdentityError(method, 'anonymous calls are only allowed for the VERIFY_PASSWORDS=false dev login')
+    }
+    return metadata
+  }
   throw new MissingCallerIdentityError(method, 'no verified user token and no explicit service opt-in')
 }
+
+/** The message of every 401 caused by vertice-api refusing the caller's identity. */
+export const SESSION_INVALID_MESSAGE = 'Session no longer valid'
 
 /** Maps a gRPC status to the HttpError the global error handler will render. Exported for tests. */
 export function mapGrpcError(error: Pick<grpc.ServiceError, 'code' | 'details'>): HttpError {
@@ -101,8 +112,12 @@ export function mapGrpcError(error: Pick<grpc.ServiceError, 'code' | 'details'>)
       return new PreconditionFailedError(error.details || 'Precondition failed')
     case grpc.status.ALREADY_EXISTS:
       return new HttpError(409, error.details || 'Already exists', 'CONFLICT')
+    // vertice-api refused the forwarded identity, e.g. "Session no longer valid" for a user who was
+    // deleted or given another role since the token was minted. Clients treat a 401 as logout, so
+    // the body is fixed: a stable code and message, nothing from upstream. (The password routes
+    // turn this into their own 400/401 first.)
     case grpc.status.UNAUTHENTICATED:
-      return new HttpError(401, error.details || 'Unauthenticated', 'UNAUTHENTICATED')
+      return new HttpError(401, SESSION_INVALID_MESSAGE, 'UNAUTHENTICATED')
     case grpc.status.PERMISSION_DENIED:
       return new ForbiddenError(error.details || 'Forbidden')
     case grpc.status.UNAVAILABLE:
