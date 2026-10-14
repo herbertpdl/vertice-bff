@@ -1,7 +1,8 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import fp from 'fastify-plugin'
 import rateLimit from '@fastify/rate-limit'
-import { AttemptLimiter } from '../lib/attempt-limiter.js'
+import { AttemptLimiter, type AttemptTicket } from '../lib/attempt-limiter.js'
+import { clientIpKey } from '../lib/client-ip.js'
 import { TooManyRequestsError } from '../lib/errors.js'
 
 export interface RateLimitSettings {
@@ -11,6 +12,8 @@ export interface RateLimitSettings {
   /** Strict buckets on the auth routes: the attempt after `authMax` within the window is a 429. */
   authMax: number
   authWindowMs: number
+  /** Most strict-bucket keys held at once; when full, attempts needing a new key are refused (429). */
+  authMaxKeys: number
 }
 
 export interface AttemptLimitOptions {
@@ -42,36 +45,53 @@ export function emailKey(req: FastifyRequest): string | undefined {
   return typeof email === 'string' && email.trim() ? `email:${email.trim().toLowerCase()}` : undefined
 }
 
-export const ipKey = (req: FastifyRequest) => `ip:${req.ip}`
+/**
+ * The client's address (IPv6 cut to its /64). `req.ip` is the real client only when
+ * `TRUST_PROXY` names the peer that forwards it (vertice-web-react's server, a reverse proxy).
+ */
+export const ipKey = (req: FastifyRequest) => `ip:${clientIpKey(req.ip)}`
+
+/** At most one "limiter full" warning per this many ms, so an attack doesn't flood the logs. */
+const CAPACITY_WARNING_INTERVAL_MS = 60_000
 
 export default fp<{ settings: RateLimitSettings }>(async function rateLimitPlugin(app, { settings }) {
   await app.register(rateLimit, {
     global: true,
     max: settings.globalMax,
     timeWindow: settings.globalWindowMs,
+    keyGenerator: (req) => clientIpKey(req.ip),
     errorResponseBuilder: () => new TooManyRequestsError('Too many requests, try again later'),
   })
 
-  const limiter = new AttemptLimiter({ max: settings.authMax, windowMs: settings.authWindowMs })
+  const limiter = new AttemptLimiter({
+    max: settings.authMax,
+    windowMs: settings.authWindowMs,
+    maxKeys: settings.authMaxKeys,
+  })
+  let lastCapacityWarningAt = -Infinity
 
   app.decorate('attemptLimit', (name: string, options: AttemptLimitOptions): AttemptLimitHooks => {
-    const acquired = new WeakMap<FastifyRequest, string[]>()
+    const acquired = new WeakMap<FastifyRequest, AttemptTicket>()
     const countAll = options.count === 'all'
     return {
       async preHandler(req, reply) {
         const keys = options.keys(req).filter((key): key is string => Boolean(key)).map((key) => `${name}:${key}`)
         const result = limiter.tryAcquire(keys)
         if (!result.allowed) {
+          if (result.reason === 'capacity' && Date.now() - lastCapacityWarningAt > CAPACITY_WARNING_INTERVAL_MS) {
+            lastCapacityWarningAt = Date.now()
+            req.log.warn({ maxKeys: settings.authMaxKeys }, 'Auth rate limiter is full; refusing new clients until buckets expire')
+          }
           reply.header('retry-after', Math.ceil(result.retryAfterMs / 1000))
           throw new TooManyRequestsError()
         }
-        acquired.set(req, keys)
+        acquired.set(req, result.ticket)
       },
       async onResponse(req, reply) {
-        const keys = acquired.get(req)
-        if (!keys) return
+        const ticket = acquired.get(req)
+        if (!ticket) return
         const status = reply.statusCode
-        if (status >= 500 || (!countAll && status < 400)) limiter.release(keys)
+        if (status >= 500 || (!countAll && status < 400)) limiter.release(ticket)
       },
     }
   })

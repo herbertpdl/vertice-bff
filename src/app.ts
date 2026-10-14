@@ -29,6 +29,8 @@ export interface BuildAppOptions {
   onRoute?: (route: RouteOptions) => void
   /** Overrides the env-configured rate limits (tests use it to raise or lower them). */
   rateLimits?: Partial<RateLimitSettings>
+  /** Overrides `TRUST_PROXY` (tests). */
+  trustProxy?: boolean | string
 }
 
 function rateLimitSettings(overrides: Partial<RateLimitSettings> = {}): RateLimitSettings {
@@ -37,6 +39,7 @@ function rateLimitSettings(overrides: Partial<RateLimitSettings> = {}): RateLimi
     globalWindowMs: env.RATE_LIMIT_GLOBAL_WINDOW_MS,
     authMax: env.AUTH_RATE_LIMIT_MAX,
     authWindowMs: env.AUTH_RATE_LIMIT_WINDOW_MS,
+    authMaxKeys: env.AUTH_RATE_LIMIT_MAX_KEYS,
     ...overrides,
   }
 }
@@ -48,7 +51,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       transport: env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
     },
     // Rate limits key on req.ip, which is only the real client behind a proxy when this is set.
-    trustProxy: env.TRUST_PROXY,
+    trustProxy: options.trustProxy ?? env.TRUST_PROXY,
   })
   if (options.onRoute) app.addHook('onRoute', options.onRoute)
   if (!env.VERIFY_PASSWORDS) {
