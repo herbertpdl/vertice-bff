@@ -35,6 +35,39 @@ export function parseCorsOrigins(value: string): string[] {
  */
 export const DEV_NODE_ENVS = ['', 'development', 'test']
 
+/**
+ * Parses a boolean env var strictly: `true`/`false`/`1`/`0` (trimmed, case-insensitive), or the
+ * default when unset or blank. Anything else is an error rather than a silent truthy string.
+ */
+function envBoolean(defaultValue: boolean) {
+  return z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      const normalized = (value ?? '').trim().toLowerCase()
+      if (normalized === '') return defaultValue
+      if (normalized === 'true' || normalized === '1') return true
+      if (normalized === 'false' || normalized === '0') return false
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be true or false' })
+      return z.NEVER
+    })
+}
+
+/**
+ * Fastify's `trustProxy`: `false` (default; `req.ip` is the socket peer), `true` (trust every
+ * hop; only when the BFF is reachable solely through a proxy that overwrites
+ * `X-Forwarded-For`), or a comma-separated list of trusted proxy addresses/CIDRs or proxy-addr
+ * names (`loopback`, `linklocal`, `uniquelocal`, e.g. `10.0.0.0/8`). A bare hop count is
+ * refused: this Fastify version treats a number as "trust nothing", which would silently put
+ * every client behind the proxy into one rate-limit bucket. The rate limits key on `req.ip`.
+ */
+export function parseTrustProxy(value: string | undefined): boolean | string {
+  const normalized = (value ?? '').trim()
+  if (normalized === '' || normalized.toLowerCase() === 'false') return false
+  if (normalized.toLowerCase() === 'true') return true
+  return normalized
+}
+
 function isPlaceholderSecret(secret: string): boolean {
   const normalized = secret.trim().toLowerCase()
   return PLACEHOLDER_JWT_SECRETS.some((placeholder) => placeholder.toLowerCase() === normalized)
@@ -54,9 +87,35 @@ const envSchema = z
     VERTICE_API_GRPC_PORT: z.coerce.number().default(9090),
     JWT_SECRET: z.string().optional(),
     JWT_EXPIRES_IN: z.string().default('8h'),
+    /**
+     * Login checks the password through vertice-api's `VerifyCredentials`. `false` restores the
+     * old email-only login for the rollout window (until every client has a setup link) and is
+     * refused unless NODE_ENV is development or test.
+     */
+    VERIFY_PASSWORDS: envBoolean(true),
+    TRUST_PROXY: z
+      .string()
+      .optional()
+      .refine((value) => !/^\s*\d+\s*$/.test(value ?? ''), {
+        message: 'must be true, false or a list of proxy addresses/CIDRs, not a hop count',
+      })
+      .transform(parseTrustProxy),
+    /** Loose per-IP bucket over every route. */
+    RATE_LIMIT_GLOBAL_MAX: z.coerce.number().int().positive().default(300),
+    RATE_LIMIT_GLOBAL_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    /** Strict per-IP and per-email buckets on login, register and password setup/change. */
+    AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+    AUTH_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60_000),
   })
   .superRefine((value, ctx) => {
     if (DEV_NODE_ENVS.includes(value.NODE_ENV)) return
+    if (!value.VERIFY_PASSWORDS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['VERIFY_PASSWORDS'],
+        message: 'must not be false unless NODE_ENV is development or test (login would accept any password)',
+      })
+    }
     // Messages never echo the secret itself.
     const secret = value.JWT_SECRET
     const scope = 'unless NODE_ENV is development or test'

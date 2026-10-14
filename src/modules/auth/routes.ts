@@ -1,15 +1,23 @@
 import type { FastifyInstance } from 'fastify'
-import { loginSchema, registerSchema } from './schemas.js'
+import { changePasswordSchema, loginSchema, passwordSetupSchema, registerSchema } from './schemas.js'
 import * as authService from './service.js'
 import * as userService from '../users/service.js'
+import { emailKey, ipKey } from '../../plugins/rate-limit.js'
 
 export default async function authRoutes(app: FastifyInstance) {
-  app.post('/login', async (req) => {
+  // Strict buckets (see plugins/rate-limit.ts). Login and setup count failed attempts only;
+  // register counts every attempt, since a successful sign-up is what a spammer repeats.
+  const loginLimit = app.attemptLimit('login', { keys: (req) => [ipKey(req), emailKey(req)] })
+  const registerLimit = app.attemptLimit('register', { keys: (req) => [ipKey(req), emailKey(req)], count: 'all' })
+  const setupLimit = app.attemptLimit('password-setup', { keys: (req) => [ipKey(req)] })
+  const changeLimit = app.attemptLimit('password-change', { keys: (req) => [ipKey(req), `user:${req.user!.id}`] })
+
+  app.post('/login', loginLimit, async (req) => {
     const body = loginSchema.parse(req.body)
     return authService.login(body.email, body.password)
   })
 
-  app.post('/register', async (req, reply) => {
+  app.post('/register', registerLimit, async (req, reply) => {
     const body = registerSchema.parse(req.body)
     reply.status(201)
     return authService.register(body)
@@ -17,5 +25,21 @@ export default async function authRoutes(app: FastifyInstance) {
 
   app.get('/me', { preHandler: app.authenticate }, async (req) => {
     return userService.getUser(req.user!.id)
+  })
+
+  app.post(
+    '/password',
+    { preHandler: [app.authenticate, changeLimit.preHandler], onResponse: changeLimit.onResponse },
+    async (req, reply) => {
+      const body = changePasswordSchema.parse(req.body)
+      await authService.changePassword(req.user!.id, body.currentPassword, body.newPassword)
+      reply.status(204)
+    },
+  )
+
+  app.post('/password/setup', setupLimit, async (req, reply) => {
+    const body = passwordSetupSchema.parse(req.body)
+    await authService.setupPassword(body.token, body.newPassword)
+    reply.status(204)
   })
 }

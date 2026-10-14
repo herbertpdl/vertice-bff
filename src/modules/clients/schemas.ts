@@ -2,11 +2,10 @@ import { z } from 'zod'
 
 export const clientCreateSchema = z.object({
   name: z.string().min(1),
-  email: z.string().email(),
-  // Optional: the design's client creation flow is invite-based (no password
-  // field in the UI). When omitted, the service generates a random one — see
-  // clients/service.ts createClient().
-  password: z.string().min(6).optional(),
+  email: z.string().trim().toLowerCase().email(),
+  // No password: the client chooses their own through the setup token the
+  // create response returns (see clients/service.ts createClient()). A
+  // `password` key in the body is stripped, never sent upstream.
   cpf: z.string().optional(),
 })
 

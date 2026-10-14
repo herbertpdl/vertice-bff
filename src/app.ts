@@ -4,6 +4,7 @@ import { env } from './config/env.js'
 import errorHandler from './plugins/error-handler.js'
 import requestContextPlugin from './plugins/request-context.js'
 import authenticatePlugin from './plugins/authenticate.js'
+import rateLimitPlugin, { type RateLimitSettings } from './plugins/rate-limit.js'
 
 import authRoutes from './modules/auth/routes.js'
 import clientRoutes from './modules/clients/routes.js'
@@ -26,6 +27,18 @@ import dashboardRoutes from './modules/dashboard/routes.js'
 export interface BuildAppOptions {
   /** Sees every route as it is registered (the route-authorization suite uses it to find untested routes). */
   onRoute?: (route: RouteOptions) => void
+  /** Overrides the env-configured rate limits (tests use it to raise or lower them). */
+  rateLimits?: Partial<RateLimitSettings>
+}
+
+function rateLimitSettings(overrides: Partial<RateLimitSettings> = {}): RateLimitSettings {
+  return {
+    globalMax: env.RATE_LIMIT_GLOBAL_MAX,
+    globalWindowMs: env.RATE_LIMIT_GLOBAL_WINDOW_MS,
+    authMax: env.AUTH_RATE_LIMIT_MAX,
+    authWindowMs: env.AUTH_RATE_LIMIT_WINDOW_MS,
+    ...overrides,
+  }
 }
 
 export async function buildApp(options: BuildAppOptions = {}) {
@@ -34,12 +47,18 @@ export async function buildApp(options: BuildAppOptions = {}) {
       level: env.LOG_LEVEL,
       transport: env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
     },
+    // Rate limits key on req.ip, which is only the real client behind a proxy when this is set.
+    trustProxy: env.TRUST_PROXY,
   })
   if (options.onRoute) app.addHook('onRoute', options.onRoute)
+  if (!env.VERIFY_PASSWORDS) {
+    app.log.warn('VERIFY_PASSWORDS=false: login accepts any password for an existing email (dev/test only)')
+  }
 
   await app.register(cors, { origin: env.CORS_ORIGIN, credentials: true })
   await app.register(errorHandler)
   await app.register(requestContextPlugin)
+  await app.register(rateLimitPlugin, { settings: rateLimitSettings(options.rateLimits) })
   await app.register(authenticatePlugin)
 
   app.get('/health', async () => ({ status: 'ok' }))

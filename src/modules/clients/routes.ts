@@ -25,8 +25,20 @@ export default async function clientRoutes(app: FastifyInstance) {
   app.post('/', async (req, reply) => {
     const body = clientCreateSchema.parse(req.body)
     reply.status(201)
-    return clientService.createClient(req.user!.id, body)
+    return clientService.createClient(req.user!.id, body, req.log)
   })
+
+  // TRAINER only: the ownership check is "one of *your* clients", which ADMIN has none of.
+  app.post<{ Params: { id: string } }>(
+    '/:id/setup-token',
+    { preHandler: app.requireRole('TRAINER') },
+    async (req, reply) => {
+      const id = parseId(req.params.id)
+      await clientService.assertIsTrainersClient(req.user!.id, id)
+      reply.status(201)
+      return clientService.reissueSetupToken(id)
+    },
+  )
 
   app.patch<{ Params: { id: string } }>('/:id', async (req) => {
     const id = parseId(req.params.id)

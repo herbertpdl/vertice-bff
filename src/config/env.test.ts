@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_CORS_ORIGIN, DEV_JWT_SECRET, parseCorsOrigins, parseEnv } from './env.js'
+import { DEFAULT_CORS_ORIGIN, DEV_JWT_SECRET, parseCorsOrigins, parseEnv, parseTrustProxy } from './env.js'
 
 const STRONG_SECRET = 'q7Vx2mP9rT4wZ8kL1nB6cF3hJ5sD0gYa'
 
@@ -106,5 +106,60 @@ describe('parseEnv CORS_ORIGIN', () => {
   it('drops blank entries, so an empty value allows no browser origin', () => {
     expect(parseCorsOrigins(' a , ,b,')).toEqual(['a', 'b'])
     expect(parseEnv({ CORS_ORIGIN: '' }).CORS_ORIGIN).toEqual([])
+  })
+})
+
+describe('parseEnv VERIFY_PASSWORDS', () => {
+  it('defaults to true everywhere', () => {
+    expect(parseEnv({}).VERIFY_PASSWORDS).toBe(true)
+    expect(parseEnv({ NODE_ENV: 'production', JWT_SECRET: STRONG_SECRET }).VERIFY_PASSWORDS).toBe(true)
+  })
+
+  it.each([undefined, 'development', 'test'])('may be turned off when NODE_ENV=%j', (nodeEnv) => {
+    expect(parseEnv({ NODE_ENV: nodeEnv, VERIFY_PASSWORDS: 'false' }).VERIFY_PASSWORDS).toBe(false)
+    expect(parseEnv({ NODE_ENV: nodeEnv, VERIFY_PASSWORDS: ' FALSE ' }).VERIFY_PASSWORDS).toBe(false)
+    expect(parseEnv({ NODE_ENV: nodeEnv, VERIFY_PASSWORDS: '0' }).VERIFY_PASSWORDS).toBe(false)
+  })
+
+  it.each(['production', 'staging', 'prod'])('refuses false when NODE_ENV=%s', (nodeEnv) => {
+    expect(() => parseEnv({ NODE_ENV: nodeEnv, JWT_SECRET: STRONG_SECRET, VERIFY_PASSWORDS: 'false' })).toThrow(
+      /VERIFY_PASSWORDS: must not be false/,
+    )
+  })
+
+  it('refuses a value that is not a boolean instead of reading it as truthy', () => {
+    expect(() => parseEnv({ VERIFY_PASSWORDS: 'nope' })).toThrow(/VERIFY_PASSWORDS: must be true or false/)
+  })
+})
+
+describe('parseEnv TRUST_PROXY', () => {
+  it('defaults to false', () => {
+    expect(parseEnv({}).TRUST_PROXY).toBe(false)
+  })
+
+  it('parses true/false and passes an address list through', () => {
+    expect(parseTrustProxy('true')).toBe(true)
+    expect(parseTrustProxy(' False ')).toBe(false)
+    expect(parseTrustProxy('loopback, 10.0.0.0/8')).toBe('loopback, 10.0.0.0/8')
+  })
+
+  it('refuses a hop count, which Fastify would treat as "trust nothing"', () => {
+    expect(() => parseEnv({ TRUST_PROXY: '1' })).toThrow(/TRUST_PROXY: must be true, false or a list/)
+  })
+})
+
+describe('parseEnv rate limits', () => {
+  it('defaults to 5 auth attempts per 15 minutes and 300 requests per minute overall', () => {
+    expect(parseEnv({})).toMatchObject({
+      AUTH_RATE_LIMIT_MAX: 5,
+      AUTH_RATE_LIMIT_WINDOW_MS: 900_000,
+      RATE_LIMIT_GLOBAL_MAX: 300,
+      RATE_LIMIT_GLOBAL_WINDOW_MS: 60_000,
+    })
+  })
+
+  it('reads overrides and refuses non-positive values', () => {
+    expect(parseEnv({ AUTH_RATE_LIMIT_MAX: '10' }).AUTH_RATE_LIMIT_MAX).toBe(10)
+    expect(() => parseEnv({ AUTH_RATE_LIMIT_MAX: '0' })).toThrow(/AUTH_RATE_LIMIT_MAX/)
   })
 })

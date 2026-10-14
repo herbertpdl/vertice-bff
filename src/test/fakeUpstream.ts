@@ -69,6 +69,13 @@ const users: { id: number; name: string; role: Role }[] = [
   { id: ids.clientA2, name: 'Client A2', role: 'CLIENT' },
 ]
 
+/** Every fixture user's password, except client A2's: a trainer-created client who hasn't set one yet. */
+export const FAKE_PASSWORD = 'correct-horse-battery'
+const withoutPassword = new Set<number>([ids.clientA2])
+
+/** What the fake `CreatePasswordSetupToken` issues; `SetPasswordWithToken` accepts only these. */
+export const setupTokenFor = (userId: number) => `issued-${userId}`
+
 const trainerClients: [trainerId: number, clientId: number][] = [
   [ids.trainerA, ids.clientA],
   [ids.trainerA, ids.clientA2],
@@ -108,7 +115,7 @@ export function bearer(actor: Actor) {
   return { authorization: `Bearer ${signToken({ id: u.id, name: u.name, email: emailOf(u.id), role: u.role })}` }
 }
 
-const emailOf = (id: number) => `user${id}@vertice.test`
+export const emailOf = (id: number) => `user${id}@vertice.test`
 const str = (n: number) => String(n)
 const today = new Date().toISOString().slice(0, 10)
 
@@ -208,12 +215,38 @@ const byNumber = (value: unknown, actual: number) => !Number(value) || Number(va
 
 const handlers: Record<string, (req: Req) => unknown> = {
   // UserService
-  ListUsers: () => ({ users: users.map(userRes) }),
+  ListUsers: (r) => ({
+    users: users.filter((u) => !r.role || r.role === 'ROLE_UNSPECIFIED' || r.role === u.role).map(userRes),
+  }),
   GetUser: (r) => userRes(find(users, r.id, 'User')),
   CreateUser: (r) => ({ ...userRes(users[3]!), id: '99', email: r.email, role: r.role }),
   UpdateUser: (r) => userRes(find(users, r.id, 'User')),
   DeleteUser: () => ({}),
   SetUserPassword: () => ({}),
+  VerifyCredentials: (r) => {
+    const user = users.find((u) => emailOf(u.id) === String(r.email).trim().toLowerCase())
+    if (!user || withoutPassword.has(user.id) || r.password !== FAKE_PASSWORD) {
+      upstreamError(status.UNAUTHENTICATED, 'Invalid email or password')
+    }
+    return userRes(user)
+  },
+  // Any id: the user `CreateClientForTrainer` just created (id 99) isn't in the fixtures.
+  CreatePasswordSetupToken: (r) => ({
+    token: setupTokenFor(Number(r.userId)),
+    expiresAt: '2099-01-01T00:00:00Z',
+  }),
+  SetPasswordWithToken: (r) => {
+    const userId = Number(/^issued-(\d+)$/.exec(String(r.token))?.[1])
+    if (!users.some((u) => u.id === userId)) {
+      upstreamError(status.UNAUTHENTICATED, 'Invalid or expired password setup token')
+    }
+    return {}
+  },
+  ListUsersWithoutPassword: (r) => ({
+    users: users
+      .filter((u) => withoutPassword.has(u.id) && (!r.role || r.role === 'ROLE_UNSPECIFIED' || r.role === u.role))
+      .map(userRes),
+  }),
 
   // ExerciseService
   ListMuscleGroups: () => ({ muscleGroups: [{ id: '1', name: 'Peito' }] }),
