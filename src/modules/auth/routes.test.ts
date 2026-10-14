@@ -10,6 +10,7 @@ import {
   emailOf,
   FAKE_PASSWORD,
   fakeGrpcCall,
+  fakeUpstreamProfile,
   ids,
   resetUpstreamCallers,
   setupTokenFor,
@@ -69,7 +70,7 @@ describe('auth routes', () => {
         exp: expect.any(Number),
       })
       // No user is behind the login call itself: VerifyCredentials goes out with the service token.
-      expect(upstreamCallers).toEqual([{ method: 'VerifyCredentials', caller: 'service' }])
+      expect(upstreamCallers).toEqual([{ method: 'VerifyCredentials', caller: 'service:bff' }])
     })
 
     it('answers a wrong password, an unknown email and a user without a password with the same 401 body', async () => {
@@ -101,19 +102,22 @@ describe('auth routes', () => {
       expect(grpcCallMock).not.toHaveBeenCalled()
     })
 
-    describe('with VERIFY_PASSWORDS=false (rollout window)', () => {
+    describe('with VERIFY_PASSWORDS=false (rollout window, against the API local profile)', () => {
       beforeEach(() => {
         env.VERIFY_PASSWORDS = false
+        fakeUpstreamProfile.local = true
       })
       afterEach(() => {
         env.VERIFY_PASSWORDS = true
+        fakeUpstreamProfile.local = false
       })
 
-      it('accepts any password for an existing email, via the old ListUsers lookup', async () => {
+      it('accepts any password for an existing email, via an anonymous ListUsers lookup', async () => {
+        resetUpstreamCallers()
         const res = await login(emailOf(ids.clientA2), 'anything')
         expect(res.statusCode, res.body).toBe(200)
         expect(res.json().user.id).toBe(ids.clientA2)
-        expect(upstreamMethods()).toEqual(['ListUsers'])
+        expect(upstreamCallers).toEqual([{ method: 'ListUsers', caller: 'anonymous' }])
       })
 
       it('still refuses an unknown email with the same 401 body', async () => {

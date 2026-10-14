@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance, RouteOptions } from 'fastify'
 import { buildApp } from '../app.js'
-import { grpcCall } from '../grpc/call.js'
+import { grpcCall, MissingCallerIdentityError, SERVICE_TOKEN_RPCS } from '../grpc/call.js'
 import { Metadata } from '@grpc/grpc-js'
 import { serviceToken, type Role } from '../lib/jwt.js'
 import {
+  API_SERVICE_SUBJECT_RPCS,
   bearer,
   emailOf,
   FAKE_PASSWORD,
@@ -716,19 +717,27 @@ describe('route authorization', () => {
     expect(new Set(tabled).size).toBe(tabled.length)
   })
 
-  it('the fake upstream refuses a call without a valid token, and the service token on a user RPC', async () => {
+  it('the fake upstream refuses a call without a valid token, and a service subject outside its RPCs', async () => {
     const withAuthorization = (value: string) => {
       const metadata = new Metadata()
       metadata.set('authorization', value)
-      return metadata
+      return { metadata }
     }
-    await expect(fakeGrpcCall(null, 'GetUser', { id: ids.clientA }, withAuthorization('Bearer forged'))).rejects.toThrow()
+    const user = { id: ids.clientA }
+    await expect(fakeGrpcCall(null, 'GetUser', user, withAuthorization('Bearer forged'))).rejects.toThrow()
+    await expect(fakeGrpcCall(null, 'GetUser', user)).rejects.toThrow(MissingCallerIdentityError)
+    await expect(fakeGrpcCall(null, 'GetUser', user, { anonymous: true })).rejects.toThrow(/without a bearer token/)
     await expect(
-      fakeGrpcCall(null, 'GetUser', { id: ids.clientA }, withAuthorization(`Bearer ${serviceToken()}`)),
-    ).rejects.toThrow(/service token instead of a user's/)
+      fakeGrpcCall(null, 'ListUsers', {}, withAuthorization(`Bearer ${serviceToken()}`)),
+    ).rejects.toThrow(/service:bff is not allowed to call ListUsers/)
     await expect(
-      fakeGrpcCall(null, 'VerifyCredentials', { email: emailOf(ids.clientA), password: FAKE_PASSWORD }),
+      fakeGrpcCall(null, 'VerifyCredentials', { email: emailOf(ids.clientA), password: FAKE_PASSWORD }, { asService: true }),
     ).resolves.toBeDefined()
+  })
+
+  it("pins the BFF's service-token RPCs to the API contract: exactly the three public auth RPCs", () => {
+    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual(['CreateUser', 'SetPasswordWithToken', 'VerifyCredentials'])
+    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual([...API_SERVICE_SUBJECT_RPCS['service:bff']!].sort())
   })
 
   describe.each(routes)('$route', (rc) => {
@@ -738,7 +747,7 @@ describe('route authorization', () => {
       it('is reachable without a token, and calls upstream with the service token', async () => {
         const res = await send(method, { ...rc.ok, as: undefined })
         expect(res.statusCode, res.body).toBeLessThan(300)
-        expect(upstreamCallers.map((c) => c.caller).filter((c) => c !== 'service')).toEqual([])
+        expect(upstreamCallers.map((c) => c.caller).filter((c) => c !== 'service:bff')).toEqual([])
       })
     } else {
       it('is 401 without a token and never calls upstream', async () => {

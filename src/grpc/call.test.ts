@@ -1,59 +1,91 @@
 import { describe, expect, it } from 'vitest'
 import * as grpc from '@grpc/grpc-js'
-import { grpcCall, mapGrpcError } from './call.js'
+import { grpcCall, mapGrpcError, MissingCallerIdentityError, SERVICE_TOKEN_RPCS, type GrpcCallOptions } from './call.js'
 import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
 import { serviceToken } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
 
-/** A stand-in grpc-js client that records the metadata of the last call. */
-function stubClient() {
-  const stub = {
-    seen: undefined as grpc.Metadata | undefined,
-    Ping(_request: unknown, metadata: grpc.Metadata, cb: (err: null, res: object) => void) {
-      stub.seen = metadata
-      cb(null, {})
-    },
+/** A stand-in grpc-js client exposing `method`, recording the metadata of its last call. */
+function stubClient(method: string) {
+  const stub: { seen?: grpc.Metadata } & Record<string, unknown> = {}
+  stub[method] = (_request: unknown, metadata: grpc.Metadata, cb: (err: null, res: object) => void) => {
+    stub.seen = metadata
+    cb(null, {})
   }
   return stub
 }
 
 describe('grpcCall', () => {
-  it('grpcCall attaches "authorization: Bearer <token>" metadata when the request context holds a token', async () => {
-    const stub = stubClient()
-    await requestContext.run({ bearerToken: 'abc' }, () =>
-      grpcCall(stub as unknown as grpc.Client, 'Ping', {}),
-    )
+  const callRpc = (method: string, options?: GrpcCallOptions) => {
+    const stub = stubClient(method)
+    return { stub, call: grpcCall(stub as unknown as grpc.Client, method, {}, options) }
+  }
+  const ping = (options?: GrpcCallOptions) => callRpc('Ping', options)
+
+  it('attaches "authorization: Bearer <token>" when the request context holds a verified token', async () => {
+    const { stub, call } = requestContext.run({ bearerToken: 'abc' }, () => ping())
+    await call
     expect(stub.seen!.get('authorization')).toEqual(['Bearer abc'])
   })
 
-  it('grpcCall sends the service token outside a request context (ops scripts)', async () => {
-    const stub = stubClient()
-    await grpcCall(stub as unknown as grpc.Client, 'Ping', {})
-    expect(stub.seen!.get('authorization')).toEqual([`Bearer ${serviceToken()}`])
+  it("prefers the user's token even where the service token is allowed (password change)", async () => {
+    const { stub, call } = requestContext.run({ bearerToken: 'abc' }, () =>
+      callRpc('VerifyCredentials', { asService: true }),
+    )
+    await call
+    expect(stub.seen!.get('authorization')).toEqual(['Bearer abc'])
   })
 
-  it('grpcCall sends the service token in a request no user token was verified for (login, register)', async () => {
-    const stub = stubClient()
-    await requestContext.run({}, () => grpcCall(stub as unknown as grpc.Client, 'Ping', {}))
-    expect(stub.seen!.get('authorization')).toEqual([`Bearer ${serviceToken()}`])
+  it('fails closed, without calling upstream, when there is no user and no explicit opt-in', async () => {
+    const outside = ping()
+    await expect(outside.call).rejects.toThrow(MissingCallerIdentityError)
+    expect(outside.stub.seen).toBeUndefined()
+
+    const inAnonymousRequest = requestContext.run({}, () => callRpc('VerifyCredentials'))
+    await expect(inAnonymousRequest.call).rejects.toThrow(/no verified user token and no explicit service opt-in/)
+    expect(inAnonymousRequest.stub.seen).toBeUndefined()
   })
 
-  it('grpcCall keeps caller-supplied metadata and adds the bearer to it', async () => {
-    const stub = stubClient()
+  it.each(['VerifyCredentials', 'CreateUser', 'SetPasswordWithToken'])(
+    'sends the service token on %s with asService and no user',
+    async (method) => {
+      const { stub, call } = requestContext.run({}, () => callRpc(method, { asService: true }))
+      await call
+      expect(stub.seen!.get('authorization')).toEqual([`Bearer ${serviceToken()}`])
+    },
+  )
+
+  it('refuses asService on any other RPC', async () => {
+    for (const method of ['ListUsers', 'CreatePasswordSetupToken', 'GetUser', 'Ping']) {
+      const { stub, call } = callRpc(method, { asService: true })
+      await expect(call, method).rejects.toThrow(/service token is not allowed on this RPC/)
+      expect(stub.seen).toBeUndefined()
+    }
+  })
+
+  it('allows the service token on exactly the three public auth RPCs', () => {
+    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual(['CreateUser', 'SetPasswordWithToken', 'VerifyCredentials'])
+  })
+
+  it('sends no authorization only with an explicit anonymous opt-in', async () => {
+    const { stub, call } = ping({ anonymous: true })
+    await call
+    expect(stub.seen!.get('authorization')).toEqual([])
+  })
+
+  it('keeps caller-supplied metadata, and a caller-supplied authorization as is', async () => {
     const metadata = new grpc.Metadata()
     metadata.set('x-test', '1')
-    await requestContext.run({ bearerToken: 'abc' }, () =>
-      grpcCall(stub as unknown as grpc.Client, 'Ping', {}, metadata),
-    )
-    expect(stub.seen!.get('x-test')).toEqual(['1'])
-    expect(stub.seen!.get('authorization')).toEqual(['Bearer abc'])
+    const withUser = requestContext.run({ bearerToken: 'abc' }, () => ping({ metadata }))
+    await withUser.call
+    expect(withUser.stub.seen!.get('x-test')).toEqual(['1'])
+    expect(withUser.stub.seen!.get('authorization')).toEqual(['Bearer abc'])
 
     const explicit = new grpc.Metadata()
     explicit.set('authorization', 'Bearer caller-supplied')
-    await requestContext.run({ bearerToken: 'abc' }, () =>
-      grpcCall(stub as unknown as grpc.Client, 'Ping', {}, explicit),
-    )
-    expect(stub.seen!.get('authorization')).toEqual(['Bearer caller-supplied'])
+    const ops = ping({ metadata: explicit })
+    await ops.call
+    expect(ops.stub.seen!.get('authorization')).toEqual(['Bearer caller-supplied'])
   })
 })
 
