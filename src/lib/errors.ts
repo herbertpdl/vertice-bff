@@ -56,6 +56,3 @@ export class TooManyRequestsError extends HttpError {
     super(429, message, 'RATE_LIMITED')
   }
 }
-
-// TEMPORARY: deliberate type error to prove the CI gate fails. Reverted in the next commit.
-export const ciGateProbe: number = 'not a number'
