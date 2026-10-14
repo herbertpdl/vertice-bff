@@ -1,10 +1,21 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { status } from '@grpc/grpc-js'
+import jwt from 'jsonwebtoken'
 import { buildApp } from '../../app.js'
 import { env } from '../../config/env.js'
 import { grpcCall, mapGrpcError } from '../../grpc/call.js'
-import { bearer, emailOf, FAKE_PASSWORD, fakeGrpcCall, ids, setupTokenFor } from '../../test/fakeUpstream.js'
+import {
+  bearer,
+  emailOf,
+  FAKE_PASSWORD,
+  fakeGrpcCall,
+  fakeUpstreamProfile,
+  ids,
+  resetUpstreamCallers,
+  setupTokenFor,
+  upstreamCallers,
+} from '../../test/fakeUpstream.js'
 
 // Keep the real mapGrpcError: the fake upstream raises its errors through it.
 vi.mock('../../grpc/call.js', async (importOriginal) => ({
@@ -44,6 +55,24 @@ describe('auth routes', () => {
       expect(upstreamRequest('VerifyCredentials')).toEqual({ email: emailOf(ids.clientA), password: FAKE_PASSWORD })
     })
 
+    it('returns name and email in the body but keeps them out of the token, and logs in as the BFF', async () => {
+      resetUpstreamCallers()
+      const res = await login(emailOf(ids.clientA), FAKE_PASSWORD)
+      const { token, user } = res.json()
+      expect(user).toEqual({ id: ids.clientA, name: 'Client A', email: emailOf(ids.clientA), role: 'CLIENT' })
+      expect(jwt.decode(token)).toEqual({
+        sub: String(ids.clientA),
+        id: ids.clientA,
+        role: 'CLIENT',
+        iss: 'vertice-bff',
+        aud: 'vertice-api',
+        iat: expect.any(Number),
+        exp: expect.any(Number),
+      })
+      // No user is behind the login call itself: VerifyCredentials goes out with the service token.
+      expect(upstreamCallers).toEqual([{ method: 'VerifyCredentials', caller: 'service:bff' }])
+    })
+
     it('answers a wrong password, an unknown email and a user without a password with the same 401 body', async () => {
       const wrong = await login(emailOf(ids.clientA), 'wrong-password')
       const unknown = await login('nobody@vertice.test', FAKE_PASSWORD)
@@ -73,19 +102,22 @@ describe('auth routes', () => {
       expect(grpcCallMock).not.toHaveBeenCalled()
     })
 
-    describe('with VERIFY_PASSWORDS=false (rollout window)', () => {
+    describe('with VERIFY_PASSWORDS=false (rollout window, against the API local profile)', () => {
       beforeEach(() => {
         env.VERIFY_PASSWORDS = false
+        fakeUpstreamProfile.local = true
       })
       afterEach(() => {
         env.VERIFY_PASSWORDS = true
+        fakeUpstreamProfile.local = false
       })
 
-      it('accepts any password for an existing email, via the old ListUsers lookup', async () => {
+      it('accepts any password for an existing email, via an anonymous ListUsers lookup', async () => {
+        resetUpstreamCallers()
         const res = await login(emailOf(ids.clientA2), 'anything')
         expect(res.statusCode, res.body).toBe(200)
         expect(res.json().user.id).toBe(ids.clientA2)
-        expect(upstreamMethods()).toEqual(['ListUsers'])
+        expect(upstreamCallers).toEqual([{ method: 'ListUsers', caller: 'anonymous' }])
       })
 
       it('still refuses an unknown email with the same 401 body', async () => {

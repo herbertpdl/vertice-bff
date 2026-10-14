@@ -14,11 +14,15 @@ vi.mock('../grpc/call.js', async (importOriginal) => ({
 }))
 const grpcCallMock = vi.mocked(grpcCall)
 
-const user = (actor: Actor): AuthUser => ({ ...userOf(actor), email: `user${userOf(actor).id}@vertice.test` })
+const user = (actor: Actor): AuthUser => ({ id: userOf(actor).id, role: userOf(actor).role })
 
 /** Runs `fn` the way a request would: with the caller's verified token in the request context. */
 const asCaller = <T>(actor: Actor, fn: () => Promise<T>) =>
   requestContext.run({ bearerToken: bearer(actor).authorization.slice('Bearer '.length) }, fn)
+
+/** `assertOwnsWorkoutLog` as `actor`, inside that actor's request context. */
+const ownsLog = (actor: Actor, workoutLogId: number) =>
+  asCaller(actor, () => assertOwnsWorkoutLog(user(actor), workoutLogId))
 
 const upstreamMethods = () => grpcCallMock.mock.calls.map(([, method]) => method)
 
@@ -29,37 +33,39 @@ beforeEach(() => {
 
 describe('assertOwnsWorkoutLog', () => {
   it("lets a TRAINER through on a log under their own plan and returns the log", async () => {
-    const log = await assertOwnsWorkoutLog(user('trainerA'), ids.workoutLogA)
+    const log = await ownsLog('trainerA', ids.workoutLogA)
     expect(log).toMatchObject({ id: ids.workoutLogA, workoutId: ids.workoutA, clientId: ids.clientA })
     expect(upstreamMethods()).toEqual(['GetWorkoutLog', 'GetWorkout', 'GetTrainingPlan'])
   })
 
   it("refuses a TRAINER on a log under another trainer's plan", async () => {
-    await expect(assertOwnsWorkoutLog(user('trainerA'), ids.workoutLogB)).rejects.toThrow(ForbiddenError)
-    await expect(assertOwnsWorkoutLog(user('trainerB'), ids.workoutLogA)).rejects.toThrow(ForbiddenError)
+    await expect(ownsLog('trainerA', ids.workoutLogB)).rejects.toThrow(ForbiddenError)
+    await expect(ownsLog('trainerB', ids.workoutLogA)).rejects.toThrow(ForbiddenError)
   })
 
   it("decides a CLIENT on the log's clientId alone", async () => {
-    await expect(assertOwnsWorkoutLog(user('clientA'), ids.workoutLogA)).resolves.toMatchObject({ id: ids.workoutLogA })
-    await expect(assertOwnsWorkoutLog(user('clientA'), ids.workoutLogB)).rejects.toThrow(ForbiddenError)
+    await expect(ownsLog('clientA', ids.workoutLogA)).resolves.toMatchObject({ id: ids.workoutLogA })
+    await expect(ownsLog('clientA', ids.workoutLogB)).rejects.toThrow(ForbiddenError)
     expect(upstreamMethods().every((m) => m === 'GetWorkoutLog')).toBe(true)
   })
 
   it('lets an ADMIN through on any log', async () => {
-    await expect(assertOwnsWorkoutLog(user('admin'), ids.workoutLogB)).resolves.toMatchObject({ id: ids.workoutLogB })
+    await expect(ownsLog('admin', ids.workoutLogB)).resolves.toMatchObject({ id: ids.workoutLogB })
   })
 })
 
 describe('assertExerciseSetInWorkout', () => {
   it('answers a refused set lookup with the same 400 as a missing or foreign one', async () => {
     const expected = { statusCode: 400, message: 'exerciseSetId does not belong to this workout log' }
+    const inWorkoutA = (exerciseSetId: number) =>
+      asCaller('trainerA', () => assertExerciseSetInWorkout(exerciseSetId, ids.workoutA))
     grpcCallMock.mockImplementationOnce(async () => {
       throw mapGrpcError({ code: grpc.status.PERMISSION_DENIED, details: 'You do not have access to exercise set 400' })
     })
-    await expect(assertExerciseSetInWorkout(ids.exerciseSetA, ids.workoutA)).rejects.toMatchObject(expected)
-    await expect(assertExerciseSetInWorkout(9999, ids.workoutA)).rejects.toMatchObject(expected)
-    await expect(assertExerciseSetInWorkout(ids.exerciseSetB, ids.workoutA)).rejects.toMatchObject(expected)
-    await expect(assertExerciseSetInWorkout(ids.exerciseSetA, ids.workoutA)).resolves.toBeUndefined()
+    await expect(inWorkoutA(ids.exerciseSetA)).rejects.toMatchObject(expected)
+    await expect(inWorkoutA(9999)).rejects.toMatchObject(expected)
+    await expect(inWorkoutA(ids.exerciseSetB)).rejects.toMatchObject(expected)
+    await expect(inWorkoutA(ids.exerciseSetA)).resolves.toBeUndefined()
   })
 })
 

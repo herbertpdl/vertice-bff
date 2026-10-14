@@ -9,7 +9,7 @@ import { signToken, type Role } from '../../lib/jwt.js'
 describe('exercise routes', () => {
   let app: FastifyInstance
   const bearer = (role: Role) => ({
-    authorization: `Bearer ${signToken({ id: 1, name: 'U', email: 'u@vertice.test', role })}`,
+    authorization: `Bearer ${signToken({ id: 1, role })}`,
   })
 
   beforeAll(async () => {

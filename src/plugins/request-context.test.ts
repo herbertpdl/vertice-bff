@@ -10,7 +10,7 @@ import { signToken } from '../lib/jwt.js'
 // awaits) reads — including after body parsing on a POST.
 describe('request context plugin', () => {
   let app: FastifyInstance
-  const token = signToken({ id: 1, name: 'T', email: 't@vertice.test', role: 'TRAINER' })
+  const token = signToken({ id: 1, role: 'TRAINER' })
   const seen = async () => {
     await Promise.resolve()
     return { bearerToken: requestContext.getStore()?.bearerToken ?? null }

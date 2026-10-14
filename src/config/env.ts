@@ -90,7 +90,9 @@ const envSchema = z
     /**
      * Login checks the password through vertice-api's `VerifyCredentials`. `false` restores the
      * old email-only login for the rollout window (until every client has a setup link) and is
-     * refused unless NODE_ENV is development or test.
+     * refused unless NODE_ENV is development or test. That login finds the user through
+     * `ListUsers` sent with no token, so it only works against vertice-api's `local` profile: the
+     * BFF's service token is deliberately not allowed to list users.
      */
     VERIFY_PASSWORDS: envBoolean(true),
     TRUST_PROXY: z

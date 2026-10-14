@@ -60,7 +60,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   })
   if (options.onRoute) app.addHook('onRoute', options.onRoute)
   if (!env.VERIFY_PASSWORDS) {
-    app.log.warn('VERIFY_PASSWORDS=false: login accepts any password for an existing email (dev/test only)')
+    app.log.warn(
+      'VERIFY_PASSWORDS=false: login accepts any password for an existing email ' +
+        '(dev/test only; needs the vertice-api local profile)',
+    )
   }
 
   await app.register(cors, { origin: env.CORS_ORIGIN, credentials: true })

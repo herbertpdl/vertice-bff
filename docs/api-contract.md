@@ -5,6 +5,11 @@ Base URL (dev): `http://localhost:3000/api`
 All endpoints except `/auth/login`, `/auth/register` and `/auth/password/setup` require:
 `Authorization: Bearer <token>`
 
+The token is the one `/auth/login` or `/auth/register` returned. Treat it as opaque: it carries
+only the user id and role (scoped `iss: vertice-bff`, `aud: vertice-api`, with an expiry), not the
+name or email. Read those from the login/register response or `GET /auth/me`. A token issued
+before the scoping change, or by anything other than this BFF, gets a `401` (log in again).
+
 All error responses have the shape:
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "...", "details": {} } }

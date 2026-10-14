@@ -1,46 +1,89 @@
 import * as grpc from '@grpc/grpc-js'
 import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
+import { serviceToken } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
 
 /**
+ * The only RPCs the BFF's runtime service token (`serviceToken()`) may be sent on: the public
+ * auth routes, where no user is behind the call (login, register, password setup). vertice-api
+ * allows `service:bff` on exactly these.
+ */
+export const SERVICE_TOKEN_RPCS: ReadonlySet<string> = new Set(['VerifyCredentials', 'CreateUser', 'SetPasswordWithToken'])
+
+export interface GrpcCallOptions {
+  /** Extra metadata. An `authorization` already in it is sent as is (the ops script's own token). */
+  metadata?: grpc.Metadata
+  /**
+   * With no verified user token in the request context, send the BFF's service token instead.
+   * Only for an RPC in `SERVICE_TOKEN_RPCS`; a verified user token still wins.
+   */
+  asService?: boolean
+  /**
+   * With no verified user token, send no `authorization` at all. Only the `VERIFY_PASSWORDS=false`
+   * dev login uses it, and it only works against vertice-api's `local` profile.
+   */
+  anonymous?: boolean
+}
+
+/** Thrown, before anything goes upstream, when a call has no caller identity it may use. */
+export class MissingCallerIdentityError extends Error {
+  constructor(method: string, reason: string) {
+    super(`grpcCall ${method}: ${reason}`)
+    this.name = 'MissingCallerIdentityError'
+  }
+}
+
+/**
  * Promisifies a grpc-js callback-style unary call and maps gRPC status codes to HttpErrors.
- * The caller's verified bearer token, when the call runs inside a request, is attached as
- * `authorization` metadata (see `withCallerIdentity`).
+ * Every call carries the caller's identity as `authorization` metadata (see
+ * `withCallerIdentity`); a call with none fails closed instead of going out.
  */
 export function grpcCall<TRequest, TResponse>(
   client: grpc.Client,
   method: string,
   request: TRequest,
-  metadata: grpc.Metadata = new grpc.Metadata(),
+  options: GrpcCallOptions = {},
 ): Promise<TResponse> {
   return new Promise((resolve, reject) => {
+    const metadata = withCallerIdentity(method, options)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(client as any)[method](
-      request,
-      withCallerIdentity(metadata),
-      (error: grpc.ServiceError | null, response: TResponse) => {
-        if (error) {
-          reject(mapGrpcError(error))
-          return
-        }
-        resolve(response)
-      },
-    )
+    ;(client as any)[method](request, metadata, (error: grpc.ServiceError | null, response: TResponse) => {
+      if (error) {
+        reject(mapGrpcError(error))
+        return
+      }
+      resolve(response)
+    })
   })
 }
 
 /**
- * Attaches `authorization: Bearer <token>` from the request context, so vertice-api can tell
- * who is calling. Outside a request, or before `app.authenticate` has verified a token
- * (`/health`, `/auth/login`, `/auth/register`), nothing is attached and the call is anonymous.
- * A caller-supplied `authorization` is never overwritten. Mutates and returns `metadata`.
+ * Returns the metadata to send, with `authorization: Bearer <token>` so vertice-api can tell who
+ * is calling, in this order:
+ * 1. an `authorization` the caller put in `options.metadata` (the ops script's `service:ops`);
+ * 2. the user token `app.authenticate` verified and put in the request context;
+ * 3. the BFF's service token, only with `asService` and only on `SERVICE_TOKEN_RPCS`;
+ * 4. nothing, only with `anonymous` (dev login against the API's `local` profile).
+ * Anything else throws `MissingCallerIdentityError`: a call without a user never silently runs
+ * as the BFF. An unverified `Authorization` header is never relayed.
  */
-export function withCallerIdentity(metadata: grpc.Metadata): grpc.Metadata {
-  const token = requestContext.getStore()?.bearerToken
-  if (token && metadata.get('authorization').length === 0) {
-    metadata.set('authorization', `Bearer ${token}`)
+export function withCallerIdentity(method: string, options: GrpcCallOptions = {}): grpc.Metadata {
+  const metadata = options.metadata ?? new grpc.Metadata()
+  if (metadata.get('authorization').length > 0) return metadata
+  const userToken = requestContext.getStore()?.bearerToken
+  if (userToken) {
+    metadata.set('authorization', `Bearer ${userToken}`)
+    return metadata
   }
-  return metadata
+  if (options.asService) {
+    if (!SERVICE_TOKEN_RPCS.has(method)) {
+      throw new MissingCallerIdentityError(method, 'the service token is not allowed on this RPC')
+    }
+    metadata.set('authorization', `Bearer ${serviceToken()}`)
+    return metadata
+  }
+  if (options.anonymous) return metadata
+  throw new MissingCallerIdentityError(method, 'no verified user token and no explicit service opt-in')
 }
 
 /** Maps a gRPC status to the HttpError the global error handler will render. Exported for tests. */

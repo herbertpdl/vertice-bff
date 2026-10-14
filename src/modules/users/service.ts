@@ -1,5 +1,5 @@
 import { userClient } from '../../grpc/clients.js'
-import { grpcCall } from '../../grpc/call.js'
+import { grpcCall, type GrpcCallOptions } from '../../grpc/call.js'
 import { HttpError, UnauthorizedError } from '../../lib/errors.js'
 
 export type Role = 'ADMIN' | 'TRAINER' | 'CLIENT'
@@ -26,10 +26,13 @@ export function toUser(r: UserResponse): User {
   return { id: Number(r.id), name: r.name, email: r.email, cpf: r.cpf, cref: r.cref, role: r.role }
 }
 
-export async function listUsers(role?: Role): Promise<User[]> {
-  const res = await grpcCall<{ role: string }, { users: UserResponse[] }>(userClient, 'ListUsers', {
-    role: role ?? 'ROLE_UNSPECIFIED',
-  })
+export async function listUsers(role?: Role, options?: GrpcCallOptions): Promise<User[]> {
+  const res = await grpcCall<{ role: string }, { users: UserResponse[] }>(
+    userClient,
+    'ListUsers',
+    { role: role ?? 'ROLE_UNSPECIFIED' },
+    options,
+  )
   return res.users.map(toUser)
 }
 
@@ -39,11 +42,13 @@ export async function getUser(id: number): Promise<User> {
 }
 
 /**
- * Loads every user to find one email. Only the `VERIFY_PASSWORDS=false` rollout path of login
- * still uses it; everything else goes through `verifyCredentials`.
+ * Loads every user to find one email. Only the `VERIFY_PASSWORDS=false` dev login still uses it;
+ * everything else goes through `verifyCredentials`. It calls `ListUsers` with no token at all
+ * (`anonymous`), which only vertice-api's `local` profile accepts: the BFF's service token is
+ * deliberately not allowed to list users.
  */
 export async function findUserByEmail(email: string): Promise<User | undefined> {
-  const users = await listUsers()
+  const users = await listUsers(undefined, { anonymous: true })
   return users.find((u) => u.email.toLowerCase() === email.toLowerCase())
 }
 
@@ -52,14 +57,17 @@ export const INVALID_CREDENTIALS_MESSAGE = 'Invalid email or password'
 
 /**
  * Checks an email/password pair upstream (`VerifyCredentials`, bcrypt + a dummy compare for an
- * unknown email). Every refusal becomes the same `UnauthorizedError`.
+ * unknown email). Every refusal becomes the same `UnauthorizedError`. Login has no user yet, so
+ * it goes out with the service token; a password change keeps the user's own token.
  */
 export async function verifyCredentials(email: string, password: string): Promise<User> {
   try {
-    const res = await grpcCall<{ email: string; password: string }, UserResponse>(userClient, 'VerifyCredentials', {
-      email,
-      password,
-    })
+    const res = await grpcCall<{ email: string; password: string }, UserResponse>(
+      userClient,
+      'VerifyCredentials',
+      { email, password },
+      { asService: true },
+    )
     return toUser(res)
   } catch (err) {
     if (err instanceof HttpError && err.statusCode === 401) throw new UnauthorizedError(INVALID_CREDENTIALS_MESSAGE)
@@ -83,18 +91,22 @@ export interface PasswordSetupToken {
 }
 
 /** Issues a first-access token; any earlier unused token of the user stops working. */
-export async function createPasswordSetupToken(userId: number): Promise<PasswordSetupToken> {
+export async function createPasswordSetupToken(userId: number, options?: GrpcCallOptions): Promise<PasswordSetupToken> {
   const res = await grpcCall<{ userId: number }, { token: string; expiresAt: string }>(
     userClient,
     'CreatePasswordSetupToken',
     { userId },
+    options,
   )
   return { token: res.token, expiresAt: res.expiresAt }
 }
 
-/** Sets the password of the token's user and consumes the token. A bad token rejects with a 401 HttpError. */
+/**
+ * Sets the password of the token's user and consumes the token. A bad token rejects with a 401
+ * HttpError. Public (first access), so it goes out with the service token.
+ */
 export async function setPasswordWithToken(token: string, password: string): Promise<void> {
-  await grpcCall(userClient, 'SetPasswordWithToken', { token, password })
+  await grpcCall(userClient, 'SetPasswordWithToken', { token, password }, { asService: true })
 }
 
 export interface UserCreateInput {
@@ -106,12 +118,14 @@ export interface UserCreateInput {
   role: Role
 }
 
+/** Public registration: no user yet, so it goes out with the service token. */
 export async function createUser(input: UserCreateInput): Promise<User> {
-  const res = await grpcCall<UserCreateInput, UserResponse>(userClient, 'CreateUser', {
-    ...input,
-    cpf: input.cpf ?? '',
-    cref: input.cref ?? '',
-  })
+  const res = await grpcCall<UserCreateInput, UserResponse>(
+    userClient,
+    'CreateUser',
+    { ...input, cpf: input.cpf ?? '', cref: input.cref ?? '' },
+    { asService: true },
+  )
   return toUser(res)
 }
 
