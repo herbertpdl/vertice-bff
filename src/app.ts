@@ -1,7 +1,8 @@
-import Fastify, { type RouteOptions } from 'fastify'
+import Fastify, { type FastifyBaseLogger, type RouteOptions } from 'fastify'
 import cors from '@fastify/cors'
 import { env } from './config/env.js'
 import errorHandler from './plugins/error-handler.js'
+import securityHeaders from './plugins/security-headers.js'
 import requestContextPlugin from './plugins/request-context.js'
 import authenticatePlugin from './plugins/authenticate.js'
 import rateLimitPlugin, { type RateLimitSettings } from './plugins/rate-limit.js'
@@ -31,6 +32,8 @@ export interface BuildAppOptions {
   rateLimits?: Partial<RateLimitSettings>
   /** Overrides `TRUST_PROXY` (tests). */
   trustProxy?: boolean | string
+  /** Replaces the env-configured logger (tests read the audit and upstream-error lines from it). */
+  loggerInstance?: FastifyBaseLogger
 }
 
 /** Network buckets default to this many times the per-IP/per-email limit. */
@@ -51,10 +54,14 @@ function rateLimitSettings(overrides: Partial<RateLimitSettings> = {}): RateLimi
 
 export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({
-    logger: {
-      level: env.LOG_LEVEL,
-      transport: env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
-    },
+    ...(options.loggerInstance
+      ? { loggerInstance: options.loggerInstance }
+      : {
+          logger: {
+            level: env.LOG_LEVEL,
+            transport: env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
+          },
+        }),
     // Rate limits key on req.ip, which is only the real client behind a proxy when this is set.
     trustProxy: options.trustProxy ?? env.TRUST_PROXY,
   })
@@ -66,6 +73,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     )
   }
 
+  await app.register(securityHeaders)
   await app.register(cors, { origin: env.CORS_ORIGIN, credentials: true })
   await app.register(errorHandler)
   await app.register(requestContextPlugin)

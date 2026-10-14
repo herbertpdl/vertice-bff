@@ -26,14 +26,71 @@ export function toUser(r: UserResponse): User {
   return { id: Number(r.id), name: r.name, email: r.email, cpf: r.cpf, cref: r.cref, role: r.role }
 }
 
-export async function listUsers(role?: Role, options?: GrpcCallOptions): Promise<User[]> {
-  const res = await grpcCall<{ role: string }, { users: UserResponse[] }>(
+/** `GET /auth/me`: the caller's own account, without their CPF (no screen shows it, P1-03). */
+export interface Me {
+  id: number
+  name: string
+  email: string
+  cref: string
+  role: Role
+}
+
+export function toMe(user: User): Me {
+  return { id: user.id, name: user.name, email: user.email, cref: user.cref, role: user.role }
+}
+
+export interface UserPage {
+  users: User[]
+  /** Pass back as `pageToken` for the next page; empty on the last page. Opaque. */
+  nextPageToken: string
+}
+
+/** vertice-api's `ListUsers` page cap (and default): asking for more is lowered to this. */
+export const LIST_USERS_MAX_PAGE_SIZE = 100
+
+/** One page of `ListUsers` (contact view: id, name, role, email), ordered by id. */
+export async function listUsersPage(
+  role: Role | undefined,
+  page: { pageSize?: number; pageToken?: string } = {},
+  options?: GrpcCallOptions,
+): Promise<UserPage> {
+  const res = await grpcCall<
+    { role: string; pageSize: number; pageToken: string },
+    { users: UserResponse[]; nextPageToken?: string }
+  >(
     userClient,
     'ListUsers',
-    { role: role ?? 'ROLE_UNSPECIFIED' },
+    { role: role ?? 'ROLE_UNSPECIFIED', pageSize: page.pageSize ?? LIST_USERS_MAX_PAGE_SIZE, pageToken: page.pageToken ?? '' },
     options,
   )
-  return res.users.map(toUser)
+  return { users: res.users.map(toUser), nextPageToken: res.nextPageToken ?? '' }
+}
+
+/**
+ * Pages through `ListUsers` until `next_page_token` is empty (vertice-api returns at most 100 users
+ * per call). `options` is called once per page, so a short-lived caller token (the ops script's) is
+ * fresh on each call. A token that comes back twice would loop forever, so it throws instead.
+ */
+export async function* userPages(
+  role: Role | undefined,
+  options: () => GrpcCallOptions | undefined = () => undefined,
+): AsyncGenerator<User[]> {
+  const seen = new Set<string>()
+  let pageToken = ''
+  do {
+    const page = await listUsersPage(role, { pageToken }, options())
+    yield page.users
+    pageToken = page.nextPageToken
+    if (seen.has(pageToken)) throw new Error('ListUsers returned the same next_page_token twice')
+    seen.add(pageToken)
+  } while (pageToken)
+}
+
+/** Every user of `role` (every role when omitted), across all `ListUsers` pages. */
+export async function listAllUsers(role?: Role, options?: () => GrpcCallOptions | undefined): Promise<User[]> {
+  const users: User[] = []
+  for await (const page of userPages(role, options)) users.push(...page)
+  return users
 }
 
 export async function getUser(id: number): Promise<User> {
@@ -42,14 +99,18 @@ export async function getUser(id: number): Promise<User> {
 }
 
 /**
- * Loads every user to find one email. Only the `VERIFY_PASSWORDS=false` dev login still uses it;
- * everything else goes through `verifyCredentials`. It calls `ListUsers` with no token at all
- * (`anonymous`), which only vertice-api's `local` profile accepts: the BFF's service token is
+ * Pages through every user to find one email. Only the `VERIFY_PASSWORDS=false` dev login still
+ * uses it; everything else goes through `verifyCredentials`. It calls `ListUsers` with no token at
+ * all (`anonymous`), which only vertice-api's `local` profile accepts: the BFF's service token is
  * deliberately not allowed to list users.
  */
 export async function findUserByEmail(email: string): Promise<User | undefined> {
-  const users = await listUsers(undefined, { anonymous: true })
-  return users.find((u) => u.email.toLowerCase() === email.toLowerCase())
+  const wanted = email.toLowerCase()
+  for await (const page of userPages(undefined, () => ({ anonymous: true }))) {
+    const user = page.find((u) => u.email.toLowerCase() === wanted)
+    if (user) return user
+  }
+  return undefined
 }
 
 /** The same message for every failure, so it never says whether the email exists. */

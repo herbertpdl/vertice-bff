@@ -142,7 +142,20 @@ const routes: RouteCase[] = [
     route: 'GET /api/clients/:id',
     roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/clients/${ids.clientA}` },
-    denied: [{ as: 'trainerA', url: `/api/clients/${ids.clientB}`, why: "path: another trainer's client" }],
+    denied: [
+      { as: 'trainerA', url: `/api/clients/${ids.clientB}`, why: "path: another trainer's client" },
+      {
+        as: 'trainerA',
+        url: `/api/clients/${ids.clientB}?reveal=cpf`,
+        why: "query: revealing another trainer's client's CPF",
+      },
+      {
+        as: 'trainerA',
+        url: `/api/clients/${ids.clientA}?reveal=email`,
+        why: 'query: a reveal of anything but cpf',
+        status: 400,
+      },
+    ],
   },
   {
     route: 'GET /api/clients/:id/overview',
@@ -869,6 +882,26 @@ describe('route authorization', () => {
   ])('lets ADMIN read GET %s', async (url) => {
     const res = await send('GET', { as: 'admin', url })
     expect(res.statusCode, res.body).toBe(200)
+  })
+
+  // The CPF reveal is TRAINER-only and goes through the same ownership check as the masked read:
+  // no other role reaches upstream with it, not even a CLIENT asking for their own CPF.
+  it.each([
+    ['admin', ids.clientA],
+    ['clientA', ids.clientA],
+    ['clientB', ids.clientA],
+  ] as const)('refuses GET /clients/:id?reveal=cpf to %s by role, before any upstream call', async (as, clientId) => {
+    const res = await send('GET', { as, url: `/api/clients/${clientId}?reveal=cpf` })
+    expect(res.statusCode).toBe(403)
+    expect(res.json().error.message).toMatch(/^Requires role/)
+    expect(grpcCallMock).not.toHaveBeenCalled()
+  })
+
+  it("lets the client's own trainer reveal the CPF", async () => {
+    const res = await send('GET', { as: 'trainerA', url: `/api/clients/${ids.clientA}?reveal=cpf` })
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json().cpf).toMatch(/^\d{11}$/)
+    expect(upstreamMethods()).toEqual(['IsTrainersClient', 'GetUser'])
   })
 
   describe.each(routes)('$route', (rc) => {

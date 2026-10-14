@@ -1,6 +1,6 @@
 import * as grpc from '@grpc/grpc-js'
 import { DEV_NODE_ENVS, env } from '../config/env.js'
-import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
+import { ConflictError, ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
 import { serviceToken } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
 
@@ -51,6 +51,7 @@ export function grpcCall<TRequest, TResponse>(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(client as any)[method](request, metadata, (error: grpc.ServiceError | null, response: TResponse) => {
       if (error) {
+        logUpstreamError(method, error)
         reject(mapGrpcError(error))
         return
       }
@@ -97,21 +98,40 @@ export function withCallerIdentity(method: string, options: GrpcCallOptions = {}
 /** The message of every 401 caused by vertice-api refusing the caller's identity. */
 export const SESSION_INVALID_MESSAGE = 'Session no longer valid'
 
+/**
+ * The client-facing message per upstream status. Only `INVALID_ARGUMENT` relays vertice-api's
+ * text (its field errors, `field: message`, which the forms show); every other status gets a fixed
+ * message, so nothing upstream wrote (an id, an email or CPF in a duplicate error, Java exception
+ * text from `UNKNOWN`/`INTERNAL`) reaches a client. The upstream text goes to the log instead
+ * (`logUpstreamError`). Clients key on the `code`, never on the message.
+ */
+export const UPSTREAM_MESSAGES = {
+  invalidArgument: 'Invalid request',
+  preconditionFailed: "The resource's current state does not allow this request",
+  // One message for a taken email and a taken CPF, so it never says which of the two exists.
+  alreadyExists: 'Email or CPF already in use',
+  permissionDenied: 'You do not have access to this resource',
+  unavailable: 'vertice-api is unavailable',
+  upstreamError: 'Upstream error',
+} as const
+
 /** Maps a gRPC status to the HttpError the global error handler will render. Exported for tests. */
 export function mapGrpcError(error: Pick<grpc.ServiceError, 'code' | 'details'>): HttpError {
   switch (error.code) {
     case grpc.status.NOT_FOUND:
-      return new NotFoundError(error.details || 'Resource')
+      return new NotFoundError('Resource') // "Resource not found"
+    // vertice-api's validation messages (`name: must not be blank`): known-safe, and the forms need them.
     case grpc.status.INVALID_ARGUMENT:
-      return new ValidationError(error.details || 'Invalid request')
+      return new ValidationError(error.details || UPSTREAM_MESSAGES.invalidArgument)
     // "Valid request, but the resource's state forbids it" (e.g. replacing a
     // workout's exercises after a client recorded data under it) — the web must
     // tell this apart from a malformed payload, so it is not folded into 400.
-    // The upstream message is passed through verbatim.
     case grpc.status.FAILED_PRECONDITION:
-      return new PreconditionFailedError(error.details || 'Precondition failed')
+      return new PreconditionFailedError(UPSTREAM_MESSAGES.preconditionFailed)
+    // A duplicate email or CPF. vertice-api's own text no longer has the value, but the BFF's
+    // message is fixed anyway: register is public, and the answer must not confirm which one exists.
     case grpc.status.ALREADY_EXISTS:
-      return new HttpError(409, error.details || 'Already exists', 'CONFLICT')
+      return new ConflictError(UPSTREAM_MESSAGES.alreadyExists)
     // vertice-api refused the forwarded identity, e.g. "Session no longer valid" for a user who was
     // deleted or given another role since the token was minted. Clients treat a 401 as logout, so
     // the body is fixed: a stable code and message, nothing from upstream. (The password routes
@@ -119,10 +139,47 @@ export function mapGrpcError(error: Pick<grpc.ServiceError, 'code' | 'details'>)
     case grpc.status.UNAUTHENTICATED:
       return new HttpError(401, SESSION_INVALID_MESSAGE, 'UNAUTHENTICATED')
     case grpc.status.PERMISSION_DENIED:
-      return new ForbiddenError(error.details || 'Forbidden')
+      return new ForbiddenError(UPSTREAM_MESSAGES.permissionDenied)
     case grpc.status.UNAVAILABLE:
-      return new HttpError(503, 'vertice-api is unavailable', 'UPSTREAM_UNAVAILABLE')
+      return new HttpError(503, UPSTREAM_MESSAGES.unavailable, 'UPSTREAM_UNAVAILABLE')
+    // UNKNOWN, INTERNAL and anything else: whatever upstream said stays in the log.
     default:
-      return new HttpError(502, error.details || 'Upstream error', 'UPSTREAM_ERROR')
+      return new HttpError(502, UPSTREAM_MESSAGES.upstreamError, 'UPSTREAM_ERROR')
   }
 }
+
+const EMAIL_PATTERN = /[^\s@:;,()<>[\]"'=]+@[^\s@:;,()<>[\]"'=]+/g
+// A CPF with or without punctuation, or any longer run of digits (phone numbers, tokens).
+const CPF_PATTERN = /\d{3}\.?\d{3}\.?\d{3}-?\d{2}|\d{11,}/g
+
+/** Strips what could be personal data (emails, CPFs) from upstream text before it is logged. */
+export function redactUpstreamText(text: string): string {
+  return text.replace(EMAIL_PATTERN, '[email]').replace(CPF_PATTERN, '[number]')
+}
+
+const EXPECTED_STATUSES: ReadonlySet<grpc.status> = new Set([
+  grpc.status.NOT_FOUND,
+  grpc.status.INVALID_ARGUMENT,
+  grpc.status.FAILED_PRECONDITION,
+  grpc.status.ALREADY_EXISTS,
+  grpc.status.UNAUTHENTICATED,
+  grpc.status.PERMISSION_DENIED,
+])
+
+/**
+ * Logs what upstream said, since `mapGrpcError` keeps it from the client: the RPC, the status name
+ * and the description with emails and CPFs redacted, on the request's logger. Unexpected statuses
+ * (`UNKNOWN`, `INTERNAL`, ...) are warnings; the ones a request can cause are info.
+ */
+function logUpstreamError(method: string, error: Pick<grpc.ServiceError, 'code' | 'details'>): void {
+  const log = requestContext.getStore()?.log
+  if (!log) return
+  const fields = {
+    rpc: method,
+    grpcStatus: grpc.status[error.code] ?? String(error.code),
+    upstreamMessage: redactUpstreamText(error.details ?? ''),
+  }
+  if (EXPECTED_STATUSES.has(error.code)) log.info(fields, 'Upstream refused the call')
+  else log.warn(fields, 'Upstream call failed')
+}
+

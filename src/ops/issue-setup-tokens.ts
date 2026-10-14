@@ -25,8 +25,9 @@ export interface IssueSetupTokensOptions {
  * created before setup tokens (with a random password nobody knows) can choose one before
  * `VERIFY_PASSWORDS` is turned on.
  *
- * Lists all clients via `ListUsers(role=CLIENT)`, not `ListUsersWithoutPassword`: legacy clients
- * have a random-UUID hash, so they don't show up as "without password". Issuing a token
+ * Lists all clients via `ListUsers(role=CLIENT)`, paging until `next_page_token` is empty (100
+ * per call), not `ListUsersWithoutPassword`: legacy clients have a random-UUID hash, so they
+ * don't show up as "without password". Issuing a token
  * invalidates the user's previous unused one, and anyone holding a link can set that user's
  * password, so run it once, at migration time, and hand each link only to its client.
  */
@@ -36,7 +37,7 @@ export async function issueSetupTokens({ dryRun, write, callerToken }: IssueSetu
     metadata.set('authorization', `Bearer ${callerToken()}`)
     return { metadata }
   }
-  const clients = await userService.listUsers('CLIENT', asOps())
+  const clients = await userService.listAllUsers('CLIENT', asOps)
   write(dryRun ? 'userId,email' : 'userId,email,linkPath,expiresAt')
   for (const client of clients) {
     if (dryRun) {
