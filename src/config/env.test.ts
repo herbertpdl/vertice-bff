@@ -162,5 +162,8 @@ describe('parseEnv rate limits', () => {
   it('reads overrides and refuses non-positive values', () => {
     expect(parseEnv({ AUTH_RATE_LIMIT_MAX: '10' }).AUTH_RATE_LIMIT_MAX).toBe(10)
     expect(() => parseEnv({ AUTH_RATE_LIMIT_MAX: '0' })).toThrow(/AUTH_RATE_LIMIT_MAX/)
+    // An attempt can need 3 new keys (network, IP, email); a smaller cap would refuse everyone.
+    expect(() => parseEnv({ AUTH_RATE_LIMIT_MAX_KEYS: '2' })).toThrow(/AUTH_RATE_LIMIT_MAX_KEYS/)
+    expect(parseEnv({ AUTH_RATE_LIMIT_MAX_KEYS: '3' }).AUTH_RATE_LIMIT_MAX_KEYS).toBe(3)
   })
 })

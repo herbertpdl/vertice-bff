@@ -101,6 +101,12 @@ describe('AttemptLimiter', () => {
       expect(limiter.tryAcquire(['newcomer'])).toMatchObject({ allowed: false, reason: 'capacity', retryAfterMs: 1000 })
     })
 
+    it('refuses, without throwing, an attempt that needs more keys than maxKeys on an empty map', () => {
+      const { limiter } = make(2)
+      expect(limiter.tryAcquire(['net', 'ip', 'email'])).toEqual({ allowed: false, retryAfterMs: 1000, reason: 'capacity' })
+      expect(limiter.size).toBe(0)
+    })
+
     it('frees capacity as windows end', () => {
       const { limiter, advance } = make(100)
       for (let i = 0; i < 100; i++) limiter.tryAcquire([`k-${i}`])

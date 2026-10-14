@@ -92,9 +92,11 @@ export class AttemptLimiter {
     }
     if (retryAfterMs > 0) return { allowed: false, retryAfterMs, reason: 'limit' }
     if (missing > 0 && this.buckets.size + missing > this.options.maxKeys) {
-      // Full: wait until the oldest bucket expires and frees a slot.
-      const oldest = this.buckets.values().next().value as Bucket
-      return { allowed: false, retryAfterMs: Math.max(1, oldest.resetAt - now), reason: 'capacity' }
+      // Full: wait until the oldest bucket expires and frees a slot. (An empty Map here means the
+      // attempt needs more keys than maxKeys allows at all: a full window is the honest wait.)
+      const oldest = this.buckets.values().next().value as Bucket | undefined
+      const retryAfterMs = oldest ? Math.max(1, oldest.resetAt - now) : this.options.windowMs
+      return { allowed: false, retryAfterMs, reason: 'capacity' }
     }
 
     const ticket: { key: string; resetAt: number }[] = []
