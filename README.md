@@ -150,7 +150,8 @@ npm run -s ops:issue-setup-tokens > setup-links.csv
 ```
 
 - It reads the same `.env` as the BFF (`VERTICE_API_GRPC_HOST`/`PORT`) and lists every CLIENT with
-  `ListUsers(role=CLIENT)`. Not `ListUsersWithoutPassword`: legacy clients have a random password
+  `ListUsers(role=CLIENT)`, page by page (vertice-api returns at most 100 users per call) until
+  `next_page_token` is empty. Not `ListUsersWithoutPassword`: legacy clients have a random password
   hash, so they don't show up there.
 - Output is CSV on stdout, `userId,email,linkPath,expiresAt`; `linkPath` is
   `/definir-senha?token=…`, to prefix with the web app's origin. Progress and errors go to
