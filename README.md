@@ -64,8 +64,9 @@ cp .env.example .env
 | `JWT_SECRET` | `vertice-dev-jwt-secret-do-not-use-in-production` (only when `NODE_ENV` is unset, `development` or `test`) | HS256 secret used to sign/verify auth tokens issued by the BFF; must equal vertice-api's. For any other `NODE_ENV` (`production`, `staging`, ...; trimmed and case-insensitive) there is no default: the BFF refuses to start if it is missing, has leading/trailing whitespace, is shorter than 32 bytes, or is a known placeholder/dev value (mirrors vertice-api's `JwtSecretGuard`). Generate one with `openssl rand -base64 48` |
 | `JWT_EXPIRES_IN` | `8h` | Auth token expiry |
 | `VERIFY_PASSWORDS` | `true` | Login checks the password through vertice-api's `VerifyCredentials`. `false` restores the old email-only login (any password works) for the rollout window, until every existing client has a setup link (see [Operations](#operations)). The BFF logs a warning at startup when it is `false`, and refuses to start with `false` unless `NODE_ENV` is unset, `development` or `test` |
-| `TRUST_PROXY` | `false` | Fastify `trustProxy`. Leave `false` when clients connect to the BFF directly. Behind a reverse proxy or load balancer, set it to the proxy's address(es)/CIDR(s), comma-separated (e.g. `10.0.0.0/8`, or `loopback` for a proxy on the same host), so `req.ip`, which the rate limits key on, is the real client. `true` trusts every `X-Forwarded-For` hop: only when nothing can reach the BFF except through a proxy that overwrites that header. A bare hop count (`1`) is refused: this Fastify version treats a number as "trust nothing" |
+| `TRUST_PROXY` | `false` | Fastify `trustProxy`: which peers may tell the BFF the client's IP through `X-Forwarded-For`. The rate limits key on that IP. **Set it to vertice-web-react's server address(es)**, comma-separated addresses/CIDRs (e.g. `10.0.0.5`, `10.0.0.0/24`, or `loopback` when they share a host): the web calls the BFF server-side and forwards the browser's IP as `X-Forwarded-For`; without this every web user shares one bucket. Add any reverse proxy in front of the BFF. Peers not listed (vertice-mobile, Expo web) are keyed by their own address and their `X-Forwarded-For` is ignored. `true` trusts every hop: only when nothing reaches the BFF except through a proxy that overwrites the header. A bare hop count (`1`) is refused: this Fastify version treats a number as "trust nothing". `false` is fine for local dev |
 | `RATE_LIMIT_GLOBAL_MAX` / `RATE_LIMIT_GLOBAL_WINDOW_MS` | `300` / `60000` | Loose per-IP bucket over every route |
+| `AUTH_RATE_LIMIT_MAX_KEYS` | `100000` | Most strict-bucket keys held in memory. When full, requests that need a new key get `429` until buckets expire (fail closed, so a spray of fresh IPs can't flush live counters); clients already tracked are unaffected |
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW_MS` | `5` / `900000` | Strict per-IP and per-email buckets on `/auth/login`, `/auth/register` and `/auth/password[/setup]`: the request after `AUTH_RATE_LIMIT_MAX` counted attempts in the window gets `429`. Login and password setup count failures only; register counts every attempt. See [`docs/api-contract.md`](docs/api-contract.md#rate-limits) |
 
 ## Running locally
@@ -129,8 +130,9 @@ A basic health check is available at `GET /health`.
 ### Issuing setup links to existing clients (password verification rollout)
 
 Clients created before password setup tokens got a random password nobody knows, so once login
-verifies passwords they can't get in. Before turning `VERIFY_PASSWORDS` on in a shared
-environment (or right after, in dev), give each of them a setup link:
+verifies passwords (the default) **they are locked out until they redeem a setup link**. Run this
+and distribute the links before deploying with `VERIFY_PASSWORDS=true` (in dev,
+`VERIFY_PASSWORDS=false` can bridge the gap):
 
 ```sh
 # Who would get a link (issues nothing):

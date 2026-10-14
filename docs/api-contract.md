@@ -22,7 +22,8 @@ Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Eve
   - `POST /auth/register` (IP + email) counts **every** attempt: a successful sign-up is what a spammer repeats.
   - `POST /auth/password` (IP + user) counts failed attempts.
   - A 5xx (upstream down) never counts.
-- Counters live in the BFF process (one instance today); behind a proxy, set `TRUST_PROXY` (see the README) or every client shares the proxy's bucket.
+- Per-IP means the client's address (IPv6 by /64). vertice-web-react calls the BFF from its server, so it **must forward the browser's IP as `X-Forwarded-For`**, and the BFF must run with `TRUST_PROXY` set to the web server's address; otherwise every web user shares one bucket. `X-Forwarded-For` from any other peer is ignored. See `docs/specs/password-lifecycle/spec.md`, "Client IPs and the rate limits".
+- Counters live in the BFF process (one instance today), at most `AUTH_RATE_LIMIT_MAX_KEYS` strict-bucket keys (default 100k). When full, a request that needs a new key gets `429 RATE_LIMITED` until older buckets expire (fail closed); clients already tracked are unaffected.
 
 ---
 

@@ -249,6 +249,43 @@ describe('auth rate limits', () => {
     expect((await setup(setupTokenFor(ids.clientA2))).statusCode).toBe(429)
   })
 
+  describe('behind vertice-web-react (TRUST_PROXY = the web server)', () => {
+    const WEB_SERVER = '10.0.0.5'
+    let proxied: FastifyInstance
+
+    beforeEach(async () => {
+      proxied = await buildApp({ trustProxy: WEB_SERVER, rateLimits: { authMax: 5, globalMax: 1_000_000 } })
+      await proxied.ready()
+    })
+    afterEach(() => proxied.close())
+
+    // A distinct email per attempt, so only the IP bucket can fill.
+    let n = 0
+    const loginVia = (remoteAddress: string, forwardedFor: string) =>
+      proxied.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { email: `typo${n++}@vertice.test`, password: 'wrong' },
+        remoteAddress,
+        headers: { 'x-forwarded-for': forwardedFor },
+      })
+
+    it('puts each forwarded client IP from the trusted web server in its own bucket', async () => {
+      for (let i = 0; i < 5; i++) expect((await loginVia(WEB_SERVER, '198.51.100.1')).statusCode).toBe(401)
+      expect((await loginVia(WEB_SERVER, '198.51.100.1')).statusCode).toBe(429)
+      // Another web user, through the same web server, is unaffected.
+      expect((await loginVia(WEB_SERVER, '198.51.100.2')).statusCode).toBe(401)
+    })
+
+    it("ignores X-Forwarded-For from a peer it doesn't trust", async () => {
+      for (let i = 0; i < 5; i++) {
+        expect((await loginVia('203.0.113.9', `198.51.100.${i + 10}`)).statusCode).toBe(401)
+      }
+      // A fresh spoofed client IP doesn't escape the peer's own bucket.
+      expect((await loginVia('203.0.113.9', '198.51.100.99')).statusCode).toBe(429)
+    })
+  })
+
   it('has a loose global bucket over every route', async () => {
     const strict = await buildApp({ rateLimits: { globalMax: 3 } })
     try {
