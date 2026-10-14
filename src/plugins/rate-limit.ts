@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { z } from 'zod'
 import fp from 'fastify-plugin'
 import rateLimit from '@fastify/rate-limit'
-import { AttemptLimiter, type AttemptTicket } from '../lib/attempt-limiter.js'
-import { clientIpKey } from '../lib/client-ip.js'
+import { AttemptLimiter, type AttemptKey, type AttemptTicket } from '../lib/attempt-limiter.js'
+import { clientIpKey, clientNetworkKey } from '../lib/client-ip.js'
 import { TooManyRequestsError } from '../lib/errors.js'
 
 export interface RateLimitSettings {
@@ -12,6 +14,11 @@ export interface RateLimitSettings {
   /** Strict buckets on the auth routes: the attempt after `authMax` within the window is a 429. */
   authMax: number
   authWindowMs: number
+  /**
+   * Strict-bucket limit per client network (IPv6 /48, IPv4 /24), checked before any per-IP or
+   * per-email bucket is allocated, so one network can only mint a bounded number of keys.
+   */
+  authNetworkMax: number
   /** Most strict-bucket keys held at once; when full, attempts needing a new key are refused (429). */
   authMaxKeys: number
 }
@@ -39,10 +46,22 @@ declare module 'fastify' {
   }
 }
 
-/** The request's email, normalized the way vertice-api stores it, for a per-email bucket. */
+/** RFC 5321's limit on a forward path; anything longer can't be an address anyone logs in with. */
+const MAX_EMAIL_LENGTH = 254
+const emailShape = z.string().max(MAX_EMAIL_LENGTH).email()
+
+/**
+ * The per-email bucket key. This runs before the route's Zod validation, so the body is raw:
+ * the email is trimmed and lower-cased (the way vertice-api stores it), anything that isn't a
+ * plausible address gets no email key at all (the IP and network buckets still apply), and the
+ * key is a SHA-256 of the address, so it has a fixed size and keeps no raw email in memory.
+ */
 export function emailKey(req: FastifyRequest): string | undefined {
   const email = (req.body as { email?: unknown } | undefined)?.email
-  return typeof email === 'string' && email.trim() ? `email:${email.trim().toLowerCase()}` : undefined
+  if (typeof email !== 'string' || email.length > MAX_EMAIL_LENGTH * 2) return undefined
+  const normalized = email.trim().toLowerCase()
+  if (!emailShape.safeParse(normalized).success) return undefined
+  return `email:${createHash('sha256').update(normalized).digest('hex')}`
 }
 
 /**
@@ -75,7 +94,14 @@ export default fp<{ settings: RateLimitSettings }>(async function rateLimitPlugi
     const countAll = options.count === 'all'
     return {
       async preHandler(req, reply) {
-        const keys = options.keys(req).filter((key): key is string => Boolean(key)).map((key) => `${name}:${key}`)
+        const keys: AttemptKey[] = [
+          // Checked with the rest before anything is allocated: one network mints a bounded number of keys.
+          { key: `${name}:net:${clientNetworkKey(req.ip)}`, max: settings.authNetworkMax },
+          ...options
+            .keys(req)
+            .filter((key): key is string => Boolean(key))
+            .map((key) => `${name}:${key}`),
+        ]
         const result = limiter.tryAcquire(keys)
         if (!result.allowed) {
           if (result.reason === 'capacity' && Date.now() - lastCapacityWarningAt > CAPACITY_WARNING_INTERVAL_MS) {

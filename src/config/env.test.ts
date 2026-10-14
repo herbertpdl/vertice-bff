@@ -153,7 +153,7 @@ describe('parseEnv rate limits', () => {
     expect(parseEnv({})).toMatchObject({
       AUTH_RATE_LIMIT_MAX: 5,
       AUTH_RATE_LIMIT_WINDOW_MS: 900_000,
-      AUTH_RATE_LIMIT_MAX_KEYS: 100_000,
+      AUTH_RATE_LIMIT_MAX_KEYS: 1_000_000,
       RATE_LIMIT_GLOBAL_MAX: 300,
       RATE_LIMIT_GLOBAL_WINDOW_MS: 60_000,
     })

@@ -57,6 +57,38 @@ describe('AttemptLimiter', () => {
   })
 
   describe('memory bound', () => {
+    it('lets a per-key max bound how many keys one network can mint', () => {
+      const { limiter } = make(100_000)
+      for (let i = 0; i < 10_000; i++) {
+        limiter.tryAcquire([{ key: 'net:2001:db8:1::/48', max: 10 }, `ip:2001:db8:1:${i.toString(16)}::/64`, `email:${i}`])
+      }
+      // The network bucket plus 10 counted attempts' worth of ip/email keys, however many /64s tried.
+      expect(limiter.size).toBe(1 + 2 * 10)
+      // Another network is unaffected.
+      expect(limiter.tryAcquire([{ key: 'net:2001:db8:2::/48', max: 10 }, 'ip:x']).allowed).toBe(true)
+    })
+
+    it('deletes a bucket refunded back to zero', () => {
+      const { limiter } = make()
+      limiter.release(ticketOf(limiter.tryAcquire(['a', 'b'])))
+      expect(limiter.size).toBe(0)
+    })
+
+    it('deletes at most sweepBudget expired buckets per call, and treats the rest as missing', () => {
+      let now = 0
+      const limiter = new AttemptLimiter({ max: 2, windowMs: 1000, maxKeys: 100_000, sweepBudget: 1000, now: () => now })
+      for (let i = 0; i < 5000; i++) limiter.tryAcquire([`k-${i}`, `k-${i}`.concat('-x')])
+      now += 1000 // all 10k expire at once
+      const before = limiter.sweepVisits
+      limiter.tryAcquire(['probe'])
+      expect(limiter.sweepVisits - before).toBeLessThanOrEqual(1001)
+      expect(limiter.size).toBe(10_000 - 1000 + 1)
+      // An expired bucket the sweep hasn't reached starts a fresh window.
+      expect(limiter.tryAcquire(['k-4999']).allowed).toBe(true)
+      expect(limiter.tryAcquire(['k-4999']).allowed).toBe(true)
+      expect(limiter.tryAcquire(['k-4999']).allowed).toBe(false)
+    })
+
     it('stays under maxKeys and fails closed for new keys, without evicting live ones', () => {
       const { limiter } = make(100)
       limiter.tryAcquire(['victim'])

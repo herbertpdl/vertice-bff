@@ -49,9 +49,15 @@ The per-IP buckets (strict auth buckets and the global one) key on `req.ip` (IPv
 `src/modules/auth/routes.test.ts` pins this: two forwarded client IPs from the trusted web server
 get separate buckets, and an untrusted peer's `X-Forwarded-For` is ignored.
 
-Memory: the strict buckets hold at most `AUTH_RATE_LIMIT_MAX_KEYS` keys (default 100k) and fail
-closed when full (new clients get 429 until buckets expire; tracked ones keep working), so a
-spray of fresh IPs can neither exhaust memory nor flush a victim's counter.
+Memory: strict-bucket keys are fixed-size (IPv6 by /64, any non-address as one `invalid` key,
+emails as a SHA-256 of the normalized address, and none at all for a malformed one), a bucket
+refunded to zero is deleted, and each route also checks a per-network bucket (IPv6 /48, IPv4 /24,
+`AUTH_RATE_LIMIT_NETWORK_MAX`, default 20 × the limit) before allocating anything else. The
+limiter holds at most `AUTH_RATE_LIMIT_MAX_KEYS` (default 1M, ~230 MB measured) and fails closed
+when full: new clients get 429 until buckets expire, tracked ones keep working, and a spray can't
+flush a victim's counter. Sweeps delete at most 1,000 expired buckets per call.
+
+Residual risk: once the cap is reached, clients the limiter isn't already tracking get 429 until windows expire. Reaching it takes many distinct networks: each IPv6 /48 or IPv4 /24 can hold only about `2 × AUTH_RATE_LIMIT_NETWORK_MAX` keys per route per window (≈200 by default), so filling 1M keys needs roughly 5,000 distinct /48s (or /24s) failing at full rate on one route, or about 1,250 spread over all four strict routes. That is within reach of a large botnet or a cheap pool of IPv6 allocations; the remedies then are a shared store, a CAPTCHA/proof-of-work step, or blocking at the edge.
 
 ## Merge and deploy order
 

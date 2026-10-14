@@ -277,6 +277,13 @@ describe('auth rate limits', () => {
       expect((await loginVia(WEB_SERVER, '198.51.100.2')).statusCode).toBe(401)
     })
 
+    it('keys on the address the web server appended, not a spoofed entry before it', async () => {
+      for (let i = 0; i < 5; i++) {
+        expect((await loginVia(WEB_SERVER, `192.0.2.${i}, 198.51.100.1`)).statusCode).toBe(401)
+      }
+      expect((await loginVia(WEB_SERVER, '192.0.2.200, 198.51.100.1')).statusCode).toBe(429)
+    })
+
     it("ignores X-Forwarded-For from a peer it doesn't trust", async () => {
       for (let i = 0; i < 5; i++) {
         expect((await loginVia('203.0.113.9', `198.51.100.${i + 10}`)).statusCode).toBe(401)
@@ -284,6 +291,17 @@ describe('auth rate limits', () => {
       // A fresh spoofed client IP doesn't escape the peer's own bucket.
       expect((await loginVia('203.0.113.9', '198.51.100.99')).statusCode).toBe(429)
     })
+  })
+
+  it('caps one IPv6 /48 at 20 × the limit, however many /64s and emails it rotates through', async () => {
+    let n = 0
+    const fromNet = (net: string) =>
+      login(`spray${n++}@vertice.test`, 'wrong', `${net}:${(n % 65_536).toString(16)}::1`)
+    // 100 failures, each from a fresh /64 with a fresh email: none of those buckets fills...
+    for (let i = 0; i < 100; i++) expect((await fromNet('2001:db8:1')).statusCode).toBe(401)
+    // ...but the /48 does, before any new /64 or email bucket is allocated.
+    expect((await fromNet('2001:db8:1')).statusCode).toBe(429)
+    expect((await fromNet('2001:db8:2')).statusCode).toBe(401)
   })
 
   it('has a loose global bucket over every route', async () => {

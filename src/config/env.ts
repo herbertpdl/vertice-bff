@@ -106,8 +106,10 @@ const envSchema = z
     /** Strict per-IP and per-email buckets on login, register and password setup/change. */
     AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
     AUTH_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60_000),
+    /** Strict-bucket limit per IPv6 /48 or IPv4 /24; unset means 20 × AUTH_RATE_LIMIT_MAX. */
+    AUTH_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().positive().optional(),
     /** Most strict-bucket keys held in memory; when full, new clients get 429 (fail closed). */
-    AUTH_RATE_LIMIT_MAX_KEYS: z.coerce.number().int().positive().default(100_000),
+    AUTH_RATE_LIMIT_MAX_KEYS: z.coerce.number().int().positive().default(1_000_000),
   })
   .superRefine((value, ctx) => {
     if (DEV_NODE_ENVS.includes(value.NODE_ENV)) return

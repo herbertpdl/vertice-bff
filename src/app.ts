@@ -33,14 +33,19 @@ export interface BuildAppOptions {
   trustProxy?: boolean | string
 }
 
+/** Network buckets default to this many times the per-IP/per-email limit. */
+const NETWORK_MAX_FACTOR = 20
+
 function rateLimitSettings(overrides: Partial<RateLimitSettings> = {}): RateLimitSettings {
+  const authMax = overrides.authMax ?? env.AUTH_RATE_LIMIT_MAX
   return {
     globalMax: env.RATE_LIMIT_GLOBAL_MAX,
     globalWindowMs: env.RATE_LIMIT_GLOBAL_WINDOW_MS,
-    authMax: env.AUTH_RATE_LIMIT_MAX,
     authWindowMs: env.AUTH_RATE_LIMIT_WINDOW_MS,
+    authNetworkMax: env.AUTH_RATE_LIMIT_NETWORK_MAX ?? authMax * NETWORK_MAX_FACTOR,
     authMaxKeys: env.AUTH_RATE_LIMIT_MAX_KEYS,
     ...overrides,
+    authMax,
   }
 }
 
