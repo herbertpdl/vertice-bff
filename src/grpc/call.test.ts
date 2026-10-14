@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import * as grpc from '@grpc/grpc-js'
 import { grpcCall, mapGrpcError, MissingCallerIdentityError, SERVICE_TOKEN_RPCS, type GrpcCallOptions } from './call.js'
+import { env } from '../config/env.js'
 import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
 import { serviceToken } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
@@ -67,10 +68,47 @@ describe('grpcCall', () => {
     expect([...SERVICE_TOKEN_RPCS].sort()).toEqual(['CreateUser', 'SetPasswordWithToken', 'VerifyCredentials'])
   })
 
-  it('sends no authorization only with an explicit anonymous opt-in', async () => {
-    const { stub, call } = ping({ anonymous: true })
-    await call
-    expect(stub.seen!.get('authorization')).toEqual([])
+  describe('anonymous', () => {
+    const { VERIFY_PASSWORDS, NODE_ENV } = env
+    afterEach(() => {
+      env.VERIFY_PASSWORDS = VERIFY_PASSWORDS
+      env.NODE_ENV = NODE_ENV
+    })
+
+    it.each(['', 'development', 'test'])(
+      'sends no authorization with the opt-in, VERIFY_PASSWORDS=false and NODE_ENV=%j',
+      async (nodeEnv) => {
+        env.VERIFY_PASSWORDS = false
+        env.NODE_ENV = nodeEnv
+        const { stub, call } = ping({ anonymous: true })
+        await call
+        expect(stub.seen!.get('authorization')).toEqual([])
+      },
+    )
+
+    it('is refused, without calling upstream, while VERIFY_PASSWORDS is true', async () => {
+      env.VERIFY_PASSWORDS = true
+      env.NODE_ENV = 'development'
+      const { stub, call } = ping({ anonymous: true })
+      await expect(call).rejects.toThrow(MissingCallerIdentityError)
+      await expect(call).rejects.toThrow(/anonymous calls are only allowed/)
+      expect(stub.seen).toBeUndefined()
+    })
+
+    it.each(['production', 'staging', 'prod'])('is refused with NODE_ENV=%s', async (nodeEnv) => {
+      env.VERIFY_PASSWORDS = false
+      env.NODE_ENV = nodeEnv
+      const { stub, call } = ping({ anonymous: true })
+      await expect(call).rejects.toThrow(MissingCallerIdentityError)
+      expect(stub.seen).toBeUndefined()
+    })
+
+    it('still lets a verified user token win', async () => {
+      env.VERIFY_PASSWORDS = true
+      const { stub, call } = requestContext.run({ bearerToken: 'abc' }, () => ping({ anonymous: true }))
+      await call
+      expect(stub.seen!.get('authorization')).toEqual(['Bearer abc'])
+    })
   })
 
   it('keeps caller-supplied metadata, and a caller-supplied authorization as is', async () => {
@@ -120,6 +158,17 @@ describe('mapGrpcError', () => {
     expect(err.code).toBe('FORBIDDEN')
     expect(err.message).toBe(details)
   })
+
+  it.each(['Session no longer valid', 'Unrecognized caller identity', 'internal detail: user 42 role CLIENT', ''])(
+    'maps UNAUTHENTICATED (%j) to 401 UNAUTHENTICATED with a fixed message',
+    (details) => {
+      const err = mapGrpcError({ code: grpc.status.UNAUTHENTICATED, details })
+      expect(err).toBeInstanceOf(HttpError)
+      expect(err.statusCode).toBe(401)
+      expect(err.code).toBe('UNAUTHENTICATED')
+      expect(err.message).toBe('Session no longer valid')
+    },
+  )
 
   it('maps NOT_FOUND to 404', () => {
     const err = mapGrpcError({ code: grpc.status.NOT_FOUND, details: 'Workout' })
