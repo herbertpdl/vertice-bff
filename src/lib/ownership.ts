@@ -9,11 +9,14 @@ import * as sessionService from '../modules/workout-sessions/service.js'
 import type { TrainingPlan } from '../modules/training-plans/service.js'
 import type { WorkoutLog } from '../modules/workout-sessions/service.js'
 
+/**
+ * A plan is its trainer's and its client's, nobody else's. ADMIN has no bypass: it has no defined
+ * product yet (P1-02), and the routes that call this refuse it by role before getting here.
+ */
 export function assertOwnsPlan(user: AuthUser, plan: TrainingPlan): void {
   const owns =
     (user.role === 'TRAINER' && plan.trainerId === user.id) ||
-    (user.role === 'CLIENT' && plan.clientId === user.id) ||
-    user.role === 'ADMIN'
+    (user.role === 'CLIENT' && plan.clientId === user.id)
   if (!owns) throw new ForbiddenError('You do not have access to this training plan')
 }
 
@@ -36,7 +39,7 @@ export async function assertOwnsWorkoutExercise(user: AuthUser, workoutExerciseI
 
 /**
  * A CLIENT must be the log's own client. Anyone else goes through the plan of
- * the log's workout (TRAINER must own it, ADMIN bypasses), like `assertOwnsWorkout`.
+ * the log's workout (a TRAINER must own it), like `assertOwnsWorkout`.
  */
 export async function assertOwnsWorkoutLog(user: AuthUser, workoutLogId: number): Promise<WorkoutLog> {
   const log = await sessionService.getWorkoutLog(workoutLogId)
@@ -71,10 +74,9 @@ export async function assertExerciseSetInWorkout(exerciseSetId: number, workoutI
  * own visibility rule. vertice-api's workout-exercise writes do not check it
  * yet, so this is the only guard until they do. Missing and not-visible get the
  * same 400 (like `assertExerciseSetInWorkout`), so the answer is no existence
- * oracle for other trainers' private exercises. ADMIN skips the check.
+ * oracle for other trainers' private exercises. Only TRAINER routes call this.
  */
-export async function assertCanUseExercises(user: AuthUser, exerciseIds: number[]): Promise<void> {
-  if (user.role !== 'TRAINER') return
+export async function assertCanUseExercises(exerciseIds: number[]): Promise<void> {
   await Promise.all(
     [...new Set(exerciseIds)].map((id) =>
       withoutExistenceOracle(`exerciseId ${id} is not available to you`, () => exerciseService.getExercise(id)),

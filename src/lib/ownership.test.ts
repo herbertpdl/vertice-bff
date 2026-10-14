@@ -49,8 +49,9 @@ describe('assertOwnsWorkoutLog', () => {
     expect(upstreamMethods().every((m) => m === 'GetWorkoutLog')).toBe(true)
   })
 
-  it('lets an ADMIN through on any log', async () => {
-    await expect(ownsLog('admin', ids.workoutLogB)).resolves.toMatchObject({ id: ids.workoutLogB })
+  it('gives an ADMIN no bypass: it owns no plan, so every log is refused', async () => {
+    await expect(ownsLog('admin', ids.workoutLogA)).rejects.toThrow(ForbiddenError)
+    await expect(ownsLog('admin', ids.workoutLogB)).rejects.toThrow(ForbiddenError)
   })
 })
 
@@ -72,14 +73,14 @@ describe('assertExerciseSetInWorkout', () => {
 describe('assertCanUseExercises', () => {
   it('lets a TRAINER use the starter set and their own private exercises, looking each id up once', async () => {
     await asCaller('trainerB', () =>
-      assertCanUseExercises(user('trainerB'), [ids.exercise, ids.privateExerciseB, ids.exercise]),
+      assertCanUseExercises([ids.exercise, ids.privateExerciseB, ids.exercise]),
     )
     expect(upstreamMethods()).toEqual(['GetExercise', 'GetExercise'])
   })
 
   it("answers another trainer's private exercise and a missing one with the same 400", async () => {
     const run = (exerciseId: number) =>
-      asCaller('trainerA', () => assertCanUseExercises(user('trainerA'), [ids.exercise, exerciseId]))
+      asCaller('trainerA', () => assertCanUseExercises([ids.exercise, exerciseId]))
     await expect(run(ids.privateExerciseB)).rejects.toMatchObject({
       statusCode: 400,
       message: `exerciseId ${ids.privateExerciseB} is not available to you`,
@@ -94,7 +95,7 @@ describe('assertCanUseExercises', () => {
         throw mapGrpcError({ code, details: 'You do not have access to exercise 7' })
       })
       answers.push(
-        await asCaller('trainerA', () => assertCanUseExercises(user('trainerA'), [7])).catch((err: unknown) => err),
+        await asCaller('trainerA', () => assertCanUseExercises([7])).catch((err: unknown) => err),
       )
     }
     for (const err of answers) {
@@ -107,12 +108,7 @@ describe('assertCanUseExercises', () => {
       throw mapGrpcError({ code: grpc.status.UNAVAILABLE, details: '' })
     })
     await expect(
-      asCaller('trainerA', () => assertCanUseExercises(user('trainerA'), [ids.exercise])),
+      asCaller('trainerA', () => assertCanUseExercises([ids.exercise])),
     ).rejects.toMatchObject({ statusCode: 503 })
-  })
-
-  it('skips the lookup for an ADMIN', async () => {
-    await asCaller('admin', () => assertCanUseExercises(user('admin'), [ids.privateExerciseB]))
-    expect(grpcCallMock).not.toHaveBeenCalled()
   })
 })

@@ -16,6 +16,7 @@ import { assertIsTrainersClient } from '../clients/service.js'
 /** Mounted at /api/workouts/:workoutId/session */
 export async function workoutSessionRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
+  app.addHook('preHandler', app.requireRole('TRAINER', 'CLIENT'))
 
   app.get<{ Params: { workoutId: string }; Querystring: { weekStartDate?: string; clientId?: string } }>(
     '/',
@@ -25,11 +26,9 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
       const clientId = user.role === 'CLIENT' ? user.id : parseRequiredId(req.query.clientId, 'clientId')
 
       const plan = await assertOwnsWorkout(user, workoutId)
-      if (user.role === 'TRAINER') {
-        // assertOwnsWorkout already confirmed the plan belongs to this trainer;
-        // the requested client must also belong to that same plan.
-        assertPlanBelongsToClient(plan, clientId)
-      }
+      // assertOwnsWorkout already confirmed the plan is the caller's; for a TRAINER the
+      // requested client must also be that plan's (a CLIENT's clientId is their own).
+      assertPlanBelongsToClient(plan, clientId)
 
       const weekStartDate = req.query.weekStartDate ?? currentWeekStartDate()
       return sessionService.getWorkoutSession(workoutId, clientId, weekStartDate)
@@ -40,6 +39,7 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
 /** Mounted at /api/workout-logs */
 export async function workoutLogRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
+  app.addHook('preHandler', app.requireRole('TRAINER', 'CLIENT'))
 
   app.get<{ Querystring: { trainingPlanId?: string; weekStartDate?: string; clientId?: string } }>(
     '/',

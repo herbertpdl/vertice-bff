@@ -7,6 +7,7 @@ import * as exerciseSetService from './service.js'
 /** Mounted at /api/workout-exercises/:workoutExerciseId/sets */
 export async function exerciseSetsUnderWorkoutExerciseRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
+  app.addHook('preHandler', app.requireRole('TRAINER', 'CLIENT'))
 
   app.get<{ Params: { workoutExerciseId: string } }>('/', async (req) => {
     const id = parseId(req.params.workoutExerciseId)
@@ -16,7 +17,7 @@ export async function exerciseSetsUnderWorkoutExerciseRoutes(app: FastifyInstanc
 
   app.post<{ Params: { workoutExerciseId: string } }>(
     '/',
-    { preHandler: app.requireRole('TRAINER', 'ADMIN') },
+    { preHandler: app.requireRole('TRAINER') },
     async (req, reply) => {
       const workoutExerciseId = parseId(req.params.workoutExerciseId)
       await assertOwnsWorkoutExercise(req.user!, workoutExerciseId)
@@ -30,10 +31,11 @@ export async function exerciseSetsUnderWorkoutExerciseRoutes(app: FastifyInstanc
 /** Mounted at /api/exercise-sets */
 export async function exerciseSetRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
+  app.addHook('preHandler', app.requireRole('TRAINER', 'CLIENT'))
 
   app.patch<{ Params: { id: string } }>(
     '/:id',
-    { preHandler: app.requireRole('TRAINER', 'ADMIN') },
+    { preHandler: app.requireRole('TRAINER') },
     async (req) => {
       const id = parseId(req.params.id)
       const existing = await exerciseSetService.getExerciseSet(id)
@@ -45,7 +47,7 @@ export async function exerciseSetRoutes(app: FastifyInstance) {
 
   app.delete<{ Params: { id: string } }>(
     '/:id',
-    { preHandler: app.requireRole('TRAINER', 'ADMIN') },
+    { preHandler: app.requireRole('TRAINER') },
     async (req, reply) => {
       const id = parseId(req.params.id)
       const existing = await exerciseSetService.getExerciseSet(id)
