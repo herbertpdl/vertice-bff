@@ -117,15 +117,12 @@ export interface WeekActivityDay {
 
 /**
  * One roster entry (`GET /clients`). Built field by field, never spread from the upstream user, so
- * nothing upstream adds (CPF, CREF) reaches the list. `email` stays only until the web roster stops
- * showing and searching it (P1-03, web step); then it goes too, and vertice-api's
- * `ListClientsForTrainer` drops to its summary view.
+ * nothing upstream sends (email, CPF, CREF) reaches the list (P1-03). The detail routes carry the
+ * email; the roster only needs the id and name.
  */
 export interface ClientSummary {
   id: number
   name: string
-  /** Deprecated: kept for the current web roster only, removed once the web no longer reads it. */
-  email: string
   activePlanCount: number
   currentPlan: CurrentPlanInfo | null
   lastWorkoutAt: string | null
@@ -136,7 +133,7 @@ const WEEKDAY_LABELS: WeekdayLabel[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURS
 
 /**
  * Roster view for the clients list screen: each client's id and name (see
- * `ClientSummary`: no CPF) with their current (date-active) training plan, their most recent
+ * `ClientSummary`: no email, no CPF) with their current (date-active) training plan, their most recent
  * workout completion, and which weekdays this week had a completed workout
  * (5 dots: Monday–Friday).
  *
@@ -206,7 +203,6 @@ export async function listClientsOverviewForTrainer(trainerId: number): Promise<
     return {
       id: client.id,
       name: client.name,
-      email: client.email,
       activePlanCount: countByClient.get(client.id) ?? 0,
       currentPlan: activePlan ? { id: activePlan.id, name: activePlan.name, endDate: activePlan.endDate } : null,
       lastWorkoutAt,
