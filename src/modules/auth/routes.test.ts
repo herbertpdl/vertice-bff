@@ -62,7 +62,6 @@ describe('auth routes', () => {
       expect(user).toEqual({ id: ids.clientA, name: 'Client A', email: emailOf(ids.clientA), role: 'CLIENT' })
       expect(jwt.decode(token)).toEqual({
         sub: String(ids.clientA),
-        id: ids.clientA,
         role: 'CLIENT',
         iss: 'vertice-bff',
         aud: 'vertice-api',

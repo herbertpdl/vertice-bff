@@ -33,12 +33,11 @@ export const SERVICE_TOKEN_TTL_SECONDS = 60
 const SERVICE_TOKEN_MIN_REMAINING_SECONDS = 15
 
 /**
- * User token claims: `sub` (the user id as a string, the standard subject), `id` (the same id as a
- * number, the claim vertice-api's `CallerIdentityResolver` reads today) and `role`, plus
- * `iss`/`aud`/`iat`/`exp`. `id` can go once vertice-api reads `sub`.
+ * User token claims: `sub` (the user id as a string, the standard subject, which vertice-api reads)
+ * and `role`, plus `iss`/`aud`/`iat`/`exp`.
  */
 export function signToken(user: AuthUser): string {
-  return jwt.sign({ id: user.id, role: user.role }, env.JWT_SECRET, {
+  return jwt.sign({ role: user.role }, env.JWT_SECRET, {
     algorithm: ALGORITHM,
     expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'],
     issuer: TOKEN_ISSUER,
@@ -49,8 +48,11 @@ export function signToken(user: AuthUser): string {
 
 /**
  * Verifies a user token: HS256, this issuer and audience, not expired, and shaped like a user
- * (an `exp`, a positive integer `id` matching `sub`, a user role). The service token fails the
- * last check, so it can never authenticate a REST request.
+ * (an `exp`, a `sub` that is a positive integer in canonical decimal form, a user role). The
+ * service token fails the `sub` check, so it can never authenticate a REST request.
+ *
+ * Tokens minted before `id` was dropped still carry it; they are accepted only when `id` equals
+ * `sub` (the rule vertice-api applies), and stop existing once `JWT_EXPIRES_IN` has passed.
  */
 export function verifyToken(token: string): AuthUser {
   const payload = jwt.verify(token, env.JWT_SECRET, {
@@ -59,11 +61,11 @@ export function verifyToken(token: string): AuthUser {
     audience: TOKEN_AUDIENCE,
   })
   if (typeof payload === 'string') throw new jwt.JsonWebTokenError('jwt payload must be an object')
-  const { id, role, sub, exp } = payload
+  const { role, sub, exp } = payload
   if (typeof exp !== 'number') throw new jwt.JsonWebTokenError('jwt exp required')
-  if (!Number.isSafeInteger(id) || id <= 0 || sub !== String(id)) {
-    throw new jwt.JsonWebTokenError('jwt subject invalid')
-  }
+  const id = typeof sub === 'string' && /^[1-9][0-9]*$/.test(sub) ? Number(sub) : NaN
+  if (!Number.isSafeInteger(id)) throw new jwt.JsonWebTokenError('jwt subject invalid')
+  if ('id' in payload && payload.id !== id) throw new jwt.JsonWebTokenError('jwt subject invalid')
   if (!ROLES.includes(role)) throw new jwt.JsonWebTokenError('jwt role invalid')
   return { id, role }
 }

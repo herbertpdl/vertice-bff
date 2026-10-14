@@ -6,7 +6,6 @@ import {
   signToken,
   TOKEN_AUDIENCE,
   TOKEN_ISSUER,
-  verifyToken,
   type AuthUser,
   type Role,
 } from '../lib/jwt.js'
@@ -252,12 +251,29 @@ function authenticateCall(method: string, options: GrpcCallOptions): UpstreamCal
   }) as jwt.JwtPayload
   const subject = String(claims.sub)
   const allowed = API_SERVICE_SUBJECT_RPCS[subject]
-  if (!allowed) return verifyToken(token)
+  if (!allowed) return userCaller(claims)
   if (claims.role !== 'SERVICE' || typeof claims.exp !== 'number') {
     throw new Error(`fakeUpstream: ${method} got a malformed ${subject} token`)
   }
   if (!allowed.includes(method)) throw new Error(`fakeUpstream: ${subject} is not allowed to call ${method}`)
   return subject as 'service:bff' | 'service:ops'
+}
+
+/**
+ * Mirrors vertice-api's `CallerIdentityResolver` for a user token: the user id is the numeric
+ * `sub` (a legacy `id` claim is accepted only when it equals `sub`), the role a user role, and the
+ * user must still exist with that role, or the call is UNAUTHENTICATED "Session no longer valid".
+ */
+function userCaller(claims: jwt.JwtPayload): AuthUser {
+  const id = typeof claims.sub === 'string' && /^[1-9][0-9]*$/.test(claims.sub) ? Number(claims.sub) : NaN
+  if (!Number.isSafeInteger(id) || ('id' in claims && claims.id !== id)) {
+    upstreamError(status.UNAUTHENTICATED, 'Unrecognized caller identity')
+  }
+  const role = claims.role as Role
+  if (!['ADMIN', 'TRAINER', 'CLIENT'].includes(role)) upstreamError(status.UNAUTHENTICATED, 'Unrecognized caller identity')
+  const stored = users.find((u) => u.id === id)
+  if (stored?.role !== role) upstreamError(status.UNAUTHENTICATED, 'Session no longer valid')
+  return { id, role }
 }
 
 /** Mirrors vertice-api's `ExerciseService.getExercise` visibility rule. */
