@@ -46,7 +46,7 @@ export async function exerciseSetsUnderWorkoutExerciseRoutes(app: FastifyInstanc
         params: idParams('workoutExerciseId'),
         body: exerciseSetInputSchema,
         ok: { status: 201, description: 'The set.', schema: exerciseSetSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req, reply) => {
@@ -77,7 +77,7 @@ export async function exerciseSetRoutes(app: FastifyInstance) {
         params: idParams('id'),
         body: exerciseSetInputSchema,
         ok: { status: 200, description: 'The set.', schema: exerciseSetSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req) => {

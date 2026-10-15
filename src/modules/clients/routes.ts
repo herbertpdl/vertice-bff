@@ -53,7 +53,7 @@ export default async function clientRoutes(app: FastifyInstance) {
         params: idParams('id'),
         query: clientDetailQuerySchema,
         ok: { status: 200, description: 'The client.', schema: clientDetailSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req) => {
@@ -105,7 +105,7 @@ export default async function clientRoutes(app: FastifyInstance) {
         roles: ['TRAINER'],
         body: clientCreateSchema,
         ok: { status: 201, description: 'The client, with the setup token.', schema: createdClientSchema },
-        errors: [400, 403, 409],
+        errors: [403, 409],
       }),
     },
     async (req, reply) => {
@@ -153,7 +153,7 @@ export default async function clientRoutes(app: FastifyInstance) {
         params: idParams('id'),
         body: clientUpdateSchema,
         ok: { status: 200, description: 'The updated client (CPF masked).', schema: clientDetailSchema },
-        errors: [400, 403, 404, 409],
+        errors: [403, 404, 409],
       }),
     },
     async (req) => {

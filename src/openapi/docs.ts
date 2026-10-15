@@ -29,7 +29,7 @@ export const TAGS = [
 type Tag = (typeof TAGS)[number]['name']
 
 const ERROR_DESCRIPTIONS = {
-  400: 'Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).',
+  400: 'A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.',
   401: 'Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).',
   403: 'The role or the owner check refuses the caller (`FORBIDDEN`).',
   404: 'Not found (`NOT_FOUND`).',
@@ -58,7 +58,11 @@ export interface RouteDoc {
   body?: z.ZodType
   /** The success response. `schema` is omitted for a 204. */
   ok: { status: 200 | 201 | 204; description: string; schema?: z.ZodType; contentType?: string }
-  /** Error statuses this route can answer with; 401 is implied for `bearer`. */
+  /**
+   * Error statuses this route can answer with, beyond the derived ones: 401 for `bearer`, and 400
+   * whenever the route reads input (`parseId` refuses a malformed path id, and a schema refuses a
+   * malformed query or body).
+   */
   errors?: ErrorStatus[]
 }
 
@@ -66,6 +70,9 @@ export function routeDoc(doc: RouteDoc): FastifySchema {
   const auth = doc.auth ?? 'bearer'
   const errorStatuses = new Set<ErrorStatus>(doc.errors ?? [])
   if (auth === 'bearer') errorStatuses.add(401)
+  // Derived, not per route: every route that reads a path id, a query or a body can answer 400,
+  // and listing that by hand made equivalent routes disagree.
+  if (doc.params || doc.query || doc.body) errorStatuses.add(400)
 
   const response: Record<number, unknown> = {
     [doc.ok.status]: doc.ok.schema

@@ -33,7 +33,7 @@ export default async function exerciseRoutes(app: FastifyInstance) {
           q: z.string().max(100).optional().describe('Case-insensitive name search, trimmed.'),
         }),
         ok: { status: 200, description: 'The exercises.', schema: z.array(exerciseSchema) },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req) => {
@@ -77,7 +77,7 @@ export default async function exerciseRoutes(app: FastifyInstance) {
         params: idParams('id'),
         query: z.object({ clientId: idQuery('Required for a TRAINER.') }),
         ok: { status: 200, description: 'One point per week.', schema: z.array(progressPointSchema) },
-        errors: [400, 403],
+        errors: [403],
       }),
     },
     async (req) => {
@@ -103,7 +103,7 @@ export default async function exerciseRoutes(app: FastifyInstance) {
         roles: ['TRAINER'],
         body: exerciseInputSchema,
         ok: { status: 201, description: 'The exercise.', schema: exerciseSchema },
-        errors: [400, 403],
+        errors: [403],
       }),
     },
     async (req, reply) => {
@@ -128,7 +128,7 @@ export default async function exerciseRoutes(app: FastifyInstance) {
         params: idParams('id'),
         body: exerciseInputSchema,
         ok: { status: 200, description: 'The exercise.', schema: exerciseSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req) => {

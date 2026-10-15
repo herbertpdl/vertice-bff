@@ -50,7 +50,7 @@ export async function workoutsUnderPlanRoutes(app: FastifyInstance) {
         params: idParams('planId'),
         body: workoutCreateSchema,
         ok: { status: 201, description: 'The workout with every new exercise and set id.', schema: fullWorkoutSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req, reply) => {
@@ -87,7 +87,7 @@ export async function workoutRoutes(app: FastifyInstance) {
         roles: ['TRAINER'],
         query: workoutListQuerySchema,
         ok: { status: 200, description: 'The workouts, with student, plan and exercise count.', schema: z.array(recentWorkoutSummarySchema) },
-        errors: [400, 403],
+        errors: [403],
       }),
     },
     async (req) => {
@@ -151,7 +151,7 @@ export async function workoutRoutes(app: FastifyInstance) {
         params: idParams('id'),
         body: workoutInputSchema,
         ok: { status: 200, description: 'The workout.', schema: workoutSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req) => {
@@ -198,7 +198,7 @@ export async function workoutRoutes(app: FastifyInstance) {
         params: idParams('id'),
         body: cloneWorkoutSchema,
         ok: { status: 201, description: 'The new workout.', schema: workoutSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req, reply) => {

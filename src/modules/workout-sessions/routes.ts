@@ -39,7 +39,7 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
           clientId: idQuery('Required for a TRAINER.'),
         }),
         ok: { status: 200, description: 'The workout, its sets with last results, and the week’s log.', schema: workoutSessionSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req) => {
@@ -81,7 +81,7 @@ export async function workoutLogRoutes(app: FastifyInstance) {
           clientId: idQuery('Required for a TRAINER.'),
         }),
         ok: { status: 200, description: 'The logs of that week.', schema: z.array(workoutLogSchema) },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req) => {
@@ -127,7 +127,7 @@ export async function workoutSessionActionRoutes(app: FastifyInstance) {
         params: idParams('workoutLogId'),
         body: recordSetLogSchema,
         ok: { status: 201, description: 'The set log.', schema: setLogSchema },
-        errors: [400, 403, 404, 409],
+        errors: [403, 404, 409],
       }),
     },
     async (req, reply) => {

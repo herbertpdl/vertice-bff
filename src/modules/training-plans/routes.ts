@@ -28,7 +28,7 @@ export default async function trainingPlanRoutes(app: FastifyInstance) {
         roles: ['TRAINER', 'CLIENT'],
         query: z.object({ clientId: idQuery('A TRAINER’s filter.') }),
         ok: { status: 200, description: 'The plans.', schema: z.array(trainingPlanSchema) },
-        errors: [400, 403],
+        errors: [403],
       }),
     },
     async (req) => {
@@ -50,7 +50,7 @@ export default async function trainingPlanRoutes(app: FastifyInstance) {
         roles: ['TRAINER', 'CLIENT'],
         params: idParams('id'),
         ok: { status: 200, description: 'The plan and its workouts.', schema: trainingPlanDetailSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req) => {
@@ -75,7 +75,7 @@ export default async function trainingPlanRoutes(app: FastifyInstance) {
         roles: ['TRAINER'],
         body: trainingPlanInputSchema,
         ok: { status: 201, description: 'The plan.', schema: trainingPlanSchema },
-        errors: [400, 403, 409],
+        errors: [403, 409],
       }),
     },
     async (req, reply) => {
@@ -99,7 +99,7 @@ export default async function trainingPlanRoutes(app: FastifyInstance) {
         params: idParams('id'),
         body: trainingPlanUpdateSchema,
         ok: { status: 200, description: 'The plan.', schema: trainingPlanSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req) => {

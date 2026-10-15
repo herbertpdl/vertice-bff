@@ -9,7 +9,7 @@ export const REFERENCE_END = '<!-- END GENERATED ROUTE REFERENCE -->'
 interface Operation {
   operationId: string
   summary: string
-  tags: string[]
+  tags?: string[]
   security?: unknown[]
   'x-roles'?: string[]
 }
@@ -32,7 +32,7 @@ export function renderRouteReference(spec: Spec): string {
     for (const method of METHOD_ORDER) {
       const op = methods[method]
       if (!op) continue
-      const tag = op.tags[0] ?? 'Other'
+      const tag = op.tags?.[0] ?? 'Other'
       byTag.set(tag, [...(byTag.get(tag) ?? []), { method, path, op }])
     }
   }

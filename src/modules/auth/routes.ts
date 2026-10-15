@@ -41,7 +41,7 @@ export default async function authRoutes(app: FastifyInstance) {
         auth: 'public',
         body: loginSchema,
         ok: { status: 200, description: 'The session token and the user.', schema: sessionSchema },
-        errors: [400, 401, 429],
+        errors: [401, 429],
       }),
     },
     async (req) => {
@@ -65,7 +65,7 @@ export default async function authRoutes(app: FastifyInstance) {
         auth: 'public',
         body: registerSchema,
         ok: { status: 201, description: 'The session token and the user.', schema: sessionSchema },
-        errors: [400, 409, 429],
+        errors: [409, 429],
       }),
     },
     async (req, reply) => {
@@ -106,7 +106,7 @@ export default async function authRoutes(app: FastifyInstance) {
         tag: 'Auth',
         body: updateMeSchema,
         ok: { status: 200, description: 'The updated account.', schema: meSchema },
-        errors: [400, 409],
+        errors: [409],
       }),
     },
     async (req) => {
@@ -133,7 +133,7 @@ export default async function authRoutes(app: FastifyInstance) {
         tag: 'Auth',
         body: deleteAccountSchema,
         ok: { status: 204, description: 'Deleted; no body.' },
-        errors: [400, 409, 429],
+        errors: [409, 429],
       }),
     },
     async (req, reply) => {
@@ -189,7 +189,6 @@ export default async function authRoutes(app: FastifyInstance) {
         tag: 'Auth',
         body: recordConsentSchema,
         ok: { status: 200, description: 'The caller’s consent state after the change.', schema: consentSchema },
-        errors: [400],
       }),
     },
     async (req) => {
@@ -210,7 +209,7 @@ export default async function authRoutes(app: FastifyInstance) {
         tag: 'Auth',
         body: changePasswordSchema,
         ok: { status: 204, description: 'Changed; no body.' },
-        errors: [400, 429],
+        errors: [429],
       }),
     },
     async (req, reply) => {
@@ -234,7 +233,7 @@ export default async function authRoutes(app: FastifyInstance) {
         auth: 'public',
         body: passwordSetupSchema,
         ok: { status: 204, description: 'Password set; log in normally. No body.' },
-        errors: [400, 429],
+        errors: [429],
       }),
     },
     async (req, reply) => {

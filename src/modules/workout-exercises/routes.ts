@@ -50,7 +50,7 @@ export async function workoutExercisesUnderWorkoutRoutes(app: FastifyInstance) {
         params: idParams('workoutId'),
         body: workoutExerciseCreateSchema,
         ok: { status: 201, description: 'The workout exercise.', schema: workoutExerciseSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req, reply) => {
@@ -83,7 +83,7 @@ export async function workoutExercisesUnderWorkoutRoutes(app: FastifyInstance) {
         params: idParams('workoutId'),
         body: replaceWorkoutExercisesSchema,
         ok: { status: 200, description: 'The workout with its new tree.', schema: fullWorkoutSchema },
-        errors: [400, 403, 404, 409],
+        errors: [403, 404, 409],
       }),
     },
     async (req) => {
@@ -114,7 +114,7 @@ export async function workoutExerciseRoutes(app: FastifyInstance) {
         params: idParams('id'),
         body: workoutExerciseUpdateSchema,
         ok: { status: 200, description: 'The workout exercise.', schema: workoutExerciseSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req) => {

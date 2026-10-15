@@ -24,7 +24,7 @@ export async function submitFeedbackRoutes(app: FastifyInstance) {
         params: idParams('workoutLogId'),
         body: submitFeedbackSchema,
         ok: { status: 201, description: 'The feedback.', schema: workoutFeedbackSchema },
-        errors: [400, 403, 404],
+        errors: [403, 404],
       }),
     },
     async (req, reply) => {
