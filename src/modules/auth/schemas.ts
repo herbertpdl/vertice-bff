@@ -25,10 +25,12 @@ export const emailSchema = z.string().trim().toLowerCase().email().max(255)
 
 /**
  * A password as login or a re-check sends it. No policy, on purpose (uniform "Invalid email or
- * password"); only a sanity cap, so a huge body is never hashed.
+ * password"); only a sanity cap, so a huge body is never hashed. The cap counts UTF-16 units
+ * (`utf16String`), not code points: 1000 astral characters are 2000 units and are refused here,
+ * before any `VerifyCredentials` call.
  */
 export const LOGIN_PASSWORD_MAX = 1000
-export const submittedPasswordSchema = z.string().min(1).max(LOGIN_PASSWORD_MAX)
+export const submittedPasswordSchema = utf16String(LOGIN_PASSWORD_MAX).min(1)
 
 /** `cref`: optional, at most 20 characters, no format (vertice-api `VARCHAR(20)`). */
 export const crefSchema = utf16String(20).trim()

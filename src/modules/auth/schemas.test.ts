@@ -79,6 +79,16 @@ describe('submitted passwords (login, re-check)', () => {
     expect(() => changePasswordSchema.parse({ currentPassword: 'x'.repeat(1001), newPassword: 'abcdefgh' })).toThrow()
   })
 
+  it('counts the cap in UTF-16 units, so astral characters cost two', () => {
+    // 500 emoji are 1000 UTF-16 units (and 500 code points): the last accepted password.
+    expect(loginSchema.parse({ email: 'a@b.co', password: '😀'.repeat(500) }).password).toHaveLength(1000)
+    expect(() => loginSchema.parse({ email: 'a@b.co', password: '😀'.repeat(501) })).toThrow()
+    expect(() => deleteAccountSchema.parse({ password: '😀'.repeat(501) })).toThrow()
+    expect(() =>
+      changePasswordSchema.parse({ currentPassword: '😀'.repeat(501), newPassword: 'abcdefgh' }),
+    ).toThrow()
+  })
+
   it('does not apply the new-password policy to the current one', () => {
     expect(changePasswordSchema.parse({ currentPassword: 'old', newPassword: 'abcdefgh' }).currentPassword).toBe('old')
   })
