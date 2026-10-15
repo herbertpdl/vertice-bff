@@ -10,7 +10,7 @@ export const clientCreateSchema = z.object({
   // `password` key in the body is stripped, never sent upstream.
   // Optional for a CLIENT (vertice-api #65): absent or '' creates the client without one.
   cpf: cpfInputSchema.optional(),
-})
+}).meta({ id: 'CreateClientRequest' })
 
 /**
  * `PATCH /clients/:id`. `cpf`: omitted keeps the stored CPF (the route reads it and sends it back,
@@ -20,7 +20,7 @@ export const clientUpdateSchema = z.object({
   name: requiredText(255),
   email: emailSchema,
   cpf: cpfInputSchema.nullable().optional(),
-})
+}).meta({ id: 'UpdateClientRequest' })
 
 /**
  * `GET /clients/:id` query. `reveal=cpf` returns the CPF in full instead of masked; nothing else

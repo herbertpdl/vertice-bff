@@ -6,7 +6,7 @@ export const recordSetLogSchema = z.object({
   // Required here (a log without a weight is not a log), unlike a set's optional weight.
   weight: z.string().regex(WEIGHT_PATTERN, weightMessage),
   reps: repsCount,
-})
+}).meta({ id: 'RecordSetLogRequest' })
 
 /** `GET /workouts/:workoutId/session` query. A CLIENT's `clientId` is ignored (their own is used). */
 export const weekStartDateQuerySchema = z.object({

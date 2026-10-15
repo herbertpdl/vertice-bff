@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { CONSENT_VERSION_PATTERN } from '../../config/env.js'
 import { isValidCpf } from '../../lib/cpf.js'
-import { requiredText } from '../../lib/validation.js'
+import { requiredText, utf16String } from '../../lib/validation.js'
 
 /** vertice-api's `@Password` policy: not blank, at least 8 characters, at most 72 UTF-8 bytes (bcrypt's limit). */
 export const PASSWORD_MIN_CHARS = 8
@@ -11,7 +11,9 @@ export const passwordSchema = z
   .string()
   // Every character is at least one byte: a cheap bound before the byte count below.
   .max(PASSWORD_MAX_BYTES, `Password must be at most ${PASSWORD_MAX_BYTES} bytes`)
-  .min(PASSWORD_MIN_CHARS, `Password must be at least ${PASSWORD_MIN_CHARS} characters`)
+  // Zod 4's `.min()` counts code points; the API counts UTF-16 units (Java), so 4 emoji are 8 there.
+  .refine((value) => value.length >= PASSWORD_MIN_CHARS, `Password must be at least ${PASSWORD_MIN_CHARS} characters`)
+  .meta({ minLength: PASSWORD_MIN_CHARS })
   .refine((value) => value.trim().length > 0, 'Password must not be blank')
   .refine(
     (value) => Buffer.byteLength(value, 'utf8') <= PASSWORD_MAX_BYTES,
@@ -23,13 +25,15 @@ export const emailSchema = z.string().trim().toLowerCase().email().max(255)
 
 /**
  * A password as login or a re-check sends it. No policy, on purpose (uniform "Invalid email or
- * password"); only a sanity cap, so a huge body is never hashed.
+ * password"); only a sanity cap, so a huge body is never hashed. The cap counts UTF-16 units
+ * (`utf16String`), not code points: 1000 astral characters are 2000 units and are refused here,
+ * before any `VerifyCredentials` call.
  */
 export const LOGIN_PASSWORD_MAX = 1000
-export const submittedPasswordSchema = z.string().min(1).max(LOGIN_PASSWORD_MAX)
+export const submittedPasswordSchema = utf16String(LOGIN_PASSWORD_MAX).min(1)
 
 /** `cref`: optional, at most 20 characters, no format (vertice-api `VARCHAR(20)`). */
-export const crefSchema = z.string().max(20).trim()
+export const crefSchema = utf16String(20).trim()
 
 /**
  * A CPF as a client sends it. The BFF's own mask (`***.***.***-25`, see `lib/cpf.ts`) is refused:
@@ -63,7 +67,7 @@ export const loginSchema = z.object({
   // No policy here: login only checks what was stored, and a wrong password must get the same
   // 401 as an unknown email, not a 400 that says something about the input.
   password: submittedPasswordSchema,
-})
+}).meta({ id: 'LoginRequest' })
 
 export const registerSchema = z.object({
   name: requiredText(255),
@@ -79,23 +83,23 @@ export const registerSchema = z.object({
   // no account is created without an acceptance on record. Any well-formed version is accepted,
   // not only the current `TERMS_VERSION`, so a web build one release behind still registers.
   acceptedTermsVersion: consentVersionSchema,
-})
+}).meta({ id: 'RegisterRequest' })
 
 /** `POST /auth/me/consent`: the caller consents, for themself, to one text in one version. */
 export const recordConsentSchema = z.object({
   type: z.enum(['TERMS', 'HEALTH_DATA']),
   version: consentVersionSchema,
-})
+}).meta({ id: 'ConsentRequest' })
 
 export const changePasswordSchema = z.object({
   currentPassword: submittedPasswordSchema,
   newPassword: passwordSchema,
-})
+}).meta({ id: 'ChangePasswordRequest' })
 
 export const passwordSetupSchema = z.object({
-  token: z.string().max(512).trim().min(1),
+  token: utf16String(512).trim().min(1),
   newPassword: passwordSchema,
-})
+}).meta({ id: 'PasswordSetupRequest' })
 
 /**
  * `PATCH /auth/me`: the caller corrects their own profile (LGPD art. 18 III). Every field is
@@ -111,7 +115,7 @@ export const updateMeSchema = z.object({
   email: emailSchema.optional(),
   cpf: cpfInputSchema.nullable().optional(),
   cref: crefSchema.nullable().optional(),
-})
+}).meta({ id: 'UpdateMeRequest' })
 
 /**
  * `DELETE /auth/me`: the caller's current password, re-checked before the account is deleted,
@@ -119,4 +123,4 @@ export const updateMeSchema = z.object({
  */
 export const deleteAccountSchema = z.object({
   password: submittedPasswordSchema,
-})
+}).meta({ id: 'DeleteAccountRequest' })

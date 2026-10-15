@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { boundedText, isoDateSchema, optionalIdQuery, requiredText } from '../../lib/validation.js'
 
-export const planLevelSchema = z.enum(['BEGINNER', 'INTERMEDIATE', 'ADVANCED'])
+export const planLevelSchema = z.enum(['BEGINNER', 'INTERMEDIATE', 'ADVANCED']).meta({ id: 'PlanLevel' })
 
 const trainingPlanBaseSchema = z.object({
   name: requiredText(255),
@@ -16,7 +16,9 @@ const trainingPlanBaseSchema = z.object({
 const endNotBeforeStart = (plan: { startDate: string; endDate: string }) => plan.endDate >= plan.startDate
 const endNotBeforeStartIssue = { message: 'endDate must not be before startDate', path: ['endDate'] }
 
-export const trainingPlanInputSchema = trainingPlanBaseSchema.refine(endNotBeforeStart, endNotBeforeStartIssue)
+export const trainingPlanInputSchema = trainingPlanBaseSchema
+  .refine(endNotBeforeStart, endNotBeforeStartIssue)
+  .meta({ id: 'TrainingPlanRequest' })
 
 export type TrainingPlanInputBody = z.infer<typeof trainingPlanInputSchema>
 
@@ -29,6 +31,7 @@ export type TrainingPlanInputBody = z.infer<typeof trainingPlanInputSchema>
 export const trainingPlanUpdateSchema = trainingPlanBaseSchema
   .omit({ clientId: true })
   .refine(endNotBeforeStart, endNotBeforeStartIssue)
+  .meta({ id: 'UpdateTrainingPlanRequest' })
 
 export type TrainingPlanUpdateBody = z.infer<typeof trainingPlanUpdateSchema>
 

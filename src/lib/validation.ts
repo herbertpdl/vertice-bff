@@ -4,17 +4,28 @@ import { z } from 'zod'
  * Field rules shared by the request schemas. They mirror vertice-api's validation (its PR #70 is
  * the table of record) so a bad value is a field-level 400 here, before any upstream call; the API
  * stays authoritative. String lengths count UTF-16 code units, like Java's `String.length()`, so
- * `.max(n)` is the same bound at both layers.
+ * `utf16String(n)` is the same bound at both layers.
  */
+
+/**
+ * A string of at most `max` UTF-16 code units. Zod 4's `.max()` counts code points (an emoji is 1),
+ * which is looser than Java's `String.length()` (2), so the rule is a `refine` (one issue, not two);
+ * `meta` puts the `maxLength` in the generated OpenAPI schema.
+ */
+export const utf16String = (max: number) =>
+  z
+    .string()
+    .refine((value) => value.length <= max, `Too big: expected string to have <=${max} characters`)
+    .meta({ maxLength: max })
 
 /**
  * A required text: not blank, at most `max` characters. The bound is checked on the raw value, as
  * vertice-api's `@Size` is, and the stored value is trimmed.
  */
-export const requiredText = (max: number) => z.string().max(max).trim().min(1)
+export const requiredText = (max: number) => utf16String(max).trim().min(1)
 
 /** An optional free text with a column bound (`VARCHAR(255)` for notes and descriptions). */
-export const boundedText = (max: number) => z.string().max(max)
+export const boundedText = (max: number) => utf16String(max)
 
 /** A calendar date, `YYYY-MM-DD`, that exists (2026-02-30 is not one). */
 export const isoDateSchema = z

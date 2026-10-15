@@ -25,6 +25,8 @@ import {
 import { submitFeedbackRoutes, feedbackRoutes } from './modules/feedback/routes.js'
 import dashboardRoutes from './modules/dashboard/routes.js'
 import legalRoutes from './modules/legal/routes.js'
+import { routeDoc, useDocumentationOnlySchemas } from './openapi/docs.js'
+import { healthSchema } from './openapi/responses.js'
 
 export interface BuildAppOptions {
   /** Sees every route as it is registered (the route-authorization suite uses it to find untested routes). */
@@ -35,6 +37,11 @@ export interface BuildAppOptions {
   trustProxy?: boolean | string
   /** Replaces the env-configured logger (tests read the audit and upstream-error lines from it). */
   loggerInstance?: FastifyBaseLogger
+  /**
+   * Registers the OpenAPI generator so `app.swagger()` returns the document (`npm run openapi`, tests).
+   * Off in a normal start: the spec is a build artifact and nothing serves it.
+   */
+  openapi?: { version: string }
 }
 
 /** Network buckets default to this many times the per-IP/per-email limit. */
@@ -69,6 +76,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
     trustProxy: options.trustProxy ?? env.TRUST_PROXY,
   })
   if (options.onRoute) app.addHook('onRoute', options.onRoute)
+  // The route schemas are documentation only (the handlers validate), whether or not the generator runs.
+  useDocumentationOnlySchemas(app)
+  if (options.openapi) await (await import('./openapi/index.js')).registerOpenapi(app, options.openapi.version)
   if (!env.VERIFY_PASSWORDS) {
     app.log.warn(
       'VERIFY_PASSWORDS=false: login accepts any password for an existing email ' +
@@ -83,7 +93,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await app.register(rateLimitPlugin, { settings: rateLimitSettings(options.rateLimits) })
   await app.register(authenticatePlugin)
 
-  app.get('/health', async () => ({ status: 'ok' }))
+  app.get(
+    '/health',
+    {
+      schema: routeDoc({
+        operationId: 'getHealth',
+        summary: 'Liveness',
+        tag: 'Health',
+        auth: 'public',
+        ok: { status: 200, description: 'The process is up.', schema: healthSchema },
+      }),
+    },
+    async () => ({ status: 'ok' }),
+  )
 
   await app.register(
     async (api) => {

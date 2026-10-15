@@ -9,7 +9,8 @@ responses for the frontend's screens.
 - Node.js 22 (pinned in `.nvmrc`; `engines.node` is `>=22 <23`), TypeScript
 - [Fastify](https://fastify.dev/) — HTTP server
 - [`@grpc/grpc-js`](https://github.com/grpc/grpc-node) + [`@grpc/proto-loader`](https://github.com/grpc/grpc-node/tree/master/packages/proto-loader) — gRPC client to `vertice-api`
-- [Zod](https://zod.dev/) — request validation
+- [Zod](https://zod.dev/) 4 — request validation, and the source of the OpenAPI document
+- [`fastify-type-provider-zod`](https://github.com/turkerdev/fastify-type-provider-zod) + [`@fastify/swagger`](https://github.com/fastify/fastify-swagger) — generate `docs/openapi.json` from the route schemas (dev dependencies; not loaded by a normal start)
 - [`jsonwebtoken`](https://github.com/auth0/node-jsonwebtoken) — auth tokens issued by the BFF
 - [Pino](https://getpino.io/) — logging
 - [Vitest](https://vitest.dev/) — test runner
@@ -26,17 +27,19 @@ src/
   lib/                   shared helpers (JWT, error types, date/ownership utils, net)
   plugins/               Fastify plugins (authentication, error handling, rate limits)
   ops/                   one-off operations run from scripts/ (e.g. issuing setup tokens)
-scripts/                 operator CLIs (`npm run ops:*`)
   modules/                one folder per resource (routes/schemas/service), e.g.
-                          auth, students, exercises, training-plans, workouts,
+                          auth, legal, clients, exercises, training-plans, workouts,
                           workout-exercises, exercise-sets, workout-sessions,
                           feedback, dashboard, users
-docs/api-contract.md     REST API contract (endpoints, request/response shapes, known limitations)
+  openapi/               OpenAPI generation: per-route docs, response schemas, the generator
+scripts/                 operator and build CLIs (`npm run ops:*`, `sync:protos`, `openapi`)
+docs/openapi.json        generated OpenAPI 3.1 document (`npm run openapi`; CI fails when stale)
+docs/api-contract.md     REST API contract: prose (ownership, errors, rate limits) plus a generated route reference
 ```
 
 Each module under `src/modules/*` typically has:
 - `routes.ts` — Fastify route registration
-- `schemas.ts` — Zod request/response schemas
+- `schemas.ts` — Zod request schemas (the handlers parse with them; they also feed the OpenAPI document)
 - `service.ts` — business logic, including calls to the gRPC clients
 
 ## Prerequisites
@@ -101,7 +104,7 @@ This avoids Docker image-cache/rebuild pain, especially for the frontend.
 ### Option 2 — full stack via `vertice-local`
 
 If you have a `vertice-local` repo checked out as a sibling (holds a `docker-compose.yml`
-orchestrating Postgres, the API, this BFF, and the web app with hot reload for all three), run:
+orchestrating Postgres, the API and this BFF with hot reload), run:
 
 ```sh
 cd ../vertice-local
@@ -110,8 +113,9 @@ docker compose up --build
 ```
 
 This starts, in order: Postgres -> `vertice-api` (gRPC on `:9090`, HTTP on `:8080`) ->
-`vertice-bff` (`:3000`) -> `vertice-web-react` (`:5173`). Source is bind-mounted, so this BFF's
-container restarts automatically on file changes.
+`vertice-bff` (`:3000`). It does not start the web app: run `vertice-web-react` natively
+(`npm run dev`, `:5173`). Source is bind-mounted, so this BFF's container restarts automatically
+on file changes.
 
 A basic health check is available at `GET /health`.
 
@@ -126,13 +130,16 @@ A basic health check is available at `GET /health`.
 | `npm run typecheck` | Type-check without emitting output |
 | `npm run lint` | Run ESLint |
 | `npm test` | Run the test suite with Vitest |
+| `npm run sync:protos [-- --check]` | Copy `protos/vertice/**` from the pinned vertice-api commit (see [gRPC contract](#grpc-contract)) |
+| `npm run openapi [-- --check]` | Write `docs/openapi.json` and the route reference in `docs/api-contract.md` from the route schemas; `--check` fails when either is stale (see [OpenAPI](#openapi)) |
 | `npm run ops:issue-setup-tokens [-- --dry-run]` | Issue a password setup link to every CLIENT (see [Operations](#operations)) |
 
 ## CI
 
 `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`, on the Node
-version in `.nvmrc`: `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`
-and `npm audit --omit=dev --audit-level=high`. The tests mock the upstream, so CI needs no
+version in `.nvmrc`: `npm ci`, `npm run sync:protos -- --check`, `npm run openapi -- --check`,
+`npm run typecheck`, `npm run lint`, `npm test`, `npm run build` and
+`npm audit --omit=dev --audit-level=high`. The tests mock the upstream, so CI needs no
 running `vertice-api` or Postgres. Run the same commands locally before opening a PR.
 
 ## Operations
@@ -172,19 +179,38 @@ npm run -s ops:issue-setup-tokens > setup-links.csv
 
 ## API
 
-All routes are mounted under `/api` (e.g. `POST /api/auth/login`, `GET /api/students`).
+All routes are mounted under `/api` (e.g. `POST /api/auth/login`, `GET /api/clients`).
 Authenticated routes expect `Authorization: Bearer <token>`. Error responses share a common
 shape: `{ "error": { "code": "...", "message": "...", "details": {} } }`.
 
-See [`docs/api-contract.md`](docs/api-contract.md) for the full list of endpoints, request/response
-shapes, roles, rate limits and known MVP limitations.
+See [`docs/api-contract.md`](docs/api-contract.md) for the prose (roles and ownership, error mapping,
+rate limits, known limitations) and a generated route reference, and [`docs/openapi.json`](docs/openapi.json)
+for the machine-readable contract.
+
+### OpenAPI
+
+`docs/openapi.json` (OpenAPI 3.1: bearer security scheme, one `operationId` and tag per route, the shared
+`ErrorResponse`, named enums) is **generated** from the Zod schemas on the routes, and committed. It is a build
+artifact: the BFF serves no spec and no docs UI in any environment.
+
+- `npm run openapi` regenerates it, and the route reference in `docs/api-contract.md`. Run it in any PR that
+  changes a route, a request schema or a response shape, and commit the result. `npm run openapi -- --check`
+  (CI, and a unit test) fails when the committed files are stale.
+- Web and mobile generate their TypeScript types from it (`openapi-typescript`), e.g. from
+  `https://raw.githubusercontent.com/herbertpdl/vertice-bff/main/docs/openapi.json`, or from a sibling checkout's
+  `../vertice-bff/docs/openapi.json`.
+- A route declares its documentation with `schema: routeDoc({ operationId, summary, tag, roles, params, query, body, ok, errors })`
+  (`src/openapi/docs.ts`). The response shapes are in `src/openapi/responses.ts`, where a compile-time check fails if
+  one stops matching the type its service returns, and the route-authorization suite parses every answer with them.
+- The route schemas document; they do not validate. Handlers still call `schema.parse(...)` themselves, after
+  authentication and ownership checks, so 401/403 still come before 400 and the error bodies are unchanged.
 
 ## gRPC contract
 
 The `.proto` files under `protos/vertice/**` describe the `vertice-api` gRPC services this BFF
 consumes (`UserService`, `ExerciseService`, `TrainingPlanService`, `WorkoutService`,
 `WorkoutExerciseService`, `ExerciseSetService`, `WorkoutSessionService`,
-`WorkoutFeedbackService`). They are loaded dynamically at startup via `@grpc/proto-loader`
+`WorkoutFeedbackService`, `TrainerClientService`). They are loaded dynamically at startup via `@grpc/proto-loader`
 (see `src/grpc/loadProto.ts`); client instances live in `src/grpc/clients.ts`.
 
 The protos are **copies**: vertice-api owns them. `protos/.api-ref` pins the vertice-api commit they

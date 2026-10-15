@@ -4,6 +4,7 @@ import { buildApp } from '../app.js'
 import { env } from '../config/env.js'
 import { grpcCall, MissingCallerIdentityError, SERVICE_TOKEN_RPCS } from '../grpc/call.js'
 import { Metadata } from '@grpc/grpc-js'
+import type { z } from 'zod'
 import { serviceToken, signToken, type Role } from '../lib/jwt.js'
 import {
   API_SERVICE_SUBJECT_RPCS,
@@ -845,15 +846,20 @@ describe('route authorization', () => {
   let app: FastifyInstance
   const registered = new Set<string>()
   const cacheable = new Set<string>()
+  const documented = new Map<string, Record<string, unknown>>()
 
   beforeAll(async () => {
     app = await buildApp({
+      // The OpenAPI generator is registered too, so the access rules it documents can be checked below.
+      openapi: { version: 'test' },
       // Hundreds of requests from one IP: keep the rate limits out of the authorization checks.
       rateLimits: { globalMax: 1_000_000, authMax: 1_000_000, exportMax: 1_000_000 },
       onRoute: (route: RouteOptions) => {
         for (const method of [route.method].flat()) {
           if (method !== 'HEAD' && method !== 'OPTIONS') registered.add(routeKey(method, route.url))
           if (route.config?.cacheControl !== undefined) cacheable.add(routeKey(method, route.url))
+          const responses = (route.schema as { response?: Record<string, unknown> } | undefined)?.response
+          if (responses && method !== 'HEAD' && method !== 'OPTIONS') documented.set(routeKey(method, route.url), responses)
         }
       },
     })
@@ -877,6 +883,16 @@ describe('route authorization', () => {
       ...(call.body === undefined ? {} : { payload: call.body as object }),
     })
 
+  /** What a 2xx answered must parse with the response schema the OpenAPI document is generated from. */
+  const expectDocumentedResponse = (route: string, res: { statusCode: number; body: string }) => {
+    const entry = documented.get(route)?.[String(res.statusCode)]
+    expect(entry, `${route} documents no ${res.statusCode} response`).toBeDefined()
+    if (res.statusCode === 204) return
+    const schema = (entry as { content: Record<string, { schema: z.ZodType }> }).content['application/json']!.schema
+    const parsed = schema.safeParse(JSON.parse(res.body))
+    expect(parsed.error?.issues, `${route} answered something its schema does not describe`).toBeUndefined()
+  }
+
   const upstreamMethods = () => grpcCallMock.mock.calls.map(([, method]) => method)
 
   it('every registered route has an entry in the table, and every entry is a registered route', () => {
@@ -884,6 +900,32 @@ describe('route authorization', () => {
     expect([...registered].filter((r) => !tabled.includes(r as RouteCase['route']))).toEqual([])
     expect(tabled.filter((r) => !registered.has(r))).toEqual([])
     expect(new Set(tabled).size).toBe(tabled.length)
+  })
+
+  it('the OpenAPI document states each route’s access exactly as the table does', () => {
+    interface Operation {
+      security?: unknown[]
+      'x-roles'?: Role[]
+    }
+    const spec = app.swagger() as unknown as { paths: Record<string, Record<string, Operation>> }
+    const documented = new Map<string, Operation>()
+    for (const [path, methods] of Object.entries(spec.paths)) {
+      for (const [method, op] of Object.entries(methods)) {
+        documented.set(`${method.toUpperCase()} ${path.replace(/\{(\w+)\}/g, ':$1')}`, op)
+      }
+    }
+
+    expect([...documented.keys()].sort()).toEqual(routes.map((r) => r.route).sort())
+    for (const entry of routes) {
+      const op = documented.get(entry.route)!
+      if (entry.public) {
+        expect(op.security, entry.route).toEqual([])
+        expect(op['x-roles'], entry.route).toBeUndefined()
+      } else {
+        expect(op.security, entry.route).toEqual([{ bearerAuth: [] }])
+        expect(op['x-roles'], entry.route).toEqual(entry.roles)
+      }
+    }
   })
 
   it('the fake upstream refuses a call without a valid token, and a service subject outside its RPCs', async () => {
@@ -996,6 +1038,7 @@ describe('route authorization', () => {
       it('is reachable without a token, and calls upstream with the service token', async () => {
         const res = await send(method, { ...rc.ok, as: undefined })
         expect(res.statusCode, res.body).toBeLessThan(300)
+        expectDocumentedResponse(rc.route, res)
         expect(upstreamCallers.map((c) => c.caller).filter((c) => c !== 'service:bff')).toEqual([])
       })
     } else {
@@ -1010,6 +1053,7 @@ describe('route authorization', () => {
         const res = await send(method, rc.ok)
         expect(res.statusCode, res.body).toBeGreaterThanOrEqual(200)
         expect(res.statusCode, res.body).toBeLessThan(300)
+        expectDocumentedResponse(rc.route, res)
         const { id, role } = userOf((rc.ok as Call).as)
         expect(upstreamCallers.length).toBe(grpcCallMock.mock.calls.length)
         for (const { method: rpc, caller } of upstreamCallers) {
