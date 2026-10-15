@@ -11,18 +11,26 @@ service UserService {
   // Every RPC authorizes the caller from its token (P1-01); a refused caller gets PERMISSION_DENIED.
   // The full subject -> RPC matrix is in vertice-api's CLAUDE.md.
 
-  // Every RPC returns UserResponse in one of three views (P1-03): detail (every field), contact
-  // (id, name, role, email) or summary (id, name, role). Fields outside the view are empty.
+  // Every RPC returns UserResponse in one of four views (P1-03): self (every field, consent
+  // included), detail (every field but consent), contact (id, name, role, email) or summary (id,
+  // name, role). Fields outside the view are empty.
 
   // ADMIN or service:ops (anonymous only under the local profile). Contact view: the ops script
   // hands each setup link to its client by email, and the local dev login matches users by email.
   // Paginated, ordered by id: see ListUsersRequest.
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
-  // Detail for the user themself, ADMIN, or the target's active trainer. A trainer with any
-  // training plan for the target (e.g. a former client) gets the summary view.
+  // Self view for the user themself (the consent state drives the first-access notice). Detail for
+  // ADMIN or the target's active trainer. A trainer with any training plan for the target (e.g. a
+  // former client) gets the summary view.
   rpc GetUser(GetUserRequest) returns (UserResponse);
   // service:bff only (registration), and never with role ADMIN. Contact view.
   rpc CreateUser(UserCreateRequest) returns (UserResponse);
+  // Records a consent given by the calling user themself (P1-04): the Terms version they accepted,
+  // or their consent to the processing of health-related data (loads, session logs, feedback; LGPD
+  // art. 11, I). Stamped with the server's time; a later call replaces the earlier record. A user
+  // token only: nobody, ADMIN included, can consent on someone else's behalf, and a service gets
+  // PERMISSION_DENIED. Returns the caller's consent state after the change.
+  rpc RecordConsent(RecordConsentRequest) returns (ConsentState);
   // ADMIN; or the user themself / the target's active trainer, without changing the role. Detail view.
   rpc UpdateUser(UpdateUserRequest) returns (UserResponse);
   // The user themself or ADMIN.
@@ -59,8 +67,9 @@ enum Role {
 }
 
 // One shape for every view, so older clients keep decoding it. id, name and role are always set.
-// email is set in the contact and detail views; cpf and cref only in the detail view (cref is
-// also empty for anyone but a TRAINER who set one).
+// email is set in the contact, detail and self views; cpf and cref only in the detail and self
+// views (cpf is also empty for a CLIENT who has none, cref for anyone but a TRAINER who set one).
+// consent only in the self view.
 message UserResponse {
   int64 id = 1;
   string name = 2;
@@ -68,11 +77,39 @@ message UserResponse {
   string cpf = 4;
   string cref = 5;
   Role role = 6;
+  ConsentState consent = 7;
+}
+
+// What the user has consented to. Empty strings mean "not given yet": the client then shows the
+// first-access notice and calls RecordConsent.
+message ConsentState {
+  // The Terms of Use / Privacy Policy version accepted, and when (ISO-8601 instant).
+  string accepted_terms_version = 1;
+  string terms_accepted_at = 2;
+  // The health-data notice version consented to, and when (ISO-8601 instant).
+  string health_data_consent_version = 3;
+  string health_data_consent_at = 4;
+}
+
+enum ConsentType {
+  CONSENT_TYPE_UNSPECIFIED = 0;
+  // The Terms of Use and Privacy Policy.
+  TERMS = 1;
+  // Processing of health-related data: loads, session logs and workout feedback.
+  HEALTH_DATA = 2;
+}
+
+message RecordConsentRequest {
+  // Required: CONSENT_TYPE_UNSPECIFIED is INVALID_ARGUMENT.
+  ConsentType type = 1;
+  // Required, at most 32 characters: the version of the text the user was shown (e.g. "2026-10-14").
+  string version = 2;
 }
 
 message UserRequest {
   string name = 1;
   string email = 2;
+  // Optional for a CLIENT (empty removes it), required for a TRAINER.
   string cpf = 3;
   string cref = 4;
   Role role = 5;
@@ -84,9 +121,17 @@ message UserCreateRequest {
   // Required by CreateUser. CreateClientForTrainer may leave it empty: the user is then created
   // without a password and sets one through a password setup token.
   string password = 3;
+  // Optional for a CLIENT, required for a TRAINER (INVALID_ARGUMENT otherwise).
   string cpf = 4;
   string cref = 5;
   Role role = 6;
+  // The Terms of Use / Privacy Policy version the user accepted at registration, at most 32
+  // characters; stored with the server's time. Required by CreateUser (INVALID_ARGUMENT when
+  // empty) when vertice.consent.terms-required-on-registration is on. It is off until vertice-bff
+  // sends the field (P1-04 follow-up): an empty value then creates the user with no acceptance
+  // recorded, and they are asked at first access. CreateClientForTrainer never sets it: the client
+  // accepts for themself.
+  string accepted_terms_version = 7;
 }
 
 message ListUsersRequest {
