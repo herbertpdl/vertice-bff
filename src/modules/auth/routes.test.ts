@@ -9,11 +9,13 @@ import {
   addFakeUsers,
   bearer,
   emailOf,
+  FAKE_CONSENT_AT,
   FAKE_PASSWORD,
   fakeGrpcCall,
   fakeUpstreamProfile,
   ids,
   listUsersPageCalls,
+  resetFakeConsents,
   resetUpstreamCallers,
   setupTokenFor,
   upstreamCallers,
@@ -160,13 +162,62 @@ describe('auth routes', () => {
   })
 
   describe('POST /auth/register', () => {
-    const body = { name: 'Nova', email: ' Nova@Vertice.test', password: 'secret-123', role: 'TRAINER' }
+    const body = {
+      name: 'Nova',
+      email: ' Nova@Vertice.test',
+      password: 'secret-123',
+      role: 'TRAINER',
+      acceptedTermsVersion: '2026-10-draft',
+    }
 
     it('creates a TRAINER without scanning ListUsers, email normalized', async () => {
       const res = await post('/api/auth/register', body)
       expect(res.statusCode, res.body).toBe(201)
       expect(upstreamMethods()).toEqual(['CreateUser'])
       expect(upstreamRequest('CreateUser')).toMatchObject({ email: 'nova@vertice.test', role: 'TRAINER' })
+    })
+
+    it('passes the accepted Terms version to CreateUser, and nothing else from the body', async () => {
+      const res = await post('/api/auth/register', { ...body, cpf: '52998224725', extra: 'x', consent: { terms: 'v9' } })
+      expect(res.statusCode, res.body).toBe(201)
+      expect(upstreamRequest('CreateUser')).toEqual({
+        name: 'Nova',
+        email: 'nova@vertice.test',
+        password: 'secret-123',
+        cpf: '52998224725',
+        cref: '',
+        role: 'TRAINER',
+        acceptedTermsVersion: '2026-10-draft',
+      })
+    })
+
+    // Optional until vertice-web-react sends it (P1-04 rollout): then a BFF PR makes it required.
+    it('still registers without an accepted Terms version for now, and sends none upstream', async () => {
+      const withoutTerms: Partial<typeof body> = { ...body }
+      delete withoutTerms.acceptedTermsVersion
+      const res = await post('/api/auth/register', withoutTerms)
+      expect(res.statusCode, res.body).toBe(201)
+      expect(upstreamRequest('CreateUser')).not.toHaveProperty('acceptedTermsVersion')
+    })
+
+    it.each([
+      ['empty', ''],
+      ['too long', 'v'.repeat(33)],
+      ['with a space', '2026 10'],
+      ['with a slash', '2026/10'],
+      ['not a string', true],
+      ['null', null],
+    ])('refuses an accepted Terms version that is %s', async (_why, acceptedTermsVersion) => {
+      const res = await post('/api/auth/register', { ...body, acceptedTermsVersion })
+      expect(res.statusCode).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      expect(res.json().error.details.fieldErrors).toHaveProperty('acceptedTermsVersion')
+      expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+
+    it.each(['v1.2', '2026-10-14', 'A_b-9.x', 'v'.repeat(32)])('accepts the version %s', async (acceptedTermsVersion) => {
+      const res = await post('/api/auth/register', { ...body, acceptedTermsVersion })
+      expect(res.statusCode, res.body).toBe(201)
     })
 
     it.each([
@@ -203,18 +254,101 @@ describe('auth routes', () => {
   })
 
   describe('GET /auth/me', () => {
-    it("returns the caller's own account without their CPF", async () => {
+    it("returns the caller's own account and consent state, without their CPF", async () => {
       const res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: bearer('trainerA') })
       expect(res.statusCode, res.body).toBe(200)
-      // Upstream sends the detail view (CPF included) to the user themself; the BFF drops it.
+      // Upstream sends the self view (CPF included) to the user themself; the BFF drops the CPF.
       expect(res.json()).toEqual({
         id: ids.trainerA,
         name: 'Trainer A',
         email: emailOf(ids.trainerA),
         cref: `CREF-${ids.trainerA}`,
         role: 'TRAINER',
+        consent: {
+          termsVersion: '2026-01',
+          termsAcceptedAt: '2026-01-15T12:00:00Z',
+          healthDataVersion: null,
+          healthDataConsentAt: null,
+        },
       })
-      expect(res.body).not.toMatch(/cpf/i)
+      expect(res.body).not.toMatch(/cpf|52998224/i)
+    })
+
+    it('answers null for every consent not given yet', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: bearer('clientA') })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json().consent).toEqual({
+        termsVersion: null,
+        termsAcceptedAt: null,
+        healthDataVersion: null,
+        healthDataConsentAt: null,
+      })
+    })
+
+    it('answers all-null consent when upstream sends no consent message at all', async () => {
+      grpcCallMock.mockResolvedValueOnce({
+        id: String(ids.clientA),
+        name: 'Client A',
+        email: emailOf(ids.clientA),
+        cpf: '',
+        cref: '',
+        role: 'CLIENT',
+        consent: null,
+      } as never)
+      const res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: bearer('clientA') })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(Object.values(res.json().consent)).toEqual([null, null, null, null])
+    })
+  })
+
+  describe('POST /auth/me/consent', () => {
+    afterEach(() => resetFakeConsents())
+
+    const consent = (body: unknown, as: Parameters<typeof bearer>[0] = 'clientA') =>
+      app.inject({ method: 'POST', url: '/api/auth/me/consent', payload: body as object, headers: bearer(as) })
+
+    it("records the caller's health-data consent with their own token and returns the new state", async () => {
+      resetUpstreamCallers()
+      const res = await consent({ type: 'HEALTH_DATA', version: '2026-10-draft' })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json()).toEqual({
+        termsVersion: null,
+        termsAcceptedAt: null,
+        healthDataVersion: '2026-10-draft',
+        healthDataConsentAt: FAKE_CONSENT_AT,
+      })
+      expect(upstreamRequest('RecordConsent')).toEqual({ type: 'HEALTH_DATA', version: '2026-10-draft' })
+      expect(upstreamCallers).toEqual([{ method: 'RecordConsent', caller: { id: ids.clientA, role: 'CLIENT' } }])
+      // GET /auth/me reads it back.
+      const me = await app.inject({ method: 'GET', url: '/api/auth/me', headers: bearer('clientA') })
+      expect(me.json().consent.healthDataVersion).toBe('2026-10-draft')
+    })
+
+    it('records a newer Terms version over the one accepted at registration', async () => {
+      const res = await consent({ type: 'TERMS', version: '2026-10-draft' }, 'trainerA')
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json()).toMatchObject({ termsVersion: '2026-10-draft', termsAcceptedAt: FAKE_CONSENT_AT })
+    })
+
+    it('never sends a user id upstream, whatever the body says', async () => {
+      const res = await consent({ type: 'TERMS', version: 'v1', userId: ids.clientB, id: ids.clientB })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('RecordConsent')).toEqual({ type: 'TERMS', version: 'v1' })
+    })
+
+    it.each([
+      ['no type', { version: 'v1' }],
+      ['an unknown type', { type: 'MARKETING', version: 'v1' }],
+      ['the unspecified type', { type: 'CONSENT_TYPE_UNSPECIFIED', version: 'v1' }],
+      ['no version', { type: 'TERMS' }],
+      ['an empty version', { type: 'TERMS', version: '' }],
+      ['a version over 32 characters', { type: 'TERMS', version: 'v'.repeat(33) }],
+      ['a version with a space', { type: 'HEALTH_DATA', version: 'v 1' }],
+    ])('refuses %s with a 400 before any upstream call', async (_why, body) => {
+      const res = await consent(body)
+      expect(res.statusCode).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      expect(grpcCallMock).not.toHaveBeenCalled()
     })
   })
 
@@ -324,7 +458,7 @@ describe('auth rate limits', () => {
       app.inject({
         method: 'POST',
         url: '/api/auth/register',
-        payload: { name: 'N', email: `n${i}@vertice.test`, password: 'secret-123', role: 'TRAINER' },
+        payload: { name: 'N', email: `n${i}@vertice.test`, password: 'secret-123', role: 'TRAINER', acceptedTermsVersion: 'v1' },
         remoteAddress: '203.0.113.1',
       })
     for (let i = 1; i <= 5; i++) expect((await register(i)).statusCode).toBe(201)

@@ -10,7 +10,9 @@ import helmet from '@fastify/helmet'
  * `X-Frame-Options: DENY` for browsers without `frame-ancestors`.
  *
  * Every `/api/*` response, errors included, is `Cache-Control: no-store`: they carry personal and
- * training data, which no browser, proxy or CDN may keep.
+ * training data, which no browser, proxy or CDN may keep. A route that serves the same public,
+ * personal-data-free answer to everyone may opt out with `config: { cacheControl: '...' }`
+ * (`GET /api/legal/versions`); its error responses stay `no-store`.
  */
 export default fp(async function securityHeaders(app: FastifyInstance) {
   await app.register(helmet, {
@@ -22,9 +24,18 @@ export default fp(async function securityHeaders(app: FastifyInstance) {
   })
 
   app.addHook('onSend', async (request, reply, payload) => {
-    if (isApiPath(request.url)) reply.header('Cache-Control', 'no-store')
+    if (!isApiPath(request.url)) return payload
+    const cacheControl = request.routeOptions.config.cacheControl
+    reply.header('Cache-Control', cacheControl && reply.statusCode < 400 ? cacheControl : 'no-store')
     return payload
   })
 })
 
 const isApiPath = (url: string) => url === '/api' || url.startsWith('/api/') || url.startsWith('/api?')
+
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    /** `Cache-Control` for this route's successful responses instead of `no-store`. Public data only. */
+    cacheControl?: string
+  }
+}

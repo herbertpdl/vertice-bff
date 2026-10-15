@@ -13,6 +13,7 @@ import {
   fakeGrpcCall,
   ids,
   isWriteRpc,
+  resetFakeConsents,
   resetUpstreamCallers,
   setupTokenFor,
   upstreamCallers,
@@ -99,6 +100,7 @@ const setLogBody = { exerciseSetId: ids.exerciseSetA, weight: '20', reps: 10 }
 
 const routes: RouteCase[] = [
   { route: 'GET /health', public: true, ok: { url: '/health' } },
+  { route: 'GET /api/legal/versions', public: true, ok: { url: '/api/legal/versions' } },
 
   // auth
   {
@@ -111,10 +113,25 @@ const routes: RouteCase[] = [
     public: true,
     ok: {
       url: '/api/auth/register',
-      body: { name: 'Novo', email: 'novo@vertice.test', password: 'secret-123', role: 'TRAINER' },
+      body: { name: 'Novo', email: 'novo@vertice.test', password: 'secret-123', role: 'TRAINER', acceptedTermsVersion: 'v1' },
     },
   },
   { route: 'GET /api/auth/me', ok: { as: 'clientA', url: '/api/auth/me' } },
+  {
+    // Self only: vertice-api records the consent for the token's user; a body id goes nowhere.
+    route: 'POST /api/auth/me/consent',
+    ok: { as: 'clientA', url: '/api/auth/me/consent', body: { type: 'HEALTH_DATA', version: 'v1' } },
+    scoped: [
+      {
+        as: 'clientA',
+        url: '/api/auth/me/consent',
+        body: { type: 'TERMS', version: 'v1', id: ids.clientB, userId: ids.clientB },
+        why: 'body: a userId is ignored',
+        rpc: 'RecordConsent',
+        sends: { type: 'TERMS', version: 'v1' },
+      },
+    ],
+  },
   {
     // Self only: the user id comes from the token, never from the request.
     route: 'POST /api/auth/password',
@@ -795,6 +812,7 @@ describe('route authorization', () => {
     grpcCallMock.mockReset()
     grpcCallMock.mockImplementation(fakeGrpcCall)
     resetUpstreamCallers()
+    resetFakeConsents()
   })
 
   const send = (method: string, call: Partial<Call> & { url: string }) =>
@@ -863,6 +881,7 @@ describe('route authorization', () => {
   // ADMIN feature needs a PRD first; extending this list without one is the regression to catch.
   const ADMIN_ROUTES = [
     'GET /api/auth/me',
+    'POST /api/auth/me/consent',
     'POST /api/auth/password',
     'GET /api/exercises',
     'GET /api/exercises/:id',

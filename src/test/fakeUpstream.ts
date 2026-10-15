@@ -158,17 +158,41 @@ function find<T extends { id: number }>(rows: T[], id: unknown, what: string): T
 }
 
 /**
- * vertice-api's user views (P1-03): every RPC fills one, leaving the other fields empty. detail =
- * every field; contact = id, name, role, email; summary = id, name, role.
+ * Each user's consent state, as vertice-api stores it (P1-04): empty strings until given. Trainer A
+ * accepted the Terms at registration; nobody has consented to health data yet. `RecordConsent`
+ * writes here; call `resetFakeConsents()` in `afterEach` when a test records one.
  */
-type UserView = 'detail' | 'contact' | 'summary'
+const emptyConsent = () => ({
+  acceptedTermsVersion: '',
+  termsAcceptedAt: '',
+  healthDataConsentVersion: '',
+  healthDataConsentAt: '',
+})
+const initialConsents = (): Map<number, ReturnType<typeof emptyConsent>> =>
+  new Map([[ids.trainerA, { ...emptyConsent(), acceptedTermsVersion: '2026-01', termsAcceptedAt: '2026-01-15T12:00:00Z' }]])
+let consents = initialConsents()
+export const resetFakeConsents = () => {
+  consents = initialConsents()
+}
+const consentOf = (id: number) => ({ ...(consents.get(id) ?? emptyConsent()) })
+/** What the fake `RecordConsent` stamps as "now". */
+export const FAKE_CONSENT_AT = '2026-10-14T12:00:00Z'
+
+/**
+ * vertice-api's user views (P1-03, P1-04): every RPC fills one, leaving the other fields empty.
+ * self = every field and the consent state; detail = every field but consent; contact = id, name,
+ * role, email; summary = id, name, role. `consent` is null outside self (proto-loader's default
+ * for an unset message).
+ */
+type UserView = 'self' | 'detail' | 'contact' | 'summary'
 const userRes = (u: (typeof users)[number], view: UserView) => ({
   id: str(u.id),
   name: u.name,
   email: view === 'summary' ? '' : emailOf(u.id),
-  cpf: view === 'detail' ? cpfOf(u.id) : '',
-  cref: view === 'detail' && u.role === 'TRAINER' ? `CREF-${u.id}` : '',
+  cpf: view === 'detail' || view === 'self' ? cpfOf(u.id) : '',
+  cref: (view === 'detail' || view === 'self') && u.role === 'TRAINER' ? `CREF-${u.id}` : '',
   role: u.role,
+  consent: view === 'self' ? consentOf(u.id) : null,
 })
 const planRes = (p: (typeof plans)[number]) => ({
   id: str(p.id),
@@ -344,7 +368,7 @@ function getOwnedExercise(id: unknown, verb: 'changed' | 'deleted') {
 
 type Req = Record<string, unknown>
 
-/** vertice-api's `GetUser` rule: detail for the user themself, ADMIN or their active trainer. */
+/** vertice-api's `GetUser` rule: detail for ADMIN or the target's active trainer (the user themself gets self). */
 function canSeeDetail(userId: number): boolean {
   const user = caller()
   if (!user) return false
@@ -382,7 +406,23 @@ const handlers: Record<string, (req: Req) => unknown> = {
   ListUsers: (r) => listUsers(r),
   GetUser: (r) => {
     const user = find(users, r.id, 'User')
+    if (caller()?.id === user.id) return userRes(user, 'self')
     return userRes(user, canSeeDetail(user.id) ? 'detail' : 'summary')
+  },
+  // Mirrors vertice-api's `RecordConsent`: a user token only, the user is the caller, and the
+  // version is validated there too.
+  RecordConsent: (r) => {
+    const user = caller()
+    if (!user) upstreamError(status.PERMISSION_DENIED, 'Only a user can record their own consent')
+    const version = String(r.version ?? '')
+    if (!/^[A-Za-z0-9._-]{1,32}$/.test(version)) upstreamError(status.INVALID_ARGUMENT, 'version: invalid')
+    const consent = consentOf(user.id)
+    if (r.type === 'TERMS') Object.assign(consent, { acceptedTermsVersion: version, termsAcceptedAt: FAKE_CONSENT_AT })
+    else if (r.type === 'HEALTH_DATA') {
+      Object.assign(consent, { healthDataConsentVersion: version, healthDataConsentAt: FAKE_CONSENT_AT })
+    } else upstreamError(status.INVALID_ARGUMENT, 'type: must be set')
+    consents.set(user.id, consent)
+    return consent
   },
   CreateUser: (r) => ({ ...userRes(users[3]!, 'contact'), id: '99', email: r.email, role: r.role }),
   UpdateUser: (r) => userRes(find(users, r.id, 'User'), 'detail'),
@@ -515,7 +555,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
   ListClientsForTrainer: (r) => ({
     clients: trainerClients
       .filter(([t]) => t === Number(r.trainerId))
-      .map(([, c]) => userRes(find(users, c, 'User'), 'contact')),
+      .map(([, c]) => userRes(find(users, c, 'User'), 'summary')),
   }),
   IsTrainersClient: (r) => ({
     isClient: trainerClients.some(([t, c]) => t === Number(r.trainerId) && c === Number(r.clientId)),

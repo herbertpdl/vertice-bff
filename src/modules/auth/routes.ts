@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { changePasswordSchema, loginSchema, passwordSetupSchema, registerSchema } from './schemas.js'
+import { changePasswordSchema, loginSchema, passwordSetupSchema, recordConsentSchema, registerSchema } from './schemas.js'
 import * as authService from './service.js'
 import * as userService from '../users/service.js'
 import { emailKey, ipKey } from '../../plugins/rate-limit.js'
@@ -23,8 +23,13 @@ export default async function authRoutes(app: FastifyInstance) {
     return authService.register(body)
   })
 
-  app.get('/me', { preHandler: app.authenticate }, async (req) => {
-    return userService.toMe(await userService.getUser(req.user!.id))
+  app.get('/me', { preHandler: app.authenticate }, async (req) => userService.getMe(req.user!.id))
+
+  // Self only (P1-04): the body has no user id, and vertice-api records the consent for the
+  // token's user. Any role, like the password change: it is the caller's own account.
+  app.post('/me/consent', { preHandler: app.authenticate }, async (req) => {
+    const body = recordConsentSchema.parse(req.body)
+    return userService.recordConsent(body.type, body.version)
   })
 
   app.post(

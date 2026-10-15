@@ -13,6 +13,14 @@ export interface User {
   role: Role
 }
 
+/** vertice-api's `ConsentState` on the wire: empty strings mean "not given yet". */
+export interface ConsentStateResponse {
+  acceptedTermsVersion: string
+  termsAcceptedAt: string
+  healthDataConsentVersion: string
+  healthDataConsentAt: string
+}
+
 export interface UserResponse {
   id: string
   name: string
@@ -20,23 +28,69 @@ export interface UserResponse {
   cpf: string
   cref: string
   role: Role
+  /** Only in the self view (`GetUser` on the caller's own id); null otherwise. */
+  consent?: ConsentStateResponse | null
 }
 
 export function toUser(r: UserResponse): User {
   return { id: Number(r.id), name: r.name, email: r.email, cpf: r.cpf, cref: r.cref, role: r.role }
 }
 
-/** `GET /auth/me`: the caller's own account, without their CPF (no screen shows it, P1-03). */
+/**
+ * What the caller has consented to (P1-04), `null` where nothing was given yet. Versions are the
+ * text versions the user was shown; the `...At` fields are ISO-8601 instants stamped by
+ * vertice-api. The web compares the versions with `GET /legal/versions` to tell whether to ask
+ * again.
+ */
+export interface Consent {
+  termsVersion: string | null
+  termsAcceptedAt: string | null
+  healthDataVersion: string | null
+  healthDataConsentAt: string | null
+}
+
+export type ConsentType = 'TERMS' | 'HEALTH_DATA'
+
+export function toConsent(r: ConsentStateResponse | null | undefined): Consent {
+  return {
+    termsVersion: r?.acceptedTermsVersion || null,
+    termsAcceptedAt: r?.termsAcceptedAt || null,
+    healthDataVersion: r?.healthDataConsentVersion || null,
+    healthDataConsentAt: r?.healthDataConsentAt || null,
+  }
+}
+
+/** `GET /auth/me`: the caller's own account and consent state, without their CPF (no screen shows it, P1-03). */
 export interface Me {
   id: number
   name: string
   email: string
   cref: string
   role: Role
+  consent: Consent
 }
 
-export function toMe(user: User): Me {
-  return { id: user.id, name: user.name, email: user.email, cref: user.cref, role: user.role }
+/** Built field by field from the self view, so nothing else upstream sends (the CPF) gets through. */
+export function toMe(r: UserResponse): Me {
+  return { id: Number(r.id), name: r.name, email: r.email, cref: r.cref, role: r.role, consent: toConsent(r.consent) }
+}
+
+/** The caller's own account in vertice-api's self view (consent included). */
+export async function getMe(id: number): Promise<Me> {
+  return toMe(await grpcCall<{ id: number }, UserResponse>(userClient, 'GetUser', { id }))
+}
+
+/**
+ * Records a consent of the calling user (`RecordConsent`). The request has no user id: vertice-api
+ * takes it from the forwarded token, so nobody can consent for someone else.
+ */
+export async function recordConsent(type: ConsentType, version: string): Promise<Consent> {
+  const res = await grpcCall<{ type: ConsentType; version: string }, ConsentStateResponse>(
+    userClient,
+    'RecordConsent',
+    { type, version },
+  )
+  return toConsent(res)
 }
 
 export interface UserPage {
@@ -177,6 +231,11 @@ export interface UserCreateInput {
   cpf?: string
   cref?: string
   role: Role
+  /**
+   * The Terms / Privacy Policy version accepted at registration (vertice-api stamps the time).
+   * Optional until vertice-web-react sends it; omitted means none recorded.
+   */
+  acceptedTermsVersion?: string
 }
 
 /** Public registration: no user yet, so it goes out with the service token. */
@@ -184,7 +243,15 @@ export async function createUser(input: UserCreateInput): Promise<User> {
   const res = await grpcCall<UserCreateInput, UserResponse>(
     userClient,
     'CreateUser',
-    { ...input, cpf: input.cpf ?? '', cref: input.cref ?? '' },
+    {
+      name: input.name,
+      email: input.email,
+      password: input.password,
+      cpf: input.cpf ?? '',
+      cref: input.cref ?? '',
+      role: input.role,
+      ...(input.acceptedTermsVersion === undefined ? {} : { acceptedTermsVersion: input.acceptedTermsVersion }),
+    },
     { asService: true },
   )
   return toUser(res)

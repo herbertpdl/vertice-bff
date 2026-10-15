@@ -24,6 +24,7 @@ import {
 } from './modules/workout-sessions/routes.js'
 import { submitFeedbackRoutes, feedbackRoutes } from './modules/feedback/routes.js'
 import dashboardRoutes from './modules/dashboard/routes.js'
+import legalRoutes from './modules/legal/routes.js'
 
 export interface BuildAppOptions {
   /** Sees every route as it is registered (the route-authorization suite uses it to find untested routes). */
@@ -103,6 +104,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await api.register(workoutSessionActionRoutes, { prefix: '/workout-sessions' })
       await api.register(feedbackRoutes, { prefix: '/feedback' })
       await api.register(dashboardRoutes, { prefix: '/dashboard' })
+      await api.register(legalRoutes, { prefix: '/legal' })
     },
     { prefix: '/api' },
   )
