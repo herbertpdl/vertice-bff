@@ -215,6 +215,15 @@ describe('mapGrpcError', () => {
     const err = mapGrpcError({ code: grpc.status.UNAVAILABLE, details: 'connect ECONNREFUSED 10.0.0.5:9090' })
     expect(err).toMatchObject({ statusCode: 503, code: 'UPSTREAM_UNAVAILABLE', message: 'vertice-api is unavailable' })
   })
+
+  it('maps RESOURCE_EXHAUSTED (an export over its bounds) to 413 with a fixed message', () => {
+    const err = mapGrpcError({ code: grpc.status.RESOURCE_EXHAUSTED, details: 'workoutLogs exceeds 20000 rows' })
+    expect(err).toMatchObject({
+      statusCode: 413,
+      code: 'TOO_LARGE',
+      message: 'The requested data is too large to return',
+    })
+  })
 })
 
 describe('upstream error logging', () => {

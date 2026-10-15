@@ -48,6 +48,8 @@ function rateLimitSettings(overrides: Partial<RateLimitSettings> = {}): RateLimi
     authWindowMs: env.AUTH_RATE_LIMIT_WINDOW_MS,
     authNetworkMax: env.AUTH_RATE_LIMIT_NETWORK_MAX ?? authMax * NETWORK_MAX_FACTOR,
     authMaxKeys: env.AUTH_RATE_LIMIT_MAX_KEYS,
+    exportMax: env.EXPORT_RATE_LIMIT_MAX,
+    exportWindowMs: env.EXPORT_RATE_LIMIT_WINDOW_MS,
     ...overrides,
     authMax,
   }

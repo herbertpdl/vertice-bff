@@ -8,6 +8,7 @@ import { grpcCall, mapGrpcError } from '../../grpc/call.js'
 import {
   addFakeUsers,
   bearer,
+  cpfOf,
   emailOf,
   FAKE_CONSENT_AT,
   FAKE_PASSWORD,
@@ -255,14 +256,15 @@ describe('auth routes', () => {
   })
 
   describe('GET /auth/me', () => {
-    it("returns the caller's own account and consent state, without their CPF", async () => {
+    it("returns the caller's own account and consent state, the CPF masked", async () => {
       const res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: bearer('trainerA') })
       expect(res.statusCode, res.body).toBe(200)
-      // Upstream sends the self view (CPF included) to the user themself; the BFF drops the CPF.
+      // Upstream sends the self view (CPF in full) to the user themself; the BFF masks it.
       expect(res.json()).toEqual({
         id: ids.trainerA,
         name: 'Trainer A',
         email: emailOf(ids.trainerA),
+        cpf: '***.***.***-10',
         cref: `CREF-${ids.trainerA}`,
         role: 'TRAINER',
         consent: {
@@ -272,7 +274,7 @@ describe('auth routes', () => {
           healthDataConsentAt: null,
         },
       })
-      expect(res.body).not.toMatch(/cpf|52998224/i)
+      expect(res.body).not.toMatch(/52998224/)
     })
 
     it('answers null for every consent not given yet', async () => {
@@ -350,6 +352,165 @@ describe('auth routes', () => {
       expect(res.statusCode).toBe(400)
       expect(res.json().error.code).toBe('VALIDATION_ERROR')
       expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('PATCH /auth/me', () => {
+    const patch = (body: unknown, as: Parameters<typeof bearer>[0] = 'clientA') =>
+      app.inject({ method: 'PATCH', url: '/api/auth/me', payload: body as object, headers: bearer(as) })
+    const sentUser = () => (upstreamRequest('UpdateUser') as { id: number; user: Record<string, string> } | undefined)
+
+    it('keeps every omitted field, the CPF included, and sends the stored role', async () => {
+      const res = await patch({ name: 'Novo Nome' })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(sentUser()).toEqual({
+        id: ids.clientA,
+        user: { name: 'Novo Nome', email: emailOf(ids.clientA), cpf: cpfOf(ids.clientA), cref: '', role: 'CLIENT' },
+      })
+      // The answer is Me: the CPF masked, the consent state as stored.
+      expect(res.json()).toMatchObject({ id: ids.clientA, name: 'Novo Nome', cpf: '***.***.***-20', role: 'CLIENT' })
+      expect(res.json().consent).toEqual({
+        termsVersion: null,
+        termsAcceptedAt: null,
+        healthDataVersion: null,
+        healthDataConsentAt: null,
+      })
+      expect(res.body).not.toMatch(/52998224/)
+    })
+
+    it('sets a new CPF and email (normalized), and lets a CLIENT remove their CPF with null', async () => {
+      await patch({ email: '  Novo@Vertice.TEST ', cpf: '11144477735' })
+      expect(sentUser()!.user).toMatchObject({ email: 'novo@vertice.test', cpf: '11144477735' })
+      grpcCallMock.mockClear()
+      await patch({ cpf: null })
+      expect(sentUser()!.user.cpf).toBe('')
+    })
+
+    it('ignores a role in the body: the stored one is always sent', async () => {
+      const res = await patch({ name: 'X', role: 'ADMIN' }, 'trainerA')
+      expect(res.statusCode, res.body).toBe(200)
+      expect(sentUser()!.user.role).toBe('TRAINER')
+    })
+
+    it("lets a TRAINER change their CREF, keeping it when omitted", async () => {
+      await patch({ cref: 'CREF-NOVO' }, 'trainerA')
+      expect(sentUser()!.user).toMatchObject({ cref: 'CREF-NOVO', cpf: cpfOf(ids.trainerA) })
+      grpcCallMock.mockClear()
+      await patch({ name: 'T' }, 'trainerA')
+      expect(sentUser()!.user.cref).toBe(`CREF-${ids.trainerA}`)
+    })
+
+    it.each([
+      ['a masked CPF', { cpf: '***.***.***-20' }],
+      ['an empty name', { name: '  ' }],
+      ['a malformed email', { email: 'not-an-email' }],
+    ])('refuses %s with a 400 before any upstream call', async (_why, body) => {
+      const res = await patch(body)
+      expect(res.statusCode).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['trainerA', 'removing a TRAINER CPF', { cpf: null }],
+      ['trainerA', 'an empty TRAINER CPF', { cpf: '' }],
+      ['clientA', 'a CREF for a CLIENT', { cref: 'CREF-1' }],
+    ] as const)('as %s refuses %s with a 400, never calling UpdateUser', async (as, _why, body) => {
+      const res = await patch(body, as)
+      expect(res.statusCode).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      expect(upstreamMethods()).not.toContain('UpdateUser')
+    })
+
+    it('needs a token', async () => {
+      const res = await app.inject({ method: 'PATCH', url: '/api/auth/me', payload: { name: 'X' } })
+      expect(res.statusCode).toBe(401)
+    })
+  })
+
+  describe('DELETE /auth/me', () => {
+    const remove = (body: unknown, as: Parameters<typeof bearer>[0] = 'clientA') =>
+      app.inject({ method: 'DELETE', url: '/api/auth/me', payload: body as object, headers: bearer(as) })
+
+    it('re-checks the password, then deletes the account with the caller\'s own token: 204', async () => {
+      resetUpstreamCallers()
+      const res = await remove({ password: FAKE_PASSWORD })
+      expect(res.statusCode, res.body).toBe(204)
+      expect(res.body).toBe('')
+      expect(upstreamMethods()).toEqual(['GetUser', 'VerifyCredentials', 'DeleteAccount'])
+      expect(upstreamRequest('VerifyCredentials')).toEqual({ email: emailOf(ids.clientA), password: FAKE_PASSWORD })
+      expect(upstreamRequest('DeleteAccount')).toEqual({})
+      for (const { caller } of upstreamCallers) expect(caller).toEqual({ id: ids.clientA, role: 'CLIENT' })
+    })
+
+    it('refuses a wrong password with 400 INVALID_CURRENT_PASSWORD (not a logout 401), deleting nothing', async () => {
+      const res = await remove({ password: 'wrong-password' })
+      expect(res.statusCode).toBe(400)
+      expect(res.json().error.code).toBe('INVALID_CURRENT_PASSWORD')
+      expect(upstreamMethods()).not.toContain('DeleteAccount')
+    })
+
+    it.each([
+      ['no body', undefined],
+      ['no password', {}],
+      ['an empty password', { password: '' }],
+    ])('requires the password: %s is a 400 before any upstream call', async (_why, body) => {
+      const res = await app.inject({
+        method: 'DELETE',
+        url: '/api/auth/me',
+        headers: bearer('clientA'),
+        ...(body === undefined ? {} : { payload: body }),
+      })
+      expect(res.statusCode).toBe(400)
+      expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+
+    it('answers a TRAINER with active clients with 409 ACTIVE_CLIENTS and a fixed message', async () => {
+      const res = await remove({ password: FAKE_PASSWORD }, 'trainerA')
+      expect(res.statusCode).toBe(409)
+      expect(res.json().error).toEqual({
+        code: 'ACTIVE_CLIENTS',
+        message: 'End your client relationships before deleting your account',
+      })
+      expect(res.body).not.toContain(String(ids.trainerA))
+    })
+
+    it('lets ADMIN delete their own account', async () => {
+      const res = await remove({ password: FAKE_PASSWORD }, 'admin')
+      expect(res.statusCode, res.body).toBe(204)
+    })
+  })
+
+  describe('GET /auth/me/export', () => {
+    const exportData = (as: Parameters<typeof bearer>[0] = 'clientA') =>
+      app.inject({ method: 'GET', url: '/api/auth/me/export', headers: bearer(as) })
+
+    it("passes vertice-api's JSON document through as a no-store file download", async () => {
+      const res = await exportData()
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.headers['content-type']).toBe('application/json; charset=utf-8')
+      expect(res.headers['content-disposition']).toMatch(/^attachment; filename="vertice-dados-\d{4}-\d{2}-\d{2}\.json"$/)
+      expect(res.headers['cache-control']).toBe('no-store')
+      // Their own data, the CPF in full: it is the user's own copy (LGPD art. 18 II).
+      expect(res.json().profile).toMatchObject({ id: ids.clientA, cpf: cpfOf(ids.clientA) })
+      expect(upstreamRequest('ExportUserData')).toEqual({})
+    })
+
+    it('names the file after the UTC date of the export', async () => {
+      const res = await exportData()
+      const today = new Date().toISOString().slice(0, 10)
+      expect(res.headers['content-disposition']).toBe(`attachment; filename="vertice-dados-${today}.json"`)
+    })
+
+    it('answers an export over the upstream bounds (RESOURCE_EXHAUSTED) with 413 and a fixed message', async () => {
+      grpcCallMock.mockRejectedValueOnce(
+        mapGrpcError({ code: status.RESOURCE_EXHAUSTED, details: 'workoutLogs exceeds 20000 rows for user 20' }),
+      )
+      const res = await exportData()
+      expect(res.statusCode).toBe(413)
+      expect(res.json()).toEqual({ error: { code: 'TOO_LARGE', message: 'The requested data is too large to return' } })
+      expect(res.headers['cache-control']).toBe('no-store')
+      expect(res.headers['content-disposition']).toBeUndefined()
     })
   })
 
@@ -531,6 +692,46 @@ describe('auth rate limits', () => {
     // ...but the /48 does, before any new /64 or email bucket is allocated.
     expect((await fromNet('2001:db8:1')).statusCode).toBe(429)
     expect((await fromNet('2001:db8:2')).statusCode).toBe(401)
+  })
+
+  it('allows 3 data exports per user per window, counting successes, then 429', async () => {
+    const limited = await buildApp({ rateLimits: { exportMax: 3, exportWindowMs: 60 * 60_000, globalMax: 1_000_000 } })
+    try {
+      const exportAs = (as: Parameters<typeof bearer>[0], remoteAddress = '203.0.113.1') =>
+        limited.inject({ method: 'GET', url: '/api/auth/me/export', headers: bearer(as), remoteAddress })
+      for (let i = 1; i <= 3; i++) expect((await exportAs('clientA', `203.0.113.${i}`)).statusCode).toBe(200)
+      // The bucket is the user's: another IP doesn't reset it...
+      const res = await exportAs('clientA', '198.51.100.7')
+      expect(res.statusCode).toBe(429)
+      expect(res.json().error.code).toBe('RATE_LIMITED')
+      expect(Number(res.headers['retry-after'])).toBeGreaterThan(0)
+      expect(upstreamMethods().filter((m) => m === 'ExportUserData')).toHaveLength(3)
+      // ...and another user from the same IP is unaffected.
+      expect((await exportAs('trainerA')).statusCode).toBe(200)
+    } finally {
+      await limited.close()
+    }
+  })
+
+  it('does not count an export that failed upstream (5xx)', async () => {
+    const limited = await buildApp({ rateLimits: { exportMax: 1, globalMax: 1_000_000 } })
+    try {
+      const exportOnce = () => limited.inject({ method: 'GET', url: '/api/auth/me/export', headers: bearer('clientA') })
+      grpcCallMock.mockRejectedValueOnce(mapGrpcError({ code: status.UNAVAILABLE, details: '' }))
+      expect((await exportOnce()).statusCode).toBe(503)
+      expect((await exportOnce()).statusCode).toBe(200)
+      expect((await exportOnce()).statusCode).toBe(429)
+    } finally {
+      await limited.close()
+    }
+  })
+
+  it('answers the 6th wrong password on DELETE /auth/me with 429', async () => {
+    const remove = (password: string) =>
+      app.inject({ method: 'DELETE', url: '/api/auth/me', payload: { password }, headers: bearer('clientA') })
+    for (let i = 1; i <= 5; i++) expect((await remove('wrong')).statusCode).toBe(400)
+    expect((await remove(FAKE_PASSWORD)).statusCode).toBe(429)
+    expect(upstreamMethods()).not.toContain('DeleteAccount')
   })
 
   it('has a loose global bucket over every route', async () => {

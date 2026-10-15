@@ -130,6 +130,9 @@ const envSchema = z
      * attempt can need 3 new keys (network, IP, email), so anything smaller refuses everyone.
      */
     AUTH_RATE_LIMIT_MAX_KEYS: z.coerce.number().int().min(3).default(1_000_000),
+    /** Per-user bucket on `GET /auth/me/export` (every attempt counts): 3 per hour by default. */
+    EXPORT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(3),
+    EXPORT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60 * 60_000),
     /**
      * Current version of the Terms of Use / Privacy Policy, and of the health-data consent notice
      * (P1-04), served by `GET /api/legal/versions`. The web shows these texts, sends the version
