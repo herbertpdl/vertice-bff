@@ -69,6 +69,33 @@ describe('client password setup', () => {
     })
   })
 
+  describe('without a CPF (optional for a CLIENT since vertice-api #65)', () => {
+    it("creates the client with an empty CPF, which vertice-api stores as NULL, and answers cpf ''", async () => {
+      const res = await create({ name: 'Novo', email: 'novo@vertice.test' })
+      expect(res.statusCode, res.body).toBe(201)
+      expect(upstreamRequest('CreateClientForTrainer')).toMatchObject({ cpf: '' })
+    })
+
+    it("updates the client with an empty CPF (UpdateUser replaces it: '' removes a stored CPF)", async () => {
+      grpcCallMock.mockImplementation(async (client, method, request, options) => {
+        const res = await fakeGrpcCall(client, method, request, options)
+        return (method === 'UpdateUser' ? { ...(res as object), cpf: '' } : res) as never
+      })
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/clients/${ids.clientA}`,
+        headers: bearer('trainerA'),
+        payload: { name: 'Client A', email: emailOf(ids.clientA) },
+      })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('UpdateUser')).toEqual({
+        id: ids.clientA,
+        user: { name: 'Client A', email: emailOf(ids.clientA), cpf: '', cref: '', role: 'CLIENT' },
+      })
+      expect(res.json().cpf).toBe('')
+    })
+  })
+
   describe('POST /clients/:id/setup-token', () => {
     const reissue = (clientId: number) =>
       app.inject({ method: 'POST', url: `/api/clients/${clientId}/setup-token`, headers: bearer('trainerA') })

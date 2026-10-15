@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { CONSENT_VERSION_PATTERN } from '../../config/env.js'
 
 /** vertice-api's `@Password` policy: not blank, at least 8 characters, at most 72 UTF-8 bytes (bcrypt's limit). */
 export const PASSWORD_MIN_CHARS = 8
@@ -16,6 +17,14 @@ export const passwordSchema = z
 /** Trimmed and lower-cased, the way vertice-api stores emails. */
 export const emailSchema = z.string().trim().toLowerCase().email()
 
+/**
+ * A consent text version (Terms of Use / Privacy Policy, health-data notice) in vertice-api's
+ * format, e.g. `2026-10-draft` or `v1.2`.
+ */
+export const consentVersionSchema = z
+  .string()
+  .regex(CONSENT_VERSION_PATTERN, 'Version must be 1 to 32 letters, digits, dots, underscores or hyphens')
+
 export const loginSchema = z.object({
   email: emailSchema,
   // No policy here: login only checks what was stored, and a wrong password must get the same
@@ -32,6 +41,16 @@ export const registerSchema = z.object({
   role: z.literal('TRAINER'),
   cpf: z.string().optional(),
   cref: z.string().optional(),
+  // The Terms of Use / Privacy Policy version the user accepted on the form (P1-04). Required:
+  // registering without accepting is a 400. Any well-formed version is accepted, not only the
+  // current `TERMS_VERSION`, so a web build one release behind still registers.
+  acceptedTermsVersion: consentVersionSchema,
+})
+
+/** `POST /auth/me/consent`: the caller consents, for themself, to one text in one version. */
+export const recordConsentSchema = z.object({
+  type: z.enum(['TERMS', 'HEALTH_DATA']),
+  version: consentVersionSchema,
 })
 
 export const changePasswordSchema = z.object({

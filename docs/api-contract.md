@@ -2,7 +2,7 @@
 
 Base URL (dev): `http://localhost:3000/api`
 
-All endpoints except `/auth/login`, `/auth/register` and `/auth/password/setup` require:
+All endpoints except `/auth/login`, `/auth/register`, `/auth/password/setup` and `/legal/versions` require:
 `Authorization: Bearer <token>`
 
 The token is the one `/auth/login` or `/auth/register` returned. Treat it as opaque: it carries
@@ -33,7 +33,7 @@ Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), 
 
 `PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — emitted by `PUT /workouts/:workoutId/exercises`, when a client has already recorded data under the workout, and by `DELETE /exercises/:id`, while any workout uses the exercise. Distinct from `VALIDATION_ERROR` ("fix the payload").
 
-**Headers.** Every response carries API security headers (`@fastify/helmet`): `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: default-src 'none';frame-ancestors 'none'` (the BFF serves no HTML), `Strict-Transport-Security`, `Referrer-Policy: no-referrer` and helmet's other defaults. Every `/api/*` response, errors included, is `Cache-Control: no-store`.
+**Headers.** Every response carries API security headers (`@fastify/helmet`): `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: default-src 'none';frame-ancestors 'none'` (the BFF serves no HTML), `Strict-Transport-Security`, `Referrer-Policy: no-referrer` and helmet's other defaults. Every `/api/*` response, errors included, is `Cache-Control: no-store`, except a successful `GET /legal/versions` (public, no personal data: `Cache-Control: public, max-age=300`).
 
 Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Every id a route accepts (path, query or body) is checked against the caller: a `CLIENT` only reaches their own plans, workouts and workout logs; a `TRAINER` only their own plans and their own clients (`TrainerClientService.IsTrainersClient`). Another user's id is **403 `FORBIDDEN`**. A `CLIENT`'s `clientId` query parameter is ignored and replaced with their own id. `src/test/route-authorization.test.ts` pins this per route.
 
@@ -41,8 +41,8 @@ Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Eve
 
 | Routes | Roles |
 |---|---|
-| `POST /auth/login`, `POST /auth/register`, `POST /auth/password/setup`, `GET /health` | public |
-| `GET /auth/me`, `POST /auth/password`, `GET /muscle-groups`, `GET /exercises/:id` (upstream decides visibility) | any role |
+| `POST /auth/login`, `POST /auth/register`, `POST /auth/password/setup`, `GET /legal/versions`, `GET /health` | public |
+| `GET /auth/me`, `POST /auth/me/consent`, `POST /auth/password`, `GET /muscle-groups`, `GET /exercises/:id` (upstream decides visibility) | any role |
 | `GET /exercises` | TRAINER, ADMIN (ADMIN sees the starter set) |
 | `/clients/**`, `GET /dashboard`, `GET /feedback`, `GET /workouts?recent=true`, `POST /exercises`, `PATCH`/`DELETE /exercises/:id`, every plan/workout/workout-exercise/set write (`POST`/`PUT`/`PATCH`/`DELETE`, incl. `POST /workouts/:id/clone`) | TRAINER |
 | `GET /training-plans`, `GET /training-plans/:id`, `GET /training-plans/:planId/workouts`, `GET /workouts/:id`, `GET /workouts/:id/full`, `GET /workouts/:workoutId/exercises`, `GET /workout-exercises/:workoutExerciseId/sets`, `GET /workouts/:workoutId/session`, `GET /workout-logs`, `GET /exercises/:id/progress` | TRAINER, CLIENT (each scoped to their own data) |
@@ -67,10 +67,24 @@ Passwords follow vertice-api's policy everywhere one is set: **at least 8 charac
 
 - `POST /login` `{email, password}` → `{token, user: {id,name,email,role}}`. The password is checked by vertice-api (`VerifyCredentials`). A wrong password, an unknown email and an account with no password yet all get the **same** `401 {"error":{"code":"UNAUTHORIZED","message":"Invalid email or password"}}`.
   - Rollout flag: with `VERIFY_PASSWORDS=false` (development/test only; the BFF refuses to start with it anywhere else) login only checks that the email exists, the old MVP behaviour. Default is `true`.
-- `POST /register` `{name, email, password, role: "TRAINER", cpf, cref?}` → `201`, same shape as login. **Only `TRAINER`**: `role: "CLIENT"` is `400 VALIDATION_ERROR` (clients are created by their trainer, `POST /clients`). **`cpf` is required** (vertice-api rejects empty/invalid CPF). `cref` is optional (trainer license number). A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`, the same body for both.
-- `GET /me` (auth) → `{id, name, email, cref, role}`: the caller's own account. **No `cpf`** (no screen shows it; P1-03). `cref` is `""` for anyone but a trainer who set one.
+- `POST /register` `{name, email, password, role: "TRAINER", cpf, cref?, acceptedTermsVersion}` → `201`, same shape as login. **Only `TRAINER`**: `role: "CLIENT"` is `400 VALIDATION_ERROR` (clients are created by their trainer, `POST /clients`). **`cpf` is required for a trainer** (vertice-api rejects an empty or invalid one; it is optional only for a CLIENT). `cref` is optional (trainer license number). **`acceptedTermsVersion` is required** (P1-04): the version of the Terms of Use / Privacy Policy the user accepted on the form, normally `terms` from `GET /legal/versions`. Format: 1 to 32 of `[A-Za-z0-9._-]` (vertice-api's); missing or malformed is `400 VALIDATION_ERROR` before any upstream call. Any well-formed version is accepted, not only the current one. vertice-api stores it with its own timestamp. A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`, the same body for both.
+- `GET /me` (auth) → `{id, name, email, cref, role, consent}`: the caller's own account. **No `cpf`** (no screen shows it; P1-03). `cref` is `""` for anyone but a trainer who set one. `consent` is the caller's `Consent` (below), from vertice-api's self view.
+- `POST /me/consent` (auth, any role) `{type: "TERMS" | "HEALTH_DATA", version}` → `200` `Consent`, the caller's state after the change. **Self only**: there is no user id in the request; vertice-api's `RecordConsent` records it for the token's user and stamps the time. `TERMS` is the Terms of Use / Privacy Policy (an existing user re-accepting a new version), `HEALTH_DATA` the consent to processing health-related data (loads, session logs, feedback; LGPD art. 11, I). A later call replaces the earlier record of that type. `version` has the same format as `acceptedTermsVersion`; an unknown `type` or a malformed version is `400 VALIDATION_ERROR` before any upstream call.
+
+```ts
+Consent = {
+  termsVersion: string | null,        // Terms / Privacy Policy version accepted, null if never
+  termsAcceptedAt: string | null,     // ISO-8601 instant
+  healthDataVersion: string | null,   // health-data notice version consented to, null if never
+  healthDataConsentAt: string | null, // ISO-8601 instant
+}
+```
+The web compares `termsVersion` / `healthDataVersion` with `GET /legal/versions`: null or different means "show the text and ask" (first access, or the text changed). Users created before P1-04, and every trainer-created client, start with all four null.
 - `POST /password` (auth, any role) `{currentPassword, newPassword}` → `204`. Changes the caller's own password after re-checking the current one. A wrong `currentPassword` is **`400 INVALID_CURRENT_PASSWORD`**, not a 401: the session is still valid, so clients must not log out on it.
 - `POST /password/setup` (public) `{token, newPassword}` → `204`. First access: the client chooses a password with the setup token from `POST /clients` (or `POST /clients/:id/setup-token`), then logs in normally. An unknown, expired (72h) or already used token is **`400 INVALID_SETUP_TOKEN`** (vertice-api's `UNAUTHENTICATED`, mapped so clients don't read it as a logout). The token is single-use, and issuing a new one invalidates the previous one.
+
+## Legal — `/legal`
+- `GET /versions` (public) → `{terms, healthData}`: the current version of the Terms of Use / Privacy Policy and of the health-data consent notice (env `TERMS_VERSION`, `HEALTH_DATA_CONSENT_VERSION`, default `2026-10-draft`; the texts are drafts pending legal review). The web shows the matching texts, sends `terms` as `acceptedTermsVersion` on register and the versions to `POST /auth/me/consent`, and compares them with `GET /auth/me`'s `consent` to tell whether a stored consent is outdated. No upstream call. Cacheable: `Cache-Control: public, max-age=300` (errors stay `no-store`). A version changes only on a BFF deploy that bumps the env var.
 
 ## Students — `/students` (TRAINER only)
 A trainer's roster = distinct clients across their training plans (User has no direct trainer link). **This means a newly created student with no training plan yet does not appear in `GET /` until a plan is created for them** — this is pre-existing behavior of the roster derivation, not something the endpoints below change.
@@ -97,7 +111,7 @@ A trainer's roster = distinct clients across their training plans (User has no d
   }
   ```
   `activePlan` is the plan whose `[startDate, endDate]` contains today (most recently started one wins if more than one overlaps); everything else is zeroed/null when the student has no active plan. `thisWeek` counts completed vs. total workouts in the active plan for the current ISO week. `adherence4Weeks` is an **approximation**: vertice-api's `ListWorkoutLogs` RPC is scoped to one plan + one week (no general history query), so this re-fetches logs for the last 4 Mondays (clamped to weeks on/after the plan's start date), treats the plan's workout list as the recurring weekly schedule, and computes `completed / (workoutsPerWeek × weeksElapsed) × 100`, capped at 100. `lastWorkoutAt` is the latest `completedAt` found in that same 4-week lookback window (not a true all-time last-workout value — there's no cheaper way to get that from the current API surface).
-- `POST /` `{name, email, cpf?}` → `201` `ClientDetail & {setup}` (CPF masked) — creates a CLIENT user **without a password** and issues a first-access token. A `password` in the body is ignored (never sent upstream): the client chooses their own.
+- `POST /` `{name, email, cpf?}` → `201` `ClientDetail & {setup}` (CPF masked). **`cpf` is optional** for a client (vertice-api #65, data minimisation, pending legal review): omitted or `""` creates the client without one (stored as NULL, `cpf: ""` in responses); a CPF that is set must be valid (400) and unique (409) — creates a CLIENT user **without a password** and issues a first-access token. A `password` in the body is ignored (never sent upstream): the client chooses their own.
   ```json
   {
     "id": 42, "name": "Ana", "email": "ana@example.com", "cpf": "***.***.***-25", "role": "CLIENT",
@@ -106,7 +120,7 @@ A trainer's roster = distinct clients across their training plans (User has no d
   ```
   The web builds the link the trainer shares from the token: `/definir-senha?token=<token>` (the page posts it to `POST /auth/password/setup`). The token is shown once (vertice-api only stores its hash) and expires after 72h. There is no email delivery yet. `setup` is `null` only when the client was created but issuing the token failed; re-issue it with the route below rather than re-creating the client (that would be a 409 `CONFLICT`).
 - `POST /:id/setup-token` (**TRAINER only**, one of your clients) → `201` `{token, expiresAt}`. Re-issues the first-access link; the previous one stops working. Only while the client has no password yet: once they set one it is **`409 PRECONDITION_FAILED`**, since a trainer-issued link would let the trainer reset the client's password. (Clients created before setup tokens existed have a random password, so they get their link from ops: `npm run ops:issue-setup-tokens`, see the README.) Errors: 403 `Requires role: TRAINER` (ADMIN, CLIENT); 403 `This client is not one of your clients`.
-- `PATCH /:id` `{name, email, cpf?}` → `ClientDetail` (CPF masked). A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`.
+- `PATCH /:id` `{name, email, cpf?}` → `ClientDetail` (CPF masked). Despite the verb, a **full replace** of these three fields (vertice-api's `UpdateUser`): an omitted or empty `cpf` **removes** a stored CPF. Send the full CPF to keep it (read it with `?reveal=cpf`; never send the mask back). A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`.
 - `DELETE /:id`
 
 ### What vertice-web-react must change (P1-03, web step)

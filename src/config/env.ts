@@ -73,6 +73,21 @@ function isPlaceholderSecret(secret: string): boolean {
   return PLACEHOLDER_JWT_SECRETS.some((placeholder) => placeholder.toLowerCase() === normalized)
 }
 
+/** vertice-api's consent version format (`CONSENT_VERSION` in its `UserController`). */
+export const CONSENT_VERSION_PATTERN = /^[A-Za-z0-9._-]{1,32}$/
+
+/**
+ * The legal texts' current versions until legal review sets real ones. The texts themselves are
+ * drafts pending legal review (vertice-api `docs/data-inventory.md`), hence the suffix.
+ */
+export const DEFAULT_LEGAL_VERSION = '2026-10-draft'
+
+const legalVersion = z
+  .string()
+  .trim()
+  .regex(CONSENT_VERSION_PATTERN, 'must be 1 to 32 letters, digits, dots, underscores or hyphens')
+  .default(DEFAULT_LEGAL_VERSION)
+
 const envSchema = z
   .object({
     NODE_ENV: z
@@ -115,6 +130,14 @@ const envSchema = z
      * attempt can need 3 new keys (network, IP, email), so anything smaller refuses everyone.
      */
     AUTH_RATE_LIMIT_MAX_KEYS: z.coerce.number().int().min(3).default(1_000_000),
+    /**
+     * Current version of the Terms of Use / Privacy Policy, and of the health-data consent notice
+     * (P1-04), served by `GET /api/legal/versions`. The web shows these texts, sends the version
+     * back on register / `POST /auth/me/consent`, and asks again when a stored consent differs.
+     * Bump one when its text changes.
+     */
+    TERMS_VERSION: legalVersion,
+    HEALTH_DATA_CONSENT_VERSION: legalVersion,
   })
   .superRefine((value, ctx) => {
     if (DEV_NODE_ENVS.includes(value.NODE_ENV)) return

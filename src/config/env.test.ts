@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_CORS_ORIGIN, DEV_JWT_SECRET, parseCorsOrigins, parseEnv, parseTrustProxy } from './env.js'
+import { DEFAULT_CORS_ORIGIN, DEFAULT_LEGAL_VERSION, DEV_JWT_SECRET, parseCorsOrigins, parseEnv, parseTrustProxy } from './env.js'
 
 const STRONG_SECRET = 'q7Vx2mP9rT4wZ8kL1nB6cF3hJ5sD0gYa'
 
@@ -165,5 +165,24 @@ describe('parseEnv rate limits', () => {
     // An attempt can need 3 new keys (network, IP, email); a smaller cap would refuse everyone.
     expect(() => parseEnv({ AUTH_RATE_LIMIT_MAX_KEYS: '2' })).toThrow(/AUTH_RATE_LIMIT_MAX_KEYS/)
     expect(parseEnv({ AUTH_RATE_LIMIT_MAX_KEYS: '3' }).AUTH_RATE_LIMIT_MAX_KEYS).toBe(3)
+  })
+})
+
+describe('parseEnv legal versions', () => {
+  it('defaults both to the draft version', () => {
+    const env = parseEnv({})
+    expect(env.TERMS_VERSION).toBe(DEFAULT_LEGAL_VERSION)
+    expect(env.HEALTH_DATA_CONSENT_VERSION).toBe(DEFAULT_LEGAL_VERSION)
+  })
+
+  it('reads overrides in vertice-api\'s version format', () => {
+    const env = parseEnv({ TERMS_VERSION: ' 2026-11-01 ', HEALTH_DATA_CONSENT_VERSION: 'v1.2' })
+    expect(env.TERMS_VERSION).toBe('2026-11-01')
+    expect(env.HEALTH_DATA_CONSENT_VERSION).toBe('v1.2')
+  })
+
+  it.each(['', 'v 1', '2026/10', 'v'.repeat(33)])('refuses %j, which vertice-api would reject', (value) => {
+    expect(() => parseEnv({ TERMS_VERSION: value })).toThrow(/TERMS_VERSION/)
+    expect(() => parseEnv({ HEALTH_DATA_CONSENT_VERSION: value })).toThrow(/HEALTH_DATA_CONSENT_VERSION/)
   })
 })
