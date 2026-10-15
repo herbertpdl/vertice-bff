@@ -191,14 +191,13 @@ describe('auth routes', () => {
       })
     })
 
-    it('refuses to register without accepting the Terms (400, nothing upstream)', async () => {
+    // Optional until vertice-web-react sends it (P1-04 rollout): then a BFF PR makes it required.
+    it('still registers without an accepted Terms version for now, and sends none upstream', async () => {
       const withoutTerms: Partial<typeof body> = { ...body }
       delete withoutTerms.acceptedTermsVersion
       const res = await post('/api/auth/register', withoutTerms)
-      expect(res.statusCode).toBe(400)
-      expect(res.json().error.code).toBe('VALIDATION_ERROR')
-      expect(res.json().error.details.fieldErrors).toHaveProperty('acceptedTermsVersion')
-      expect(grpcCallMock).not.toHaveBeenCalled()
+      expect(res.statusCode, res.body).toBe(201)
+      expect(upstreamRequest('CreateUser')).not.toHaveProperty('acceptedTermsVersion')
     })
 
     it.each([
@@ -207,10 +206,12 @@ describe('auth routes', () => {
       ['with a space', '2026 10'],
       ['with a slash', '2026/10'],
       ['not a string', true],
+      ['null', null],
     ])('refuses an accepted Terms version that is %s', async (_why, acceptedTermsVersion) => {
       const res = await post('/api/auth/register', { ...body, acceptedTermsVersion })
       expect(res.statusCode).toBe(400)
       expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      expect(res.json().error.details.fieldErrors).toHaveProperty('acceptedTermsVersion')
       expect(grpcCallMock).not.toHaveBeenCalled()
     })
 

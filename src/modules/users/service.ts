@@ -231,8 +231,11 @@ export interface UserCreateInput {
   cpf?: string
   cref?: string
   role: Role
-  /** The Terms / Privacy Policy version accepted at registration (vertice-api stamps the time). */
-  acceptedTermsVersion: string
+  /**
+   * The Terms / Privacy Policy version accepted at registration (vertice-api stamps the time).
+   * Optional until vertice-web-react sends it; omitted means none recorded.
+   */
+  acceptedTermsVersion?: string
 }
 
 /** Public registration: no user yet, so it goes out with the service token. */
@@ -247,7 +250,7 @@ export async function createUser(input: UserCreateInput): Promise<User> {
       cpf: input.cpf ?? '',
       cref: input.cref ?? '',
       role: input.role,
-      acceptedTermsVersion: input.acceptedTermsVersion,
+      ...(input.acceptedTermsVersion === undefined ? {} : { acceptedTermsVersion: input.acceptedTermsVersion }),
     },
     { asService: true },
   )
