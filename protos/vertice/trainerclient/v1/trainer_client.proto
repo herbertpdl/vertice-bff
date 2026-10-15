@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package vertice.trainerclient.v1;
 
+import "google/protobuf/empty.proto";
 import "vertice/user/v1/user.proto";
 
 option java_package = "com.vertice.api.generated.grpc.trainerclient.v1";
@@ -15,6 +16,14 @@ service TrainerClientService {
   // (P1-03).
   rpc ListClientsForTrainer(ListClientsForTrainerRequest) returns (ListClientsForTrainerResponse);
   rpc IsTrainersClient(IsTrainersClientRequest) returns (IsTrainersClientResponse);
+  // Ends the trainer's active relationship with the client: sets ended_at, nothing else. The
+  // client's account, the plans and every log stay as they are. TRAINER for their own trainer_id
+  // (PERMISSION_DENIED when the client isn't on their active roster, the same answer for a
+  // missing client), or ADMIN (NOT_FOUND when there is no active relationship). Afterwards the
+  // trainer loses everything an active link grants (roster, detail view, progress, setup links,
+  // new plans for the client, UpdateTrainingPlan) and keeps the plan-tree access of the plans
+  // they wrote: the client keeps reading them too.
+  rpc EndTrainerClientRelationship(EndTrainerClientRelationshipRequest) returns (google.protobuf.Empty);
 }
 
 message CreateClientForTrainerRequest {
@@ -43,4 +52,9 @@ message IsTrainersClientRequest {
 
 message IsTrainersClientResponse {
   bool is_client = 1;
+}
+
+message EndTrainerClientRelationshipRequest {
+  int64 trainer_id = 1;
+  int64 client_id = 2;
 }
