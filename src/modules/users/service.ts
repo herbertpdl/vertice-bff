@@ -1,6 +1,7 @@
 import { userClient } from '../../grpc/clients.js'
 import { grpcCall, type GrpcCallOptions } from '../../grpc/call.js'
 import { HttpError, UnauthorizedError } from '../../lib/errors.js'
+import { maskCpf } from '../../lib/cpf.js'
 
 export type Role = 'ADMIN' | 'TRAINER' | 'CLIENT'
 
@@ -60,24 +61,44 @@ export function toConsent(r: ConsentStateResponse | null | undefined): Consent {
   }
 }
 
-/** `GET /auth/me`: the caller's own account and consent state, without their CPF (no screen shows it, P1-03). */
+/**
+ * `GET`/`PATCH /auth/me`: the caller's own account and consent state. The CPF is masked
+ * (`***.***.***-25`, `''` when there is none), with no reveal: it lets the profile screen show
+ * that a CPF is on file, and the user corrects it by typing the full new one (LGPD art. 18 III).
+ * The full value is in their data export (`GET /auth/me/export`), so a plain read of the profile
+ * never carries it.
+ */
 export interface Me {
   id: number
   name: string
   email: string
+  cpf: string
   cref: string
   role: Role
   consent: Consent
 }
 
-/** Built field by field from the self view, so nothing else upstream sends (the CPF) gets through. */
+/** Built field by field from the self view, the CPF masked. */
 export function toMe(r: UserResponse): Me {
-  return { id: Number(r.id), name: r.name, email: r.email, cref: r.cref, role: r.role, consent: toConsent(r.consent) }
+  return {
+    id: Number(r.id),
+    name: r.name,
+    email: r.email,
+    cpf: maskCpf(r.cpf),
+    cref: r.cref,
+    role: r.role,
+    consent: toConsent(r.consent),
+  }
 }
 
 /** The caller's own account in vertice-api's self view (consent included). */
 export async function getMe(id: number): Promise<Me> {
-  return toMe(await grpcCall<{ id: number }, UserResponse>(userClient, 'GetUser', { id }))
+  return toMe(await getSelf(id))
+}
+
+/** `GetUser` on the caller's own id: vertice-api's self view, every field in full. Never return it as is. */
+export async function getSelf(id: number): Promise<UserResponse> {
+  return grpcCall<{ id: number }, UserResponse>(userClient, 'GetUser', { id })
 }
 
 /**
@@ -270,8 +291,24 @@ export async function updateUser(id: number, input: UserUpdateInput): Promise<Us
   return toUser(res)
 }
 
-export async function deleteUser(id: number): Promise<void> {
-  await grpcCall(userClient, 'DeleteUser', { id })
+/**
+ * Deletes the calling user's own account (`DeleteAccount`, P1-05): vertice-api deletes their
+ * health data and the plans written for them, and anonymises the user row. The request has no
+ * id: the token says whose account it is. A TRAINER with active clients gets FAILED_PRECONDITION
+ * (409); afterwards every token of the account is UNAUTHENTICATED.
+ */
+export async function deleteAccount(): Promise<void> {
+  await grpcCall(userClient, 'DeleteAccount', {})
+}
+
+/**
+ * Everything vertice-api stores about the calling user, as one UTF-8 JSON document
+ * (`ExportUserData`, LGPD art. 18 II and V). Self only, no id. Over the export bounds upstream
+ * answers RESOURCE_EXHAUSTED (413) rather than a truncated document.
+ */
+export async function exportUserData(): Promise<string> {
+  const res = await grpcCall<Record<string, never>, { json: string }>(userClient, 'ExportUserData', {})
+  return res.json
 }
 
 export async function setUserPassword(id: number, password: string): Promise<void> {

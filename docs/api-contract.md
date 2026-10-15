@@ -14,7 +14,7 @@ All error responses have the shape:
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "...", "details": {} } }
 ```
-Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503).
+Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `TOO_LARGE` (413), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503).
 
 **Key on `code`, not on `message`.** Messages are English and meant for logs and debugging. When vertice-api refuses a call, the BFF relays vertice-api's own text only for `INVALID_ARGUMENT`, as a 400 `VALIDATION_ERROR` whose `message` is the field error (`name: must not be blank`). Every other upstream refusal gets a fixed message, and the upstream text goes to the BFF's log only, with emails and CPFs redacted:
 
@@ -27,11 +27,12 @@ Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), 
 | `ALREADY_EXISTS` | 409 | `CONFLICT` | `Email or CPF already in use` (the same for both, so it never says which one is taken) |
 | `UNAUTHENTICATED` | 401 | `UNAUTHENTICATED` | `Session no longer valid` |
 | `UNAVAILABLE` | 503 | `UPSTREAM_UNAVAILABLE` | `vertice-api is unavailable` |
+| `RESOURCE_EXHAUSTED` | 413 | `TOO_LARGE` | `The requested data is too large to return` (today only `GET /auth/me/export` over vertice-api's export bounds) |
 | anything else (`UNKNOWN`, `INTERNAL`, ...) | 502 | `UPSTREAM_ERROR` | `Upstream error` |
 
 `details` is only set on the BFF's own validation errors (Zod field errors and the like), never from upstream. The BFF's own refusals (`Requires role: TRAINER`, `This client is not one of your clients`, ...) keep their specific messages.
 
-`PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — emitted by `PUT /workouts/:workoutId/exercises`, when a client has already recorded data under the workout, and by `DELETE /exercises/:id`, while any workout uses the exercise. Distinct from `VALIDATION_ERROR` ("fix the payload").
+`PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — emitted by `PUT /workouts/:workoutId/exercises`, when a client has already recorded data under the workout; by `DELETE /exercises/:id`, while any workout uses the exercise; and by the deletes that would remove a client's history (vertice-api's `HasRecordedDataException`, P1-05): `DELETE /training-plans/:id` once any of its workouts has a workout log, `DELETE /workouts/:id` once it has a workout log, `DELETE /workout-exercises/:id` and `DELETE /exercise-sets/:id` once a set has a set log. A started session counts even with nothing recorded. The message is the fixed one above; the web shows its own copy on that code (e.g. "já tem treinos registrados e não pode ser excluído"). Distinct from `VALIDATION_ERROR` ("fix the payload").
 
 **Headers.** Every response carries API security headers (`@fastify/helmet`): `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: default-src 'none';frame-ancestors 'none'` (the BFF serves no HTML), `Strict-Transport-Security`, `Referrer-Policy: no-referrer` and helmet's other defaults. Every `/api/*` response, errors included, is `Cache-Control: no-store`, except a successful `GET /legal/versions` (public, no personal data: `Cache-Control: public, max-age=300`).
 
@@ -42,7 +43,7 @@ Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Eve
 | Routes | Roles |
 |---|---|
 | `POST /auth/login`, `POST /auth/register`, `POST /auth/password/setup`, `GET /legal/versions`, `GET /health` | public |
-| `GET /auth/me`, `POST /auth/me/consent`, `POST /auth/password`, `GET /muscle-groups`, `GET /exercises/:id` (upstream decides visibility) | any role |
+| `GET`/`PATCH`/`DELETE /auth/me`, `GET /auth/me/export`, `POST /auth/me/consent`, `POST /auth/password`, `GET /muscle-groups`, `GET /exercises/:id` (upstream decides visibility) | any role |
 | `GET /exercises` | TRAINER, ADMIN (ADMIN sees the starter set) |
 | `/clients/**`, `GET /dashboard`, `GET /feedback`, `GET /workouts?recent=true`, `POST /exercises`, `PATCH`/`DELETE /exercises/:id`, every plan/workout/workout-exercise/set write (`POST`/`PUT`/`PATCH`/`DELETE`, incl. `POST /workouts/:id/clone`) | TRAINER |
 | `GET /training-plans`, `GET /training-plans/:id`, `GET /training-plans/:planId/workouts`, `GET /workouts/:id`, `GET /workouts/:id/full`, `GET /workouts/:workoutId/exercises`, `GET /workout-exercises/:workoutExerciseId/sets`, `GET /workouts/:workoutId/session`, `GET /workout-logs`, `GET /exercises/:id/progress` | TRAINER, CLIENT (each scoped to their own data) |
@@ -53,7 +54,8 @@ Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Eve
 - **Auth (strict):** separate buckets per route, per IP and (where the body has one) per email, default 5 per 15 minutes (`AUTH_RATE_LIMIT_MAX`/`AUTH_RATE_LIMIT_WINDOW_MS`). Once a bucket is full the next request is `429 RATE_LIMITED`, whatever its credentials, until the window ends.
   - `POST /auth/login` (IP + email) and `POST /auth/password/setup` (IP) count **failed** attempts only: a response below 400 gives the attempt back, so the 6th failure in 15 minutes is a 429 and a gym full of clients on one IP can still log in.
   - `POST /auth/register` (IP + email) counts **every** attempt: a successful sign-up is what a spammer repeats.
-  - `POST /auth/password` (IP + user) counts failed attempts.
+  - `POST /auth/password` and `DELETE /auth/me` (IP + user, separate buckets) count failed attempts.
+- **Data export:** `GET /auth/me/export` has its own per-user bucket, default **3 per hour**, counting **every** export (`EXPORT_RATE_LIMIT_MAX`/`EXPORT_RATE_LIMIT_WINDOW_MS`); the 4th is `429 RATE_LIMITED` with `Retry-After`. It is keyed on the user, not the IP, so changing networks doesn't reset it.
   - A 5xx (upstream down) never counts.
 - Per-IP means the client's address (IPv6 by /64). vertice-web-react calls the BFF from its server, so it **must forward the browser's IP as `X-Forwarded-For`**, and the BFF must run with `TRUST_PROXY` set to the web server's address; otherwise every web user shares one bucket. `X-Forwarded-For` from any other peer is ignored. See `docs/specs/password-lifecycle/spec.md`, "Client IPs and the rate limits".
 - Per-IP keys are aggregated too: each route also has a bucket per client **network** (IPv6 /48, IPv4 /24, default 20 × the per-IP limit = 100 failures per 15 minutes), so rotating addresses within one network doesn't buy more attempts.
@@ -68,7 +70,19 @@ Passwords follow vertice-api's policy everywhere one is set: **at least 8 charac
 - `POST /login` `{email, password}` → `{token, user: {id,name,email,role}}`. The password is checked by vertice-api (`VerifyCredentials`). A wrong password, an unknown email and an account with no password yet all get the **same** `401 {"error":{"code":"UNAUTHORIZED","message":"Invalid email or password"}}`.
   - Rollout flag: with `VERIFY_PASSWORDS=false` (development/test only; the BFF refuses to start with it anywhere else) login only checks that the email exists, the old MVP behaviour. Default is `true`.
 - `POST /register` `{name, email, password, role: "TRAINER", cpf, cref?, acceptedTermsVersion}` → `201`, same shape as login. **Only `TRAINER`**: `role: "CLIENT"` is `400 VALIDATION_ERROR` (clients are created by their trainer, `POST /clients`). **`cpf` is required for a trainer** (vertice-api rejects an empty or invalid one; it is optional only for a CLIENT). `cref` is optional (trainer license number). **`acceptedTermsVersion`** (P1-04): the version of the Terms of Use / Privacy Policy the user accepted on the form, normally `terms` from `GET /legal/versions`. Format: 1 to 32 of `[A-Za-z0-9._-]` (vertice-api's); malformed is `400 VALIDATION_ERROR` before any upstream call. Any well-formed version is accepted, not only the current one. vertice-api stores it with its own timestamp. **Required**: missing is `400 VALIDATION_ERROR` before any upstream call, so no account is created without an acceptance on record. A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`, the same body for both.
-- `GET /me` (auth) → `{id, name, email, cref, role, consent}`: the caller's own account. **No `cpf`** (no screen shows it; P1-03). `cref` is `""` for anyone but a trainer who set one. `consent` is the caller's `Consent` (below), from vertice-api's self view.
+Every `/me` route is **self only by construction**: the user is the token's, and no id in the path, query or body is read. Any role, ADMIN included (it is the caller's own account).
+
+- `GET /me` (auth) → `Me` = `{id, name, email, cpf, cref, role, consent}`: the caller's own account. **`cpf` is masked** (`***.***.***-25`, `""` when none), with no reveal: the profile screen shows that a CPF is on file, and the user corrects it by typing the full new one in `PATCH /me`. The full value is in their export (`GET /me/export`). `cref` is `""` for anyone but a trainer who set one. `consent` is the caller's `Consent` (below), from vertice-api's self view.
+- `PATCH /me` (auth) `{name?, email?, cpf?, cref?}` → `200` `Me`. The caller corrects their own profile (LGPD art. 18 III) through `UpdateUser` with their own token. Every field is optional and **an omitted field keeps the stored value** (vertice-api's `UpdateUser` replaces every field, so the BFF reads the self view and sends the rest back). The **role can't change**: a `role` in the body is ignored and the stored role is sent.
+  - `cpf`: a string sets it (validated `400` and unique `409` upstream); `null` (or `""`) removes it, which only a non-trainer may do: **a TRAINER's CPF is required**, so removing it is `400 VALIDATION_ERROR` `cpf: required for a trainer` with no `UpdateUser` call. A masked value (anything with `*`, e.g. what `GET /me` returns) is `400 VALIDATION_ERROR`, nothing is sent; forms must omit `cpf` unless the user typed a new one.
+  - `cref`: a TRAINER's only (a non-empty `cref` from anyone else is `400 VALIDATION_ERROR`); `null` clears it.
+  - `email`: trimmed and lower-cased. **No verification yet**: the new address is used as is, and it is the login from then on (a verification flow is a P1-06 follow-up). A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`.
+  - Logged as `audit: "account.update"` with the actor's id and the names of the fields sent, never their values.
+- `DELETE /me` (auth) `{password}` → `204`, no body. Deletes the caller's own account (LGPD art. 18 VI, vertice-api's `DeleteAccount`): their workout feedback, set logs, workout logs and the plans written for them are deleted, their relationships end, and the user row is anonymised (plans a trainer wrote for others stay with those clients). **Every token of the account stops working** (`401 UNAUTHENTICATED` on the next call): on the 204 the web clears its session cookie and leaves the app.
+  - **Re-authentication:** `password` is the caller's current password, re-checked with `VerifyCredentials` before anything is deleted, so a stolen session alone can't delete the account. Missing or empty is `400 VALIDATION_ERROR` (send `Content-Type: application/json` with the body); a wrong one is **`400 INVALID_CURRENT_PASSWORD`** (not a 401: the session is still valid). Rate-limited like `POST /password` (IP + user, failures only).
+  - A TRAINER who still has active clients is **`409 ACTIVE_CLIENTS`** `End your client relationships before deleting your account`: end each with `DELETE /clients/:id` first.
+  - Logged as `audit: "account.delete"` with the actor's id.
+- `GET /me/export` (auth) → `200` the caller's data as a **JSON file download** (LGPD art. 18 II and V): `Content-Type: application/json; charset=utf-8`, `Content-Disposition: attachment; filename="vertice-dados-YYYY-MM-DD.json"` (the UTC date), `Cache-Control: no-store`. The body is vertice-api's `ExportUserData` document as is: top-level `formatVersion`, `exportedAt`, `profile` (CPF and CREF in full: it is their own copy), `consent`, `relationships`, `plans`, `workoutLogs`, `exercises`; never a credential. An account over vertice-api's export bounds (20 000 rows per section, 3 MB) is **`413 TOO_LARGE`** `The requested data is too large to return` rather than a truncated file. **3 per hour per user** (see Rate limits). Logged as `audit: "account.export"`.
 - `POST /me/consent` (auth, any role) `{type: "TERMS" | "HEALTH_DATA", version}` → `200` `Consent`, the caller's state after the change. **Self only**: there is no user id in the request; vertice-api's `RecordConsent` records it for the token's user and stamps the time. `TERMS` is the Terms of Use / Privacy Policy (an existing user re-accepting a new version), `HEALTH_DATA` the consent to processing health-related data (loads, session logs, feedback; LGPD art. 11, I). A later call replaces the earlier record of that type. `version` has the same format as `acceptedTermsVersion`; an unknown `type` or a malformed version is `400 VALIDATION_ERROR` before any upstream call.
 
 ```ts
@@ -127,13 +141,13 @@ A trainer's roster = distinct clients across their training plans (User has no d
   - a masked value (anything with `*`, e.g. the `***.***.***-25` this API returns): `400 VALIDATION_ERROR`, nothing is sent. Edit forms must not echo the detail's `cpf` back; omit the field unless the trainer typed a new one.
 
   A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`.
-- `DELETE /:id`
+- `DELETE /:id` → `204`, no body. **Ends the trainer's relationship with the client** ("Encerrar acompanhamento", vertice-api's `EndTrainerClientRelationship`, which sets `ended_at`); it **does not delete the client's account**. The client drops off `GET /` and the trainer loses what the active link grants (`GET /:id`, the overview, progress, setup links, new plans for them, editing their plans' dates); the plans the trainer wrote, and the logs under them, stay readable to both. The client is free to be linked to another trainer. Deleting an account is only ever the user's own action (`DELETE /auth/me`). Errors: 403 `This client is not one of your clients` (another trainer's client, or one whose relationship already ended); upstream refusals as in the table above.
 
 ### What vertice-web-react must change (P1-03, web step)
 The detail page renders whatever `cpf` string it gets (now the mask). The web PR must:
 1. **Roster** (`src/app/(app)/alunos/AlunosContent.tsx`, done in vertice-web-react #45): no email under the name, search by name only, and `GET /clients` typed `ClientSummary` (`{id, name, activePlanCount, currentPlan, lastWorkoutAt, weekActivity}`, `src/lib/api/types.ts`), so nothing reads `email`/`cpf`/`cref`/`role` from it. With that live, the BFF dropped `email` from `GET /clients`, and vertice-api moves `ListClientsForTrainer` to its summary view.
 2. **Student detail** (`src/app/(app)/alunos/[studentId]/StudentDetailContent.tsx`): `overview.student.cpf` is now masked (`***.***.***-25`). Show it as is, with a "mostrar" toggle that fetches `GET /clients/:id?reveal=cpf` (`fetchStudent(id, { revealCpf: true })` in `src/lib/api/students.ts`) and shows that response's `cpf`. Don't cache the revealed CPF beyond the page (no long-lived React Query entry); hiding it again drops it.
-3. **`/auth/me`** (`src/lib/api/auth.ts`, `User` in `src/lib/api/types.ts`): no `cpf` any more. Use a `Me` type `{id, name, email, cref, role}`; nothing in the web reads `cpf` from it today.
+3. **`/auth/me`** (`src/lib/api/auth.ts`, `User` in `src/lib/api/types.ts`): no `cpf` any more. Use a `Me` type `{id, name, email, cref, role}`; nothing in the web reads `cpf` from it today. (Since P1-05 `Me` carries `cpf` again, masked, for the profile screen.)
 4. **Error copy**: key on `code`, never on `message` (already true for 409 `CONFLICT` in `RegisterForm`/`NewStudentDialog`). The `error.message` fallbacks (`PlanDialog`, `NewStudentDialog`, `LoginForm`, `RegisterForm`) now show fixed English text for non-validation errors; replace them with Portuguese copy per code.
 5. **Caching**: set `Cache-Control: no-store` and `Vary: Cookie` on the web's own `/api/bff` and `/api/auth` route responses (plan step 3), whatever `relayBffResponse` copies from the BFF. The proxy already forwards the query string, so `?reveal=cpf` reaches the BFF.
 
@@ -174,7 +188,7 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
 - `POST /` `{name, description, clientId, startDate: "YYYY-MM-DD", endDate, level: "BEGINNER"|"INTERMEDIATE"|"ADVANCED"}` (TRAINER)
   - Errors: 403 `FORBIDDEN` `This client is not one of your clients` when `clientId` is not the trainer's client. vertice-api also requires an active trainer–client link and answers 409 `PRECONDITION_FAILED` without one.
 - `PATCH /:id` same body minus clientId (TRAINER). A plan's client is fixed at creation: a `clientId` in the body is ignored and the stored one is sent upstream.
-- `DELETE /:id` (TRAINER)
+- `DELETE /:id` (TRAINER) → `204`. **409 `PRECONDITION_FAILED`** once a client recorded training under it (see Errors).
 
 `TrainingPlan` = `{id, name, description, trainerId, clientId, startDate, endDate, level}`
 
@@ -196,7 +210,7 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
 - `GET /workouts/:id` → `Workout` = `{id, name, trainingPlanId, dayOfWeek}`
 - **`GET /workouts/:id/full`** → `Workout & { exercises: FullWorkoutExercise[] }` — **the key aggregate for a workout-builder or read-only workout view.** Each `FullWorkoutExercise` = `WorkoutExercise & { exercise: Exercise, sets: ExerciseSet[] }`, sorted by `order`/`setNumber`. One call gets everything needed to render a workout. `FullWorkoutExercise.exercise` is the `Exercise` shape from the Exercises section (`muscleGroups`, `isStarter`; no `muscleGroup`).
 - `PATCH /workouts/:id` `{name, dayOfWeek}` (TRAINER)
-- `DELETE /workouts/:id` (TRAINER)
+- `DELETE /workouts/:id` (TRAINER) → `204`. **409 `PRECONDITION_FAILED`** once a client recorded training under it (see Errors).
 - `POST /workouts/:id/clone` `{targetTrainingPlanId, name, dayOfWeek}` (TRAINER) → clones exercises+sets into a new workout, for "reuse a previous workout as a base"
 
 `dayOfWeek`: `MONDAY..SUNDAY`
@@ -206,7 +220,7 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
 - `POST /workouts/:workoutId/exercises` `{exerciseId, order, restSecondsBetweenSets, notes?}` (TRAINER). For a TRAINER, `exerciseId` must be visible to them (the shared starter set or their own exercise). The BFF looks it up through `GetExercise` before writing; another trainer's private exercise and a nonexistent id both get **400 `VALIDATION_ERROR`** `exerciseId <id> is not available to you`, so the answer does not reveal which.
 - **`PUT /workouts/:workoutId/exercises`** `{exercises: WorkoutExerciseEntry[]}` (TRAINER) → `200` **`FullWorkout`** — replaces the workout's **entire** exercise/set tree with the given list (full replace, not merge; same entry shape as `POST /training-plans/:planId/workouts`, max 20). `exercises` is required — `[]` empties the workout, omitting it is a 400. Upstream deletes and recreates the tree, so **every `WorkoutExercise`/`ExerciseSet` id in the response is new**; any id held from before the call is invalid. Refused with **409 `PRECONDITION_FAILED`** once *any* set under the workout has recorded client data (not just sets the replace would drop) — from then on the workout can only be edited through the one-at-a-time endpoints on this page. All-or-nothing: on any 4xx nothing changed. Body `exerciseId`s are checked as for `POST /training-plans/:planId/workouts` (400 when not visible to the trainer). Upstream RPC: `ReplaceWorkoutExercises`. `FullWorkoutExercise.exercise` in the response is the `Exercise` shape from the Exercises section.
 - `PATCH /workout-exercises/:id` `{order, restSecondsBetweenSets, notes?}` (TRAINER)
-- `DELETE /workout-exercises/:id` (TRAINER)
+- `DELETE /workout-exercises/:id` (TRAINER) → `204`. **409 `PRECONDITION_FAILED`** once a client recorded training under it (see Errors).
 
 `WorkoutExercise` = `{id, workoutId, exerciseId, order, restSecondsBetweenSets, notes}`
 
@@ -214,7 +228,7 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
 - `GET /workout-exercises/:workoutExerciseId/sets` → `ExerciseSet[]`
 - `POST /workout-exercises/:workoutExerciseId/sets` (TRAINER)
 - `PATCH /exercise-sets/:id` (TRAINER)
-- `DELETE /exercise-sets/:id` (TRAINER)
+- `DELETE /exercise-sets/:id` (TRAINER) → `204`. **409 `PRECONDITION_FAILED`** once a client recorded training under it (see Errors).
 
 `ExerciseSet` = `{id, workoutExerciseId, setNumber, reps, durationSeconds, weight, loadPercentage, strategy, restSeconds, notes}`.
 `weight`/`loadPercentage` are decimal **strings** (preserve precision — don't round-trip through float).

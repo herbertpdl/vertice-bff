@@ -118,6 +118,48 @@ const routes: RouteCase[] = [
   },
   { route: 'GET /api/auth/me', ok: { as: 'clientA', url: '/api/auth/me' } },
   {
+    // Self only: the user id comes from the token; a body id or role goes nowhere.
+    route: 'PATCH /api/auth/me',
+    ok: { as: 'clientA', url: '/api/auth/me', body: { name: 'Novo Nome' } },
+    scoped: [
+      {
+        as: 'clientA',
+        url: '/api/auth/me',
+        body: { name: 'Novo Nome', id: ids.clientB, userId: ids.clientB, role: 'ADMIN' },
+        why: 'body: a userId and a role are ignored',
+        rpc: 'UpdateUser',
+        sends: { id: ids.clientA, user: { role: 'CLIENT' } },
+      },
+    ],
+  },
+  {
+    route: 'DELETE /api/auth/me',
+    ok: { as: 'clientA', url: '/api/auth/me', body: { password: FAKE_PASSWORD } },
+    scoped: [
+      {
+        as: 'clientA',
+        url: '/api/auth/me',
+        body: { password: FAKE_PASSWORD, id: ids.clientB, userId: ids.clientB },
+        why: 'body: a userId is ignored (DeleteAccount has no id)',
+        rpc: 'DeleteAccount',
+        sends: {},
+      },
+    ],
+  },
+  {
+    route: 'GET /api/auth/me/export',
+    ok: { as: 'clientA', url: '/api/auth/me/export' },
+    scoped: [
+      {
+        as: 'clientA',
+        url: `/api/auth/me/export?userId=${ids.clientB}`,
+        why: 'query: a userId is ignored (ExportUserData has no id)',
+        rpc: 'ExportUserData',
+        sends: {},
+      },
+    ],
+  },
+  {
     // Self only: vertice-api records the consent for the token's user; a body id goes nowhere.
     route: 'POST /api/auth/me/consent',
     ok: { as: 'clientA', url: '/api/auth/me/consent', body: { type: 'HEALTH_DATA', version: 'v1' } },
@@ -209,9 +251,19 @@ const routes: RouteCase[] = [
     ],
   },
   {
+    // Ends the relationship (EndTrainerClientRelationship), never deletes the account.
     route: 'DELETE /api/clients/:id',
     roles: ['TRAINER'],
     ok: { as: 'trainerA', url: `/api/clients/${ids.clientA}` },
+    scoped: [
+      {
+        as: 'trainerA',
+        url: `/api/clients/${ids.clientA}`,
+        why: "the trainer id is the caller's own",
+        rpc: 'EndTrainerClientRelationship',
+        sends: { trainerId: ids.trainerA, clientId: ids.clientA },
+      },
+    ],
     denied: [{ as: 'trainerA', url: `/api/clients/${ids.clientB}`, why: "path: another trainer's client" }],
   },
 
@@ -797,7 +849,7 @@ describe('route authorization', () => {
   beforeAll(async () => {
     app = await buildApp({
       // Hundreds of requests from one IP: keep the rate limits out of the authorization checks.
-      rateLimits: { globalMax: 1_000_000, authMax: 1_000_000 },
+      rateLimits: { globalMax: 1_000_000, authMax: 1_000_000, exportMax: 1_000_000 },
       onRoute: (route: RouteOptions) => {
         for (const method of [route.method].flat()) {
           if (method !== 'HEAD' && method !== 'OPTIONS') registered.add(routeKey(method, route.url))
@@ -883,6 +935,9 @@ describe('route authorization', () => {
   // ADMIN feature needs a PRD first; extending this list without one is the regression to catch.
   const ADMIN_ROUTES = [
     'GET /api/auth/me',
+    'PATCH /api/auth/me',
+    'DELETE /api/auth/me',
+    'GET /api/auth/me/export',
     'POST /api/auth/me/consent',
     'POST /api/auth/password',
     'GET /api/exercises',

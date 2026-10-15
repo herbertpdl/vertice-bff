@@ -21,6 +21,12 @@ export interface RateLimitSettings {
   authNetworkMax: number
   /** Most strict-bucket keys held at once; when full, attempts needing a new key are refused (429). */
   authMaxKeys: number
+  /**
+   * The data-export bucket (`GET /auth/me/export`, profile `export`): a document of everything
+   * stored about the user is the most expensive read there is, so it gets its own, slower window.
+   */
+  exportMax: number
+  exportWindowMs: number
 }
 
 export interface AttemptLimitOptions {
@@ -32,6 +38,12 @@ export interface AttemptLimitOptions {
    * A 5xx is always refunded: an upstream outage must not lock anyone out.
    */
   count?: 'failures' | 'all'
+  /**
+   * Which limits apply: `auth` (default, `authMax` per `authWindowMs`) or `export` (`exportMax`
+   * per `exportWindowMs`). Each profile has its own limiter, since a limiter's sweep relies on one
+   * window length for all its buckets. Both share `authNetworkMax` and `authMaxKeys`.
+   */
+  profile?: 'auth' | 'export'
 }
 
 export interface AttemptLimitHooks {
@@ -82,15 +94,15 @@ export default fp<{ settings: RateLimitSettings }>(async function rateLimitPlugi
     errorResponseBuilder: () => new TooManyRequestsError('Too many requests, try again later'),
   })
 
-  const limiter = new AttemptLimiter({
-    max: settings.authMax,
-    windowMs: settings.authWindowMs,
-    maxKeys: settings.authMaxKeys,
-  })
+  const limiters = {
+    auth: new AttemptLimiter({ max: settings.authMax, windowMs: settings.authWindowMs, maxKeys: settings.authMaxKeys }),
+    export: new AttemptLimiter({ max: settings.exportMax, windowMs: settings.exportWindowMs, maxKeys: settings.authMaxKeys }),
+  }
   let lastCapacityWarningAt = -Infinity
 
   app.decorate('attemptLimit', (name: string, options: AttemptLimitOptions): AttemptLimitHooks => {
     const acquired = new WeakMap<FastifyRequest, AttemptTicket>()
+    const limiter = limiters[options.profile ?? 'auth']
     const countAll = options.count === 'all'
     return {
       async preHandler(req, reply) {

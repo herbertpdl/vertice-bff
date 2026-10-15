@@ -425,8 +425,39 @@ const handlers: Record<string, (req: Req) => unknown> = {
     return consent
   },
   CreateUser: (r) => ({ ...userRes(users[3]!, 'contact'), id: '99', email: r.email, role: r.role }),
-  UpdateUser: (r) => userRes(find(users, r.id, 'User'), 'detail'),
-  DeleteUser: () => ({}),
+  // Echoes the new fields in the detail view. The user themself may not change their role
+  // (vertice-api: PERMISSION_DENIED); the stored row is left alone so tests stay independent.
+  UpdateUser: (r) => {
+    const stored = find(users, r.id, 'User')
+    const next = (r.user ?? {}) as Record<string, string>
+    if (caller()?.id === stored.id && next.role !== stored.role) {
+      upstreamError(status.PERMISSION_DENIED, 'You cannot change your own role')
+    }
+    return { ...userRes(stored, 'detail'), name: next.name, email: next.email, cpf: next.cpf, cref: next.cref }
+  },
+  // Mirrors vertice-api's `DeleteAccount`: self only (no id), refused for a TRAINER with active
+  // clients. Stateless: the fixture user stays, so later tests can still use their token.
+  DeleteAccount: () => {
+    const user = caller()
+    if (!user) upstreamError(status.PERMISSION_DENIED, 'Only a user can delete their own account')
+    if (user.role === 'TRAINER' && trainerClients.some(([t]) => t === user.id)) {
+      upstreamError(status.FAILED_PRECONDITION, `End your client relationships first: trainer ${user.id} has active clients`)
+    }
+    return {}
+  },
+  // Mirrors vertice-api's `ExportUserData`: self only, the caller's own document.
+  ExportUserData: () => {
+    const user = caller()
+    if (!user) upstreamError(status.PERMISSION_DENIED, 'Only a user can export their own data')
+    const u = find(users, user.id, 'User')
+    return {
+      json: JSON.stringify({
+        formatVersion: 1,
+        exportedAt: FAKE_CONSENT_AT,
+        profile: { id: u.id, name: u.name, email: emailOf(u.id), cpf: cpfOf(u.id), role: u.role },
+      }),
+    }
+  },
   SetUserPassword: () => ({}),
   VerifyCredentials: (r) => {
     const user = users.find((u) => emailOf(u.id) === String(r.email).trim().toLowerCase())
@@ -557,6 +588,20 @@ const handlers: Record<string, (req: Req) => unknown> = {
       .filter(([t]) => t === Number(r.trainerId))
       .map(([, c]) => userRes(find(users, c, 'User'), 'summary')),
   }),
+  // Mirrors vertice-api: the trainer for their own trainer_id and an active client (anything else,
+  // a missing client included, is PERMISSION_DENIED), or ADMIN. Stateless, like DeleteAccount.
+  EndTrainerClientRelationship: (r) => {
+    const user = caller()
+    const active = trainerClients.some(([t, c]) => t === Number(r.trainerId) && c === Number(r.clientId))
+    if (user?.role === 'ADMIN') {
+      if (!active) upstreamError(status.NOT_FOUND, 'No active relationship')
+      return {}
+    }
+    if (user?.role !== 'TRAINER' || user.id !== Number(r.trainerId) || !active) {
+      upstreamError(status.PERMISSION_DENIED, 'This client is not one of your clients')
+    }
+    return {}
+  },
   IsTrainersClient: (r) => ({
     isClient: trainerClients.some(([t, c]) => t === Number(r.trainerId) && c === Number(r.clientId)),
   }),
@@ -564,7 +609,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
 
 /** RPCs that change upstream state. A refused request must never reach one. */
 export const isWriteRpc = (method: string) =>
-  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart)/.test(method)
+  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End)/.test(method)
 
 /**
  * Drop-in implementation for the mocked `grpcCall`; unknown methods, and calls without a valid

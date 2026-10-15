@@ -112,6 +112,7 @@ export const UPSTREAM_MESSAGES = {
   alreadyExists: 'Email or CPF already in use',
   permissionDenied: 'You do not have access to this resource',
   unavailable: 'vertice-api is unavailable',
+  resourceExhausted: 'The requested data is too large to return',
   upstreamError: 'Upstream error',
 } as const
 
@@ -142,6 +143,12 @@ export function mapGrpcError(error: Pick<grpc.ServiceError, 'code' | 'details'>)
       return new ForbiddenError(UPSTREAM_MESSAGES.permissionDenied)
     case grpc.status.UNAVAILABLE:
       return new HttpError(503, UPSTREAM_MESSAGES.unavailable, 'UPSTREAM_UNAVAILABLE')
+    // The answer is over a bound: vertice-api's export limits (`ExportUserData`, which refuses
+    // rather than truncate) or grpc-js's own 4 MiB receive limit. Retrying won't help, so it is
+    // not a 5xx. Logged as a warning (not in EXPECTED_STATUSES): an account that reaches the
+    // bounds means paging the export is due.
+    case grpc.status.RESOURCE_EXHAUSTED:
+      return new HttpError(413, UPSTREAM_MESSAGES.resourceExhausted, 'TOO_LARGE')
     // UNKNOWN, INTERNAL and anything else: whatever upstream said stays in the log.
     default:
       return new HttpError(502, UPSTREAM_MESSAGES.upstreamError, 'UPSTREAM_ERROR')

@@ -1,11 +1,5 @@
 import { z } from 'zod'
-import { emailSchema } from '../auth/schemas.js'
-
-/**
- * A CPF as the client sends it. The BFF's own mask (`***.***.***-25`, see `lib/cpf.ts`) is refused:
- * echoing a masked detail back would otherwise reach vertice-api as the new CPF.
- */
-const cpfInputSchema = z.string().refine((cpf) => !cpf.includes('*'), 'Send the full CPF, not the masked one')
+import { cpfInputSchema, emailSchema } from '../auth/schemas.js'
 
 export const clientCreateSchema = z.object({
   name: z.string().min(1),

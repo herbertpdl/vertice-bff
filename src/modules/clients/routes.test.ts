@@ -146,6 +146,36 @@ describe('client password setup', () => {
       expect(upstreamMethods()).not.toContain('CreatePasswordSetupToken')
     })
   })
+
+  describe('DELETE /clients/:id', () => {
+    const end = (clientId: number) =>
+      app.inject({ method: 'DELETE', url: `/api/clients/${clientId}`, headers: bearer('trainerA') })
+
+    it("ends the relationship and leaves the client's account alone: 204", async () => {
+      const res = await end(ids.clientA)
+      expect(res.statusCode, res.body).toBe(204)
+      expect(upstreamMethods()).toEqual(['IsTrainersClient', 'EndTrainerClientRelationship'])
+      expect(upstreamRequest('EndTrainerClientRelationship')).toEqual({ trainerId: ids.trainerA, clientId: ids.clientA })
+      expect(upstreamMethods().some((m) => /^Delete/.test(m))).toBe(false)
+    })
+
+    it("refuses another trainer's client before anything ends", async () => {
+      const res = await end(ids.clientB)
+      expect(res.statusCode).toBe(403)
+      expect(upstreamMethods()).not.toContain('EndTrainerClientRelationship')
+    })
+
+    it('relays an upstream refusal (the relationship ended in between) as 403', async () => {
+      grpcCallMock.mockImplementation(async (client, method, request, options) =>
+        method === 'EndTrainerClientRelationship'
+          ? Promise.reject(mapGrpcError({ code: status.PERMISSION_DENIED, details: 'not on the roster' }))
+          : fakeGrpcCall(client, method, request, options),
+      )
+      const res = await end(ids.clientA)
+      expect(res.statusCode).toBe(403)
+      expect(res.json().error.message).toBe('You do not have access to this resource')
+    })
+  })
 })
 
 describe('client personal data (P1-03)', () => {

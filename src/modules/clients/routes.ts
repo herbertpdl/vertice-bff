@@ -57,10 +57,13 @@ export default async function clientRoutes(app: FastifyInstance) {
     )
   })
 
+  // Ends the trainer's relationship with the client ("Encerrar acompanhamento"), nothing more: the
+  // client's account, their plans and their logs stay (PRIV-BFF-003). Deleting an account is the
+  // user's own data-subject action (`DELETE /auth/me`), never the trainer's.
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
     const id = parseId(req.params.id)
     await clientService.assertIsTrainersClient(req.user!.id, id)
-    await userService.deleteUser(id)
+    await clientService.endRelationship(req.user!.id, id)
     reply.status(204)
   })
 }

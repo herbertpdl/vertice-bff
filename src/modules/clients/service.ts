@@ -223,6 +223,15 @@ export async function assertIsTrainersClient(trainerId: number, clientId: number
   }
 }
 
+/**
+ * Ends the trainer's active relationship with the client (`EndTrainerClientRelationship`, sets
+ * `ended_at`). The client drops off the roster and the trainer loses what the active link grants
+ * (detail view, progress, setup links, new plans); the plans they wrote stay readable to both.
+ */
+export async function endRelationship(trainerId: number, clientId: number): Promise<void> {
+  await grpcCall(trainerClientClient, 'EndTrainerClientRelationship', { trainerId, clientId })
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 const ADHERENCE_LOOKBACK_WEEKS = 4
 
