@@ -48,7 +48,13 @@ export default async function clientRoutes(app: FastifyInstance) {
     const id = parseId(req.params.id)
     await clientService.assertIsTrainersClient(req.user!.id, id)
     const body = clientUpdateSchema.parse(req.body)
-    return clientService.toClientDetail(await userService.updateUser(id, { ...body, role: 'CLIENT' }))
+    // UpdateUser replaces every field and '' removes the CPF, so an omitted `cpf` must send the
+    // stored one back (the active trainer gets the detail view, CPF in full). Only an explicit
+    // `null` removes it; a CPF is optional for a CLIENT (vertice-api #65).
+    const cpf = body.cpf === undefined ? (await userService.getUser(id)).cpf : (body.cpf ?? '')
+    return clientService.toClientDetail(
+      await userService.updateUser(id, { name: body.name, email: body.email, cpf, role: 'CLIENT' }),
+    )
   })
 
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {

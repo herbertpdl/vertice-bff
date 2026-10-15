@@ -76,24 +76,57 @@ describe('client password setup', () => {
       expect(upstreamRequest('CreateClientForTrainer')).toMatchObject({ cpf: '' })
     })
 
-    it("updates the client with an empty CPF (UpdateUser replaces it: '' removes a stored CPF)", async () => {
+    it('rejects a masked CPF with a 400 and creates nothing', async () => {
+      const res = await create({ name: 'Novo', email: 'novo@vertice.test', cpf: '***.***.***-25' })
+      expect(res.statusCode).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      expect(upstreamMethods().filter((m) => m.startsWith('Create'))).toEqual([])
+    })
+  })
+
+  describe('PATCH /clients/:id CPF', () => {
+    const patch = (payload: object) =>
+      app.inject({ method: 'PATCH', url: `/api/clients/${ids.clientA}`, headers: bearer('trainerA'), payload })
+    const base = { name: 'Client A', email: emailOf(ids.clientA) }
+
+    it('keeps the stored CPF when the body omits it: reads it and sends it back (UpdateUser replaces every field)', async () => {
+      const res = await patch(base)
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamMethods()).toEqual(['IsTrainersClient', 'GetUser', 'UpdateUser'])
+      expect(upstreamRequest('UpdateUser')).toEqual({
+        id: ids.clientA,
+        user: { ...base, cpf: cpfOf(ids.clientA), cref: '', role: 'CLIENT' },
+      })
+    })
+
+    it('sends a new CPF as given, without reading the stored one', async () => {
+      const res = await patch({ ...base, cpf: '11144477735' })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamMethods()).toEqual(['IsTrainersClient', 'UpdateUser'])
+      expect(upstreamRequest('UpdateUser')).toMatchObject({ user: { cpf: '11144477735' } })
+    })
+
+    it("removes the CPF only on an explicit null (sent as '', stored as NULL)", async () => {
       grpcCallMock.mockImplementation(async (client, method, request, options) => {
         const res = await fakeGrpcCall(client, method, request, options)
         return (method === 'UpdateUser' ? { ...(res as object), cpf: '' } : res) as never
       })
-      const res = await app.inject({
-        method: 'PATCH',
-        url: `/api/clients/${ids.clientA}`,
-        headers: bearer('trainerA'),
-        payload: { name: 'Client A', email: emailOf(ids.clientA) },
-      })
+      const res = await patch({ ...base, cpf: null })
       expect(res.statusCode, res.body).toBe(200)
-      expect(upstreamRequest('UpdateUser')).toEqual({
-        id: ids.clientA,
-        user: { name: 'Client A', email: emailOf(ids.clientA), cpf: '', cref: '', role: 'CLIENT' },
-      })
+      expect(upstreamMethods()).toEqual(['IsTrainersClient', 'UpdateUser'])
+      expect(upstreamRequest('UpdateUser')).toMatchObject({ user: { cpf: '' } })
       expect(res.json().cpf).toBe('')
     })
+
+    it.each(['***.***.***-25', '***.***.***-**', '529*****725'])(
+      'rejects the masked CPF %s with a 400 and never sends it',
+      async (cpf) => {
+        const res = await patch({ ...base, cpf })
+        expect(res.statusCode).toBe(400)
+        expect(res.json().error.code).toBe('VALIDATION_ERROR')
+        expect(upstreamMethods()).not.toContain('UpdateUser')
+      },
+    )
   })
 
   describe('POST /clients/:id/setup-token', () => {
