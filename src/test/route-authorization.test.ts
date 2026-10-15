@@ -792,6 +792,7 @@ const routeKey = (method: string, url: string) => `${method} ${url.length > 1 ? 
 describe('route authorization', () => {
   let app: FastifyInstance
   const registered = new Set<string>()
+  const cacheable = new Set<string>()
 
   beforeAll(async () => {
     app = await buildApp({
@@ -800,6 +801,7 @@ describe('route authorization', () => {
       onRoute: (route: RouteOptions) => {
         for (const method of [route.method].flat()) {
           if (method !== 'HEAD' && method !== 'OPTIONS') registered.add(routeKey(method, route.url))
+          if (route.config?.cacheControl !== undefined) cacheable.add(routeKey(method, route.url))
         }
       },
     })
@@ -891,6 +893,15 @@ describe('route authorization', () => {
   it('admits ADMIN on the generic routes only', () => {
     const admitted = routes.filter((r) => !r.public && (!r.roles || r.roles.includes('ADMIN'))).map((r) => r.route)
     expect(admitted.sort()).toEqual([...ADMIN_ROUTES].sort())
+  })
+
+  // Every /api response is no-store unless its route sets `config.cacheControl` (security-headers
+  // plugin). Only a public answer with no personal data may: a personal-data route opting out of
+  // no-store by mistake is the regression to catch. HEAD is Fastify's automatic one for the GET.
+  const CACHEABLE_ROUTES = ['GET /api/legal/versions', 'HEAD /api/legal/versions']
+
+  it('lets only the public, personal-data-free routes set their own Cache-Control', () => {
+    expect([...cacheable].sort()).toEqual([...CACHEABLE_ROUTES].sort())
   })
 
   it.each([
