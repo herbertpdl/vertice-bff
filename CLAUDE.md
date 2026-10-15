@@ -17,12 +17,14 @@ Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web-react`
 - `npm run dev:docker` — same `tsx watch`, but with polling-based file watching (`CHOKIDAR_USEPOLLING=true`, for Docker Desktop bind mounts where inotify doesn't propagate)
 - `npm run build` / `npm start` — compile to `dist/` and run the compiled output
 - `npm run typecheck` — `tsc --noEmit`
+- `npm run openapi` — regenerate `docs/openapi.json` and the route reference inside `docs/api-contract.md` from the route schemas; `-- --check` fails when they are stale (CI and `src/openapi/openapi.test.ts` run it). Run it, and commit the result, in any PR that changes a route, a request schema or a response shape.
+- `npm run sync:protos` — see "gRPC bridge" below
 - `npm run lint` — ESLint (flat config, `eslint.config.js`, typescript-eslint recommended rules)
 - `npm run ops:issue-setup-tokens [-- --dry-run]` — one-off: issue a password setup link to every CLIENT, CSV on stdout (`scripts/issue-setup-tokens.ts` → `src/ops/`; see the README's "Operations")
 - `npm test` — Vitest (`vitest run`); unit tests live next to the code as `*.test.ts` (e.g. `src/modules/workouts/schemas.test.ts`, `src/grpc/call.test.ts`) and don't spin up gRPC
 - `docker build .` / the provided `Dockerfile` — containerized dev, runs `npm run dev:docker`
 
-Node 22 (`.nvmrc`, `engines.node` `>=22 <23`, `node:22-alpine` in the Dockerfile). CI (`.github/workflows/ci.yml`, job `build-and-test`) runs `npm ci`, typecheck, lint, test, build and `npm audit --omit=dev --audit-level=high` on every PR and push to `main`; tests must stay runnable without vertice-api, Postgres or a `.env`.
+Node 22 (`.nvmrc`, `engines.node` `>=22 <23`, `node:22-alpine` in the Dockerfile). CI (`.github/workflows/ci.yml`, job `build-and-test`) runs `npm ci`, `sync:protos --check`, `openapi --check`, typecheck, lint, test, build and `npm audit --omit=dev --audit-level=high` on every PR and push to `main`; tests must stay runnable without vertice-api, Postgres or a `.env`.
 
 Single-file / single-test runs use standard Vitest filtering: `npx vitest run src/grpc/call.test.ts` or `npx vitest run -t "name"`.
 
@@ -31,7 +33,8 @@ Single-file / single-test runs use standard Vitest filtering: `npx vitest run sr
 **Request flow:** `src/server.ts` boots `buildApp()` from `src/app.ts`, which registers (in order) the security headers (`src/plugins/security-headers.ts`: `@fastify/helmet` with an API profile, plus `Cache-Control: no-store` on every `/api/*` response), CORS, the global error handler, the request-context plugin, the rate-limit plugin (global bucket + `app.attemptLimit`), the auth plugin, then every feature module's routes under `/api`. A route that serves the same public, personal-data-free answer to everyone can opt out of `no-store` with `config: { cacheControl: '...' }` (only `GET /api/legal/versions` does, pinned by `CACHEABLE_ROUTES` in `src/test/route-authorization.test.ts`; error responses stay `no-store`). Each module is self-contained:
 
 - `routes.ts` — Fastify route registration, param parsing (`parseId`), auth/role hooks, calls into `service.ts`. Route handlers stay thin: parse → authorize → delegate → return.
-- `schemas.ts` — Zod schemas for request bodies, parsed explicitly in route handlers (`schema.parse(req.body)`), not via a Fastify validation hook.
+- `schemas.ts` — Zod 4 schemas for request bodies, parsed explicitly in route handlers (`schema.parse(req.body)`), not via a Fastify validation hook (that would run before the auth/ownership checks and reorder 400 vs 401/403). The same schema objects are also passed to the route as `schema: routeDoc({...})`, which only documents (see **OpenAPI** below).
+  Zod 4 gotchas here: `.max()`/`.min()` on strings count code points, not UTF-16 units like vertice-api's Java `String.length()` — use `utf16String(n)` from `lib/validation.ts` for text bounds; error `message` text is Zod 4's (`Invalid input: expected string, received undefined`), only the `details` shape `{formErrors, fieldErrors}` is a contract.
 - `service.ts` — business logic, gRPC calls, and response shaping. This is where cross-module composition happens (e.g. `clients/service.ts` pulls from `users`, `training-plans`, and `workout-sessions` services to build a roster view).
 
 Not every module has all three files — `users` has no `routes.ts`/`schemas.ts` of its own (its service wraps `UserService`, including the password RPCs `auth` and `clients` use); `dashboard` has `routes.ts` but no `schemas.ts` (no request body to validate).
@@ -65,6 +68,8 @@ To add a new proto (after it exists in vertice-api and the pin is bumped), sync 
 
 **Config** (`src/config/env.ts`): all env vars are parsed once through a Zod schema at import time (`env`); there's no other place reading `process.env` directly for app config (use `env.NODE_ENV`, which is trimmed and lower-cased). `grpcTarget` is derived here too.
 
+**OpenAPI** (`src/openapi/`): `docs/openapi.json` is generated from the routes and committed. Every route passes `schema: routeDoc({ operationId, summary, tag, roles, params?, query?, body?, ok, errors })` (`openapi/docs.ts`); `roles` mirrors the `requireRole` hook and `route-authorization.test.ts` fails if they disagree. Response shapes are Zod schemas in `openapi/responses.ts` with a compile-time check against the service types, and the route-authorization suite parses every 2xx answer with them, so a changed response shape fails a test until the schema (and `npm run openapi`) follows. The schemas only document: `useDocumentationOnlySchemas` installs a validator/serializer that accept everything, so behaviour is exactly as without them. `buildApp({ openapi: { version } })` registers `@fastify/swagger` (dev dependency, loaded lazily); a normal start does not, and nothing serves the spec, in any environment. A new error `code` must be added to `ERROR_CODES` (a test scans the source). Web and mobile generate their types from `docs/openapi.json`.
+
 ## Current module layout
 
 `auth` (also `/auth/me` PATCH/DELETE, `/auth/me/export`, `/auth/me/consent`), `legal` (`GET /legal/versions`, no upstream call), `clients` (trainer's roster of CLIENT users — recently replaced a `students` module; sourced via `TrainerClientService`, not derived from training plans), `dashboard`, `exercises` (also owns `/muscle-groups`), `exercise-sets`, `training-plans`, `users` (shared `User` type/mapping and `UserService` wrappers, no own routes), `workouts`, `workout-exercises`, `workout-sessions` (also owns `/workout-logs` and `/workout-sessions/:id/{sets,complete}`), `feedback`.
@@ -85,4 +90,4 @@ uses them. State any deviation explicitly (e.g. a removal goes clients first, AP
 the rollback order.
 
 
-`docs/api-contract.md` documents the full REST surface (request/response shapes, role requirements, and the same upstream-limitation notes as the code comments) and is generally reliable for endpoint-level detail — but it predates the `students`→`clients` rename and still refers to a `/students` route; treat anything mentioning `/students` there as referring to what is now `/clients`.
+`docs/openapi.json` is the machine-readable contract (generated, CI-checked). `docs/api-contract.md` is the prose around it: ownership and role rules, error mapping, input bounds, rate limits, the same upstream-limitation notes as the code comments, and a route reference generated from the spec (between the `GENERATED ROUTE REFERENCE` markers; never edit that block by hand). When they disagree about a field, the spec is right. Update the prose in the same PR as a behaviour change.

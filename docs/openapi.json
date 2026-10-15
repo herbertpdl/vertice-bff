@@ -1,0 +1,6202 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "vertice-bff",
+    "version": "0.1.0",
+    "description": "The REST API the Vertice web and mobile apps call; it bridges HTTP/JSON to vertice-api over gRPC.\n\nEvery error is `{ error: { code, message, details? } }`: key on `code`, never on `message`. Besides the errors listed per operation, any call can answer 429 (global rate limit), 502 `UPSTREAM_ERROR` or 503 `UPSTREAM_UNAVAILABLE` (vertice-api refused or is down). Rules that do not fit a schema (ownership, rate limits, the time-zone rule) are in docs/api-contract.md."
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "The token `POST /api/auth/login` or `/api/auth/register` returned. Treat it as opaque."
+      }
+    },
+    "schemas": {
+      "AuthSession": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/SessionUser"
+          }
+        },
+        "required": [
+          "token",
+          "user"
+        ],
+        "additionalProperties": false
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "newPassword": {
+            "type": "string",
+            "maxLength": 72,
+            "minLength": 8
+          }
+        },
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ]
+      },
+      "ClientDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "cpf": {
+            "type": "string",
+            "description": "Masked (`***.***.***-25`, `\"\"` when none) unless `?reveal=cpf`."
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "email",
+          "cpf",
+          "role"
+        ],
+        "additionalProperties": false
+      },
+      "ClientOverview": {
+        "type": "object",
+        "properties": {
+          "student": {
+            "$ref": "#/components/schemas/ClientDetail"
+          },
+          "activePlan": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "level": {
+                    "$ref": "#/components/schemas/PlanLevel"
+                  },
+                  "startDate": {
+                    "type": "string",
+                    "description": "Calendar date, YYYY-MM-DD"
+                  },
+                  "endDate": {
+                    "type": "string",
+                    "description": "Calendar date, YYYY-MM-DD"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "level",
+                  "startDate",
+                  "endDate"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "thisWeek": {
+            "type": "object",
+            "properties": {
+              "completed": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "total": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "completed",
+              "total"
+            ],
+            "additionalProperties": false
+          },
+          "lastWorkoutAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO-8601 instant"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "adherence4Weeks": {
+            "description": "Approximate percentage, capped at 100.",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "student",
+          "activePlan",
+          "thisWeek",
+          "lastWorkoutAt",
+          "adherence4Weeks"
+        ],
+        "additionalProperties": false
+      },
+      "ClientSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "activePlanCount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "currentPlan": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "endDate": {
+                    "type": "string",
+                    "description": "Calendar date, YYYY-MM-DD"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "endDate"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The date-active plan (startDate <= today <= endDate), null if none."
+          },
+          "lastWorkoutAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO-8601 instant"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Most recent completed log in the current week only."
+          },
+          "weekActivity": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "description": "Calendar date, YYYY-MM-DD"
+                },
+                "dayOfWeek": {
+                  "$ref": "#/components/schemas/Weekday"
+                },
+                "completed": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "date",
+                "dayOfWeek",
+                "completed"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Monday to Friday of the current week."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "activePlanCount",
+          "currentPlan",
+          "lastWorkoutAt",
+          "weekActivity"
+        ],
+        "additionalProperties": false
+      },
+      "CloneWorkoutRequest": {
+        "type": "object",
+        "properties": {
+          "targetTrainingPlanId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "dayOfWeek": {
+            "$ref": "#/components/schemas/DayOfWeek"
+          }
+        },
+        "required": [
+          "targetTrainingPlanId",
+          "name",
+          "dayOfWeek"
+        ]
+      },
+      "Consent": {
+        "type": "object",
+        "properties": {
+          "termsVersion": {
+            "description": "Terms of Use / Privacy Policy version accepted, null if never.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "termsAcceptedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO-8601 instant"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "healthDataVersion": {
+            "description": "Health-data notice version consented to, null if never.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "healthDataConsentAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO-8601 instant"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "termsVersion",
+          "termsAcceptedAt",
+          "healthDataVersion",
+          "healthDataConsentAt"
+        ],
+        "additionalProperties": false
+      },
+      "ConsentRequest": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "TERMS",
+              "HEALTH_DATA"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,32}$"
+          }
+        },
+        "required": [
+          "type",
+          "version"
+        ]
+      },
+      "CreateClientRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 255,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "cpf": {
+            "type": "string",
+            "maxLength": 20
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ]
+      },
+      "CreateWorkoutExerciseRequest": {
+        "type": "object",
+        "properties": {
+          "exerciseId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "restSecondsBetweenSets": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600
+          },
+          "notes": {
+            "default": "",
+            "type": "string",
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "exerciseId",
+          "order"
+        ]
+      },
+      "CreateWorkoutRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "dayOfWeek": {
+            "$ref": "#/components/schemas/DayOfWeek"
+          },
+          "exercises": {
+            "default": [],
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkoutExerciseEntry"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "dayOfWeek"
+        ]
+      },
+      "CreatedClient": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "cpf": {
+            "type": "string",
+            "description": "Masked (`***.***.***-25`, `\"\"` when none) unless `?reveal=cpf`."
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "setup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PasswordSetupToken"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null only when the client was created but issuing the token failed: re-issue it."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "email",
+          "cpf",
+          "role",
+          "setup"
+        ],
+        "additionalProperties": false
+      },
+      "Dashboard": {
+        "type": "object",
+        "properties": {
+          "stats": {
+            "type": "object",
+            "properties": {
+              "activeClients": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "activePlans": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "recentFeedbackCount": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "expiringPlansCount": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "activeClients",
+              "activePlans",
+              "recentFeedbackCount",
+              "expiringPlansCount"
+            ],
+            "additionalProperties": false
+          },
+          "recentFeedback": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnrichedFeedback"
+            }
+          },
+          "expiringPlans": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "student": {
+                  "type": "string"
+                },
+                "end": {
+                  "type": "string",
+                  "description": "Calendar date, YYYY-MM-DD"
+                },
+                "daysLeft": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "name",
+                "student",
+                "end",
+                "daysLeft"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "completedToday": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "student": {
+                  "type": "string"
+                },
+                "workout": {
+                  "type": "string"
+                },
+                "time": {
+                  "type": "string",
+                  "description": "HH:MM (UTC)"
+                }
+              },
+              "required": [
+                "student",
+                "workout",
+                "time"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "stats",
+          "recentFeedback",
+          "expiringPlans",
+          "completedToday"
+        ],
+        "additionalProperties": false
+      },
+      "DataExport": {
+        "type": "object",
+        "properties": {
+          "formatVersion": {},
+          "exportedAt": {},
+          "profile": {
+            "description": "CPF and CREF in full: it is the user’s own copy."
+          },
+          "consent": {},
+          "relationships": {},
+          "plans": {},
+          "workoutLogs": {},
+          "exercises": {}
+        },
+        "required": [
+          "formatVersion",
+          "exportedAt",
+          "profile",
+          "consent",
+          "relationships",
+          "plans",
+          "workoutLogs",
+          "exercises"
+        ],
+        "additionalProperties": {}
+      },
+      "DayOfWeek": {
+        "type": "string",
+        "enum": [
+          "MONDAY",
+          "TUESDAY",
+          "WEDNESDAY",
+          "THURSDAY",
+          "FRIDAY",
+          "SATURDAY",
+          "SUNDAY"
+        ]
+      },
+      "DeleteAccountRequest": {
+        "type": "object",
+        "properties": {
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "password"
+        ]
+      },
+      "EnrichedFeedback": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "workoutLogId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "workoutId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "trainingPlanId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "clientId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "text": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "ISO-8601 instant"
+          },
+          "clientName": {
+            "type": "string"
+          },
+          "workoutName": {
+            "type": "string"
+          },
+          "trainingPlanName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workoutLogId",
+          "workoutId",
+          "trainingPlanId",
+          "clientId",
+          "text",
+          "createdAt",
+          "clientName",
+          "workoutName",
+          "trainingPlanName"
+        ],
+        "additionalProperties": false
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "VALIDATION_ERROR",
+          "UNAUTHORIZED",
+          "UNAUTHENTICATED",
+          "FORBIDDEN",
+          "NOT_FOUND",
+          "CONFLICT",
+          "PRECONDITION_FAILED",
+          "TOO_LARGE",
+          "RATE_LIMITED",
+          "UPSTREAM_ERROR",
+          "UPSTREAM_UNAVAILABLE",
+          "INTERNAL_ERROR",
+          "INVALID_CURRENT_PASSWORD",
+          "INVALID_SETUP_TOKEN",
+          "ACTIVE_CLIENTS"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "description": "Machine-readable. Key on this, never on `message`.",
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              "message": {
+                "type": "string",
+                "description": "English, for logs and debugging; not meant to be shown to users."
+              },
+              "details": {
+                "description": "Only on the BFF’s own validation errors (`VALIDATION_ERROR`): Zod’s flattened field errors, `{ formErrors: string[], fieldErrors: { [field]: string[] } }`. Never set from upstream."
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "Exercise": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "videoUrl": {
+            "type": "string"
+          },
+          "muscleGroups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MuscleGroup"
+            },
+            "description": "Upstream order: primary group first, then the others by id."
+          },
+          "isStarter": {
+            "type": "boolean",
+            "description": "Part of the shared, read-only starter set."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "videoUrl",
+          "muscleGroups",
+          "isStarter"
+        ],
+        "additionalProperties": false
+      },
+      "ExerciseRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "default": "",
+            "type": "string",
+            "maxLength": 255
+          },
+          "videoUrl": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^https?:\\/\\/\\S+$",
+                "maxLength": 500
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
+          },
+          "muscleGroupIds": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "required": [
+          "name",
+          "muscleGroupIds"
+        ]
+      },
+      "ExerciseSet": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "workoutExerciseId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "setNumber": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "reps": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "weight": {
+            "type": "string",
+            "description": "Decimal string; `\"\"` is unset. Do not round-trip through a float."
+          },
+          "loadPercentage": {
+            "type": "string",
+            "description": "Decimal string; `\"\"` is unset."
+          },
+          "strategy": {
+            "$ref": "#/components/schemas/SetStrategy"
+          },
+          "restSeconds": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workoutExerciseId",
+          "setNumber",
+          "reps",
+          "durationSeconds",
+          "weight",
+          "loadPercentage",
+          "strategy",
+          "restSeconds",
+          "notes"
+        ],
+        "additionalProperties": false
+      },
+      "ExerciseSetEntry": {
+        "type": "object",
+        "properties": {
+          "reps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{1,4}(\\.\\d{1,2})?$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
+          },
+          "loadPercentage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{1,3}(\\.\\d{1,2})?$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
+          },
+          "strategy": {
+            "$ref": "#/components/schemas/SetStrategy"
+          },
+          "restSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 255
+          }
+        }
+      },
+      "ExerciseSetRequest": {
+        "type": "object",
+        "properties": {
+          "setNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "reps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{1,4}(\\.\\d{1,2})?$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
+          },
+          "loadPercentage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{1,3}(\\.\\d{1,2})?$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
+          },
+          "strategy": {
+            "$ref": "#/components/schemas/SetStrategy"
+          },
+          "restSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "setNumber",
+          "strategy"
+        ]
+      },
+      "FullWorkout": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "trainingPlanId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "dayOfWeek": {
+            "$ref": "#/components/schemas/DayOfWeek"
+          },
+          "exercises": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "workoutId": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "exerciseId": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "order": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "restSecondsBetweenSets": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "notes": {
+                  "type": "string"
+                },
+                "exercise": {
+                  "$ref": "#/components/schemas/Exercise"
+                },
+                "sets": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExerciseSet"
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "workoutId",
+                "exerciseId",
+                "order",
+                "restSecondsBetweenSets",
+                "notes",
+                "exercise",
+                "sets"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "trainingPlanId",
+          "dayOfWeek",
+          "exercises"
+        ],
+        "additionalProperties": false
+      },
+      "Health": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "LegalVersions": {
+        "type": "object",
+        "properties": {
+          "terms": {
+            "type": "string",
+            "description": "Sent as `acceptedTermsVersion` on register and as the `TERMS` consent version."
+          },
+          "healthData": {
+            "type": "string",
+            "description": "Sent as the `HEALTH_DATA` consent version."
+          }
+        },
+        "required": [
+          "terms",
+          "healthData"
+        ],
+        "additionalProperties": false
+      },
+      "LoginRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 255,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "Me": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "cpf": {
+            "type": "string",
+            "description": "Masked (`***.***.***-25`), `\"\"` when none. Never revealed here."
+          },
+          "cref": {
+            "type": "string",
+            "description": "`\"\"` for anyone but a trainer who set one."
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "consent": {
+            "$ref": "#/components/schemas/Consent"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "email",
+          "cpf",
+          "cref",
+          "role",
+          "consent"
+        ],
+        "additionalProperties": false
+      },
+      "MuscleGroup": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "PasswordSetupRequest": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "newPassword": {
+            "type": "string",
+            "maxLength": 72,
+            "minLength": 8
+          }
+        },
+        "required": [
+          "token",
+          "newPassword"
+        ]
+      },
+      "PasswordSetupToken": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Single-use, URL-safe. Shown once: upstream only stores its hash."
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "ISO-8601 instant"
+          }
+        },
+        "required": [
+          "token",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "PlanLevel": {
+        "type": "string",
+        "enum": [
+          "BEGINNER",
+          "INTERMEDIATE",
+          "ADVANCED"
+        ]
+      },
+      "ProgressPoint": {
+        "type": "object",
+        "properties": {
+          "weekStartDate": {
+            "type": "string",
+            "description": "Calendar date, YYYY-MM-DD"
+          },
+          "weight": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "weekStartDate",
+          "weight"
+        ],
+        "additionalProperties": false
+      },
+      "RecentWorkoutSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "trainingPlanId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "dayOfWeek": {
+            "$ref": "#/components/schemas/DayOfWeek"
+          },
+          "studentName": {
+            "type": "string"
+          },
+          "planName": {
+            "type": "string"
+          },
+          "exerciseCount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "trainingPlanId",
+          "dayOfWeek",
+          "studentName",
+          "planName",
+          "exerciseCount"
+        ],
+        "additionalProperties": false
+      },
+      "RecordSetLogRequest": {
+        "type": "object",
+        "properties": {
+          "exerciseSetId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "weight": {
+            "type": "string",
+            "pattern": "^\\d{1,4}(\\.\\d{1,2})?$"
+          },
+          "reps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "exerciseSetId",
+          "weight",
+          "reps"
+        ]
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 255,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 72,
+            "minLength": 8
+          },
+          "role": {
+            "type": "string",
+            "const": "TRAINER"
+          },
+          "cpf": {
+            "type": "string",
+            "maxLength": 20
+          },
+          "cref": {
+            "type": "string",
+            "maxLength": 20
+          },
+          "acceptedTermsVersion": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,32}$"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "password",
+          "role",
+          "cpf",
+          "acceptedTermsVersion"
+        ]
+      },
+      "ReplaceWorkoutExercisesRequest": {
+        "type": "object",
+        "properties": {
+          "exercises": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkoutExerciseEntry"
+            }
+          }
+        },
+        "required": [
+          "exercises"
+        ]
+      },
+      "Role": {
+        "type": "string",
+        "enum": [
+          "ADMIN",
+          "TRAINER",
+          "CLIENT"
+        ]
+      },
+      "SessionUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "email",
+          "role"
+        ],
+        "additionalProperties": false
+      },
+      "SetLog": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "workoutLogId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "exerciseSetId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "weight": {
+            "type": "string",
+            "description": "Decimal string."
+          },
+          "reps": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "recordedAt": {
+            "type": "string",
+            "description": "ISO-8601 instant"
+          }
+        },
+        "required": [
+          "id",
+          "workoutLogId",
+          "exerciseSetId",
+          "weight",
+          "reps",
+          "recordedAt"
+        ],
+        "additionalProperties": false
+      },
+      "SetStrategy": {
+        "type": "string",
+        "enum": [
+          "STRAIGHT",
+          "WARM_UP",
+          "BACKOFF",
+          "DROPSET",
+          "REST_PAUSE",
+          "CLUSTER",
+          "AMRAP",
+          "ISOMETRIC_HOLD",
+          "FAILURE"
+        ]
+      },
+      "SubmitFeedbackRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "TrainingPlan": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "trainerId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "clientId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "startDate": {
+            "type": "string",
+            "description": "Calendar date, YYYY-MM-DD"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "Calendar date, YYYY-MM-DD"
+          },
+          "level": {
+            "$ref": "#/components/schemas/PlanLevel"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "trainerId",
+          "clientId",
+          "startDate",
+          "endDate",
+          "level"
+        ],
+        "additionalProperties": false
+      },
+      "TrainingPlanDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "trainerId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "clientId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "startDate": {
+            "type": "string",
+            "description": "Calendar date, YYYY-MM-DD"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "Calendar date, YYYY-MM-DD"
+          },
+          "level": {
+            "$ref": "#/components/schemas/PlanLevel"
+          },
+          "workouts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Workout"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "trainerId",
+          "clientId",
+          "startDate",
+          "endDate",
+          "level",
+          "workouts"
+        ],
+        "additionalProperties": false
+      },
+      "TrainingPlanRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "default": "",
+            "type": "string",
+            "maxLength": 255
+          },
+          "clientId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "startDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "endDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "level": {
+            "$ref": "#/components/schemas/PlanLevel"
+          }
+        },
+        "required": [
+          "name",
+          "clientId",
+          "startDate",
+          "endDate",
+          "level"
+        ]
+      },
+      "UpdateClientRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 255,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "cpf": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ]
+      },
+      "UpdateMeRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 255,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "cpf": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "UpdateTrainingPlanRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "default": "",
+            "type": "string",
+            "maxLength": 255
+          },
+          "startDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "endDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "level": {
+            "$ref": "#/components/schemas/PlanLevel"
+          }
+        },
+        "required": [
+          "name",
+          "startDate",
+          "endDate",
+          "level"
+        ]
+      },
+      "UpdateWorkoutExerciseRequest": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "restSecondsBetweenSets": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600
+          },
+          "notes": {
+            "default": "",
+            "type": "string",
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "order"
+        ]
+      },
+      "Weekday": {
+        "type": "string",
+        "enum": [
+          "MONDAY",
+          "TUESDAY",
+          "WEDNESDAY",
+          "THURSDAY",
+          "FRIDAY"
+        ]
+      },
+      "Workout": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "trainingPlanId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "dayOfWeek": {
+            "$ref": "#/components/schemas/DayOfWeek"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "trainingPlanId",
+          "dayOfWeek"
+        ],
+        "additionalProperties": false
+      },
+      "WorkoutExercise": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "workoutId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "exerciseId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "order": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "restSecondsBetweenSets": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workoutId",
+          "exerciseId",
+          "order",
+          "restSecondsBetweenSets",
+          "notes"
+        ],
+        "additionalProperties": false
+      },
+      "WorkoutExerciseEntry": {
+        "type": "object",
+        "properties": {
+          "exerciseId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "restSecondsBetweenSets": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "sets": {
+            "default": [],
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExerciseSetEntry"
+            }
+          }
+        },
+        "required": [
+          "exerciseId"
+        ]
+      },
+      "WorkoutFeedback": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "workoutLogId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "workoutId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "trainingPlanId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "clientId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "text": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "ISO-8601 instant"
+          }
+        },
+        "required": [
+          "id",
+          "workoutLogId",
+          "workoutId",
+          "trainingPlanId",
+          "clientId",
+          "text",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "WorkoutLog": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "workoutId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "clientId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "weekStartDate": {
+            "type": "string",
+            "description": "Calendar date, YYYY-MM-DD"
+          },
+          "startedAt": {
+            "type": "string",
+            "description": "ISO-8601 instant"
+          },
+          "completedAt": {
+            "type": "string",
+            "description": "ISO-8601 instant, `\"\"` until the workout is completed."
+          }
+        },
+        "required": [
+          "id",
+          "workoutId",
+          "clientId",
+          "weekStartDate",
+          "startedAt",
+          "completedAt"
+        ],
+        "additionalProperties": false
+      },
+      "WorkoutRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "dayOfWeek": {
+            "$ref": "#/components/schemas/DayOfWeek"
+          }
+        },
+        "required": [
+          "name",
+          "dayOfWeek"
+        ]
+      },
+      "WorkoutSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "trainingPlanId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "dayOfWeek": {
+            "$ref": "#/components/schemas/DayOfWeek"
+          },
+          "exercises": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "workoutId": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "exerciseId": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "order": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "restSecondsBetweenSets": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "notes": {
+                  "type": "string"
+                },
+                "exercise": {
+                  "$ref": "#/components/schemas/Exercise"
+                },
+                "sets": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "workoutExerciseId": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "setNumber": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "reps": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "durationSeconds": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "weight": {
+                        "type": "string",
+                        "description": "Decimal string; `\"\"` is unset. Do not round-trip through a float."
+                      },
+                      "loadPercentage": {
+                        "type": "string",
+                        "description": "Decimal string; `\"\"` is unset."
+                      },
+                      "strategy": {
+                        "$ref": "#/components/schemas/SetStrategy"
+                      },
+                      "restSeconds": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "notes": {
+                        "type": "string"
+                      },
+                      "lastPerformed": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/components/schemas/SetLog"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "What the client recorded last time, null if never."
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "workoutExerciseId",
+                      "setNumber",
+                      "reps",
+                      "durationSeconds",
+                      "weight",
+                      "loadPercentage",
+                      "strategy",
+                      "restSeconds",
+                      "notes",
+                      "lastPerformed"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "workoutId",
+                "exerciseId",
+                "order",
+                "restSecondsBetweenSets",
+                "notes",
+                "exercise",
+                "sets"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "workoutLog": {
+            "$ref": "#/components/schemas/WorkoutLog"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "trainingPlanId",
+          "dayOfWeek",
+          "exercises",
+          "workoutLog"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Liveness",
+        "tags": [
+          "Health"
+        ],
+        "description": "Public: no token needed.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The process is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "operationId": "login",
+        "summary": "Log in",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Public: no token needed. The password is checked by vertice-api. A wrong password, an unknown email and an account with no password yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The session token and the user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "operationId": "register",
+        "summary": "Register a trainer",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Public: no token needed. Public sign-up is for trainers only (`role: \"TRAINER\"`); a client is created by their trainer (`POST /clients`). `acceptedTermsVersion` is required: no account is created without an acceptance on record. A taken email or CPF is 409 `CONFLICT`, the same body for both. Every attempt is rate limited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        },
+        "security": [],
+        "responses": {
+          "201": {
+            "description": "The session token and the user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "operationId": "getMe",
+        "summary": "The caller’s own account",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Any authenticated role. The CPF is masked, with no reveal; the full value is in the data export.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller’s account and consent state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateMe",
+        "summary": "Correct the caller’s own profile",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Any authenticated role. LGPD art. 18 III. Every field is optional and an omitted one keeps the stored value. The role cannot change. `cpf`: a string sets it (the mask `GET /auth/me` returns is refused), `null` removes it (a trainer’s CPF is required). `cref` is a trainer’s only. No email verification yet.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMeRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The updated account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteMe",
+        "summary": "Delete the caller’s own account",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Any authenticated role. LGPD art. 18 VI. Re-checks `password` first (a wrong one is 400 `INVALID_CURRENT_PASSWORD`, not a 401). A trainer with active clients gets 409 `ACTIVE_CLIENTS`. Every token of the account stops working afterwards.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteAccountRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; no body."
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me/export": {
+      "get": {
+        "operationId": "exportMyData",
+        "summary": "Download the caller’s data",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Any authenticated role. LGPD art. 18 II and V. vertice-api’s export document, passed through as a file download (`Content-Disposition: attachment; filename=\"vertice-dados-YYYY-MM-DD.json\"`). Over the export bounds it is 413 `TOO_LARGE` rather than a truncated file. 3 per hour per user.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The export document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataExport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The requested data is too large to return (`TOO_LARGE`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me/consent": {
+      "post": {
+        "operationId": "recordConsent",
+        "summary": "Record the caller’s consent to a legal text",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Any authenticated role. Self only: there is no user id in the request. `TERMS` is the Terms of Use / Privacy Policy, `HEALTH_DATA` the health-data notice. A later call replaces the earlier record of that type.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsentRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller’s consent state after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Consent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password": {
+      "post": {
+        "operationId": "changePassword",
+        "summary": "Change the caller’s password",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Any authenticated role. A wrong `currentPassword` is 400 `INVALID_CURRENT_PASSWORD`, not a 401: the session is still valid.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Changed; no body."
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password/setup": {
+      "post": {
+        "operationId": "setupPassword",
+        "summary": "Choose a password with a first-access token",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Public: no token needed. The token comes from `POST /clients` or `POST /clients/{id}/setup-token`. An unknown, expired (72h) or used token is 400 `INVALID_SETUP_TOKEN`. Failed attempts are rate limited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordSetupRequest"
+              }
+            }
+          }
+        },
+        "security": [],
+        "responses": {
+          "204": {
+            "description": "Password set; log in normally. No body."
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clients": {
+      "get": {
+        "operationId": "listClients",
+        "summary": "The trainer’s roster",
+        "tags": [
+          "Clients"
+        ],
+        "description": "Roles: TRAINER. No email, CPF, CREF or role: the detail routes carry the email. `lastWorkoutAt` and `weekActivity` only reflect the current week.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per active client.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClientSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createClient",
+        "summary": "Create a client",
+        "tags": [
+          "Clients"
+        ],
+        "description": "Roles: TRAINER. Creates a CLIENT without a password, linked to the trainer, and issues a first-access token (`setup`) the trainer shares; the client redeems it at `POST /auth/password/setup`. `cpf` is optional. A taken email or CPF is 409 `CONFLICT`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClientRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "201": {
+            "description": "The client, with the setup token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedClient"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clients/{id}": {
+      "get": {
+        "operationId": "getClient",
+        "summary": "A client’s details",
+        "tags": [
+          "Clients"
+        ],
+        "description": "Roles: TRAINER. One of your clients. The CPF is masked unless `reveal=cpf`; every reveal is logged (who saw whose CPF, never the value). Any other query is a 400.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "cpf"
+              ]
+            },
+            "in": "query",
+            "name": "reveal",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The client.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateClient",
+        "summary": "Update a client",
+        "tags": [
+          "Clients"
+        ],
+        "description": "Roles: TRAINER. One of your clients. `name` and `email` are required. `cpf`: omitted keeps the stored CPF, a string sets it (`\"\"` removes it), `null` removes it; a masked value is a 400. A taken email or CPF is 409 `CONFLICT`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClientRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The updated client (CPF masked).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "endClientRelationship",
+        "summary": "End the relationship with a client",
+        "tags": [
+          "Clients"
+        ],
+        "description": "Roles: TRAINER. “Encerrar acompanhamento”: the client leaves the roster and the trainer loses what the link grants. It does not delete the client’s account; their plans and logs stay.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "204": {
+            "description": "Ended; no body."
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clients/{id}/overview": {
+      "get": {
+        "operationId": "getClientOverview",
+        "summary": "The header of a client’s detail screen",
+        "tags": [
+          "Clients"
+        ],
+        "description": "Roles: TRAINER. One of your clients. `adherence4Weeks` is an approximation over the last 4 weeks (vertice-api has no general history query).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "Active plan, this week’s progress, last workout and adherence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientOverview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clients/{id}/setup-token": {
+      "post": {
+        "operationId": "reissueClientSetupToken",
+        "summary": "Re-issue a client’s first-access link",
+        "tags": [
+          "Clients"
+        ],
+        "description": "Roles: TRAINER. One of your clients. The previous token stops working. Only while the client has no password yet: afterwards it is 409 `PRECONDITION_FAILED`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "201": {
+            "description": "The new token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordSetupToken"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/exercises": {
+      "get": {
+        "operationId": "listExercises",
+        "summary": "List the exercise catalog",
+        "tags": [
+          "Exercises"
+        ],
+        "description": "Roles: TRAINER, ADMIN. A trainer sees the starter set and their own exercises; an ADMIN the starter set only. In upstream order: do not re-sort client-side. An empty `muscleGroupId` or `q` means no filter.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "muscleGroupId",
+            "required": false,
+            "description": "Exercises with this group as primary or secondary."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "description": "Case-insensitive name search, trimmed."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "ADMIN"
+        ],
+        "responses": {
+          "200": {
+            "description": "The exercises.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Exercise"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createExercise",
+        "summary": "Create an exercise",
+        "tags": [
+          "Exercises"
+        ],
+        "description": "Roles: TRAINER. Private to the caller (`isStarter: false`). Duplicate names are allowed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExerciseRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "201": {
+            "description": "The exercise.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Exercise"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/exercises/{id}": {
+      "get": {
+        "operationId": "getExercise",
+        "summary": "One exercise",
+        "tags": [
+          "Exercises"
+        ],
+        "description": "Any authenticated role. Vertice-api decides visibility. A TRAINER sees the starter set and their own, an ADMIN the starter set, a CLIENT only an exercise used by a workout in one of their plans.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The exercise.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Exercise"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateExercise",
+        "summary": "Replace an exercise",
+        "tags": [
+          "Exercises"
+        ],
+        "description": "Roles: TRAINER. Full replacement of name, description, video URL and the whole group list. A starter exercise or another trainer’s is 403 (the two are not told apart).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExerciseRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The exercise.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Exercise"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteExercise",
+        "summary": "Delete an exercise",
+        "tags": [
+          "Exercises"
+        ],
+        "description": "Roles: TRAINER. Your own. 409 `PRECONDITION_FAILED` while any workout uses it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; no body."
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/exercises/{id}/progress": {
+      "get": {
+        "operationId": "getExerciseProgress",
+        "summary": "Weight over time for one exercise",
+        "tags": [
+          "Exercises"
+        ],
+        "description": "Roles: TRAINER, CLIENT. A CLIENT’s `clientId` is ignored (their own is used); a TRAINER must pass one of their clients.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "clientId",
+            "required": false,
+            "description": "Required for a TRAINER."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "One point per week.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProgressPoint"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/muscle-groups": {
+      "get": {
+        "operationId": "listMuscleGroups",
+        "summary": "List the muscle groups",
+        "tags": [
+          "Exercises"
+        ],
+        "description": "Any authenticated role. Reference data in id order; ids are database-generated, do not hardcode them.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The muscle groups.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MuscleGroup"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/training-plans": {
+      "get": {
+        "operationId": "listTrainingPlans",
+        "summary": "List training plans",
+        "tags": [
+          "Training plans"
+        ],
+        "description": "Roles: TRAINER, CLIENT. A CLIENT gets their own plans (`clientId` is ignored); a TRAINER their own, optionally filtered by `clientId`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "clientId",
+            "required": false,
+            "description": "A TRAINER’s filter."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The plans.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrainingPlan"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTrainingPlan",
+        "summary": "Create a training plan",
+        "tags": [
+          "Training plans"
+        ],
+        "description": "Roles: TRAINER. For one of their clients (403 otherwise). vertice-api also requires an active trainer-client link: without one it is 409 `PRECONDITION_FAILED`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrainingPlanRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "201": {
+            "description": "The plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingPlan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/training-plans/{id}": {
+      "get": {
+        "operationId": "getTrainingPlan",
+        "summary": "A training plan with its workouts",
+        "tags": [
+          "Training plans"
+        ],
+        "description": "Roles: TRAINER, CLIENT. On their own plan.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan and its workouts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingPlanDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateTrainingPlan",
+        "summary": "Update a training plan",
+        "tags": [
+          "Training plans"
+        ],
+        "description": "Roles: TRAINER. Your own plan. A plan’s client is fixed at creation: a `clientId` in the body is ignored.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTrainingPlanRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingPlan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteTrainingPlan",
+        "summary": "Delete a training plan",
+        "tags": [
+          "Training plans"
+        ],
+        "description": "Roles: TRAINER. Your own plan. 409 `PRECONDITION_FAILED` once a client recorded training under it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; no body."
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/training-plans/{planId}/workouts": {
+      "get": {
+        "operationId": "listPlanWorkouts",
+        "summary": "The workouts of a plan",
+        "tags": [
+          "Workouts"
+        ],
+        "description": "Roles: TRAINER, CLIENT. On their own plan.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "planId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The workouts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Workout"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkout",
+        "summary": "Create a workout, with its exercises and sets",
+        "tags": [
+          "Workouts"
+        ],
+        "description": "Roles: TRAINER. On their own plan. `exercises` is optional (omitted or `[]` creates an empty workout), at most 20, each with at most 10 `sets`. List position is the order. All or nothing. Every `exerciseId` must be visible to the trainer (the starter set or their own): another trainer’s private exercise and a nonexistent id both get 400.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkoutRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "planId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "201": {
+            "description": "The workout with every new exercise and set id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FullWorkout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workouts": {
+      "get": {
+        "operationId": "listRecentWorkouts",
+        "summary": "The trainer’s workouts across every plan",
+        "tags": [
+          "Workouts"
+        ],
+        "description": "Roles: TRAINER. Powers the clone picker. `recent=true` is the only supported mode (anything else is a 400). Sorted by workout id descending.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true"
+              ]
+            },
+            "in": "query",
+            "name": "recent",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The workouts, with student, plan and exercise count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecentWorkoutSummary"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workouts/{id}": {
+      "get": {
+        "operationId": "getWorkout",
+        "summary": "One workout",
+        "tags": [
+          "Workouts"
+        ],
+        "description": "Roles: TRAINER, CLIENT. On their own plan.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The workout.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workout"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateWorkout",
+        "summary": "Rename a workout or move it to another day",
+        "tags": [
+          "Workouts"
+        ],
+        "description": "Roles: TRAINER. On their own plan.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkoutRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The workout.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWorkout",
+        "summary": "Delete a workout",
+        "tags": [
+          "Workouts"
+        ],
+        "description": "Roles: TRAINER. On their own plan. 409 `PRECONDITION_FAILED` once a client recorded training under it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; no body."
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workouts/{id}/full": {
+      "get": {
+        "operationId": "getFullWorkout",
+        "summary": "A workout with its exercises and sets",
+        "tags": [
+          "Workouts"
+        ],
+        "description": "Roles: TRAINER, CLIENT. On their own plan. One call renders a whole workout; sorted by `order` and `setNumber`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The workout tree.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FullWorkout"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workouts/{id}/clone": {
+      "post": {
+        "operationId": "cloneWorkout",
+        "summary": "Clone a workout into a plan",
+        "tags": [
+          "Workouts"
+        ],
+        "description": "Roles: TRAINER. The source workout and the target plan must both be the trainer’s. Copies the exercises and sets.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloneWorkoutRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "201": {
+            "description": "The new workout.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workouts/{workoutId}/exercises": {
+      "get": {
+        "operationId": "listWorkoutExercises",
+        "summary": "The exercises of a workout",
+        "tags": [
+          "Workout exercises"
+        ],
+        "description": "Roles: TRAINER, CLIENT. On their own plan.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The workout exercises.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkoutExercise"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "addWorkoutExercise",
+        "summary": "Add an exercise to a workout",
+        "tags": [
+          "Workout exercises"
+        ],
+        "description": "Roles: TRAINER. On their own plan. `exerciseId` must be visible to the trainer (the starter set or their own): another trainer’s private exercise and a nonexistent id both get 400.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkoutExerciseRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "201": {
+            "description": "The workout exercise.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkoutExercise"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "replaceWorkoutExercises",
+        "summary": "Replace the whole exercise and set tree of a workout",
+        "tags": [
+          "Workout exercises"
+        ],
+        "description": "Roles: TRAINER. On their own plan. Full replace, not merge: `[]` empties the workout. Upstream deletes and recreates the tree, so every `WorkoutExercise` and `ExerciseSet` id in the response is new. 409 `PRECONDITION_FAILED` once any set under the workout has recorded client data. All or nothing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceWorkoutExercisesRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The workout with its new tree.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FullWorkout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workout-exercises/{id}": {
+      "patch": {
+        "operationId": "updateWorkoutExercise",
+        "summary": "Update a workout exercise",
+        "tags": [
+          "Workout exercises"
+        ],
+        "description": "Roles: TRAINER. On their own plan.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWorkoutExerciseRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The workout exercise.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkoutExercise"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWorkoutExercise",
+        "summary": "Remove an exercise from a workout",
+        "tags": [
+          "Workout exercises"
+        ],
+        "description": "Roles: TRAINER. On their own plan. 409 `PRECONDITION_FAILED` once a client recorded training under it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; no body."
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workout-exercises/{workoutExerciseId}/sets": {
+      "get": {
+        "operationId": "listExerciseSets",
+        "summary": "The sets of a workout exercise",
+        "tags": [
+          "Exercise sets"
+        ],
+        "description": "Roles: TRAINER, CLIENT. On their own plan.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutExerciseId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The sets.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExerciseSet"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createExerciseSet",
+        "summary": "Add a set to a workout exercise",
+        "tags": [
+          "Exercise sets"
+        ],
+        "description": "Roles: TRAINER. On their own plan. `weight` and `loadPercentage` are decimal strings.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExerciseSetRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutExerciseId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "201": {
+            "description": "The set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExerciseSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/exercise-sets/{id}": {
+      "patch": {
+        "operationId": "updateExerciseSet",
+        "summary": "Update a set",
+        "tags": [
+          "Exercise sets"
+        ],
+        "description": "Roles: TRAINER. On their own plan.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExerciseSetRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExerciseSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteExerciseSet",
+        "summary": "Delete a set",
+        "tags": [
+          "Exercise sets"
+        ],
+        "description": "Roles: TRAINER. On their own plan. 409 `PRECONDITION_FAILED` once a client recorded training under it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; no body."
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workouts/{workoutId}/session": {
+      "get": {
+        "operationId": "getWorkoutSession",
+        "summary": "The “do a workout” screen in one call",
+        "tags": [
+          "Workout sessions"
+        ],
+        "description": "Roles: TRAINER, CLIENT. Starts (or resumes) the week’s log and merges in what was recorded last time per set (`lastPerformed`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the client of the workout’s plan.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "weekStartDate",
+            "required": false,
+            "description": "Defaults to the current week’s Monday."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "clientId",
+            "required": false,
+            "description": "Required for a TRAINER."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The workout, its sets with last results, and the week’s log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkoutSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workout-logs": {
+      "get": {
+        "operationId": "listWorkoutLogs",
+        "summary": "Which workouts were done in a week",
+        "tags": [
+          "Workout sessions"
+        ],
+        "description": "Roles: TRAINER, CLIENT. Vertice-api scopes this to one plan and one week, so `trainingPlanId` is required. A CLIENT’s `clientId` is ignored; a TRAINER must pass one of their clients. The plan must belong to that client and to the caller.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "trainingPlanId",
+            "required": true,
+            "description": "Required."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "weekStartDate",
+            "required": false,
+            "description": "Defaults to the current week’s Monday."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "clientId",
+            "required": false,
+            "description": "Required for a TRAINER."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The logs of that week.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkoutLog"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workout-logs/{workoutLogId}/feedback": {
+      "post": {
+        "operationId": "submitWorkoutFeedback",
+        "summary": "Send feedback on a workout log",
+        "tags": [
+          "Feedback"
+        ],
+        "description": "Roles: CLIENT. On their own log.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitFeedbackRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutLogId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "CLIENT"
+        ],
+        "responses": {
+          "201": {
+            "description": "The feedback.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkoutFeedback"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workout-sessions/{workoutLogId}/sets": {
+      "post": {
+        "operationId": "recordSetLog",
+        "summary": "Record one set’s actual performance",
+        "tags": [
+          "Workout sessions"
+        ],
+        "description": "Roles: CLIENT. On their own log. `exerciseSetId` must be a set of the log’s workout; a missing set gets the same 400, so the answer never tells “someone else’s set” from “no such set”.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordSetLogRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutLogId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "CLIENT"
+        ],
+        "responses": {
+          "201": {
+            "description": "The set log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetLog"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (`VALIDATION_ERROR`, or a route-specific 400 code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workout-sessions/{workoutLogId}/complete": {
+      "post": {
+        "operationId": "completeWorkoutLog",
+        "summary": "Mark a workout log done",
+        "tags": [
+          "Workout sessions"
+        ],
+        "description": "Roles: CLIENT. On their own log.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutLogId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The completed log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkoutLog"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/feedback": {
+      "get": {
+        "operationId": "listFeedback",
+        "summary": "The trainer’s feedback, newest first",
+        "tags": [
+          "Feedback"
+        ],
+        "description": "Roles: TRAINER. Not scoped to one client: filter by `clientId` client-side.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "Feedback with client, workout and plan names.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EnrichedFeedback"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard": {
+      "get": {
+        "operationId": "getDashboard",
+        "summary": "The trainer dashboard",
+        "tags": [
+          "Dashboard"
+        ],
+        "description": "Roles: TRAINER. Stat tiles, recent feedback, plans nearing their end and workouts completed today, in one call.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The dashboard.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dashboard"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/legal/versions": {
+      "get": {
+        "operationId": "getLegalVersions",
+        "summary": "Current versions of the legal texts",
+        "tags": [
+          "Legal"
+        ],
+        "description": "Public: no token needed. Public and cacheable (`Cache-Control: public, max-age=300`). The web sends `terms` as `acceptedTermsVersion` on register and both versions to `POST /auth/me/consent`, and compares them with `GET /auth/me`’s `consent` to tell whether a stored consent is outdated.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The current versions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalVersions"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Local development"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Auth",
+      "description": "Login, registration, passwords and the caller’s own account (`/auth/me`, LGPD data-subject rights)."
+    },
+    {
+      "name": "Legal",
+      "description": "Versions of the legal texts, for the consent flow."
+    },
+    {
+      "name": "Clients",
+      "description": "A trainer’s roster of clients (TRAINER only)."
+    },
+    {
+      "name": "Exercises",
+      "description": "The exercise catalog (shared starter set plus each trainer’s own) and muscle groups."
+    },
+    {
+      "name": "Training plans",
+      "description": "A plan is one trainer’s and one client’s."
+    },
+    {
+      "name": "Workouts",
+      "description": "Workouts of a plan, including the full aggregate (`/full`) and cloning."
+    },
+    {
+      "name": "Workout exercises",
+      "description": "The exercises of a workout."
+    },
+    {
+      "name": "Exercise sets",
+      "description": "The sets of a workout exercise."
+    },
+    {
+      "name": "Workout sessions",
+      "description": "The client’s “do a workout” flow: the session aggregate, set logs and workout logs."
+    },
+    {
+      "name": "Feedback",
+      "description": "Client feedback on a workout log, read by the trainer."
+    },
+    {
+      "name": "Dashboard",
+      "description": "The trainer’s landing page in one call."
+    },
+    {
+      "name": "Health",
+      "description": "Liveness."
+    }
+  ]
+}

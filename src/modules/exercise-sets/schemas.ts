@@ -22,7 +22,7 @@ export const setStrategySchema = z.enum([
   'AMRAP',
   'ISOMETRIC_HOLD',
   'FAILURE',
-])
+]).meta({ id: 'SetStrategy' })
 
 // Bounds mirror vertice-api's (its PR #70): numbers are capped, `weight` fits NUMERIC(6,2),
 // `loadPercentage` NUMERIC(5,2), notes VARCHAR(255). Shared with the nested entries in `workouts`.
@@ -38,4 +38,4 @@ export const exerciseSetInputSchema = z.object({
   strategy: setStrategySchema,
   restSeconds: restSeconds.optional(),
   notes: boundedText(255).optional(),
-})
+}).meta({ id: 'ExerciseSetRequest' })

@@ -18,17 +18,17 @@ export const dayOfWeekSchema = z.enum([
   'FRIDAY',
   'SATURDAY',
   'SUNDAY',
-])
+]).meta({ id: 'DayOfWeek' })
 
 /** `GET /workouts` query: only `?recent=true` exists (the clone picker); anything else is a 400. */
 export const workoutListQuerySchema = z.object({
-  recent: z.literal('true', { errorMap: () => ({ message: 'GET /workouts requires ?recent=true' }) }),
+  recent: z.literal('true', { error: 'GET /workouts requires ?recent=true' }),
 })
 
 export const workoutInputSchema = z.object({
   name: requiredText(255),
   dayOfWeek: dayOfWeekSchema,
-})
+}).meta({ id: 'WorkoutRequest' })
 
 // Nested entries for create-with-exercises / replace-exercises. No `setNumber`
 // and no `order`: list position is the order (vertice-api assigns both).
@@ -44,7 +44,7 @@ export const exerciseSetEntrySchema = z.object({
   strategy: setStrategySchema.optional(),
   restSeconds: restSeconds.optional(),
   notes: boundedText(255).optional(),
-})
+}).meta({ id: 'ExerciseSetEntry' })
 
 // Caps (20 exercises, 10 sets) mirror vertice-api's, purely to fail fast with
 // a field-level Zod `details` object; the API is authoritative and rejects too.
@@ -53,20 +53,20 @@ export const workoutExerciseEntrySchema = z.object({
   restSecondsBetweenSets: restSeconds.optional(),
   notes: boundedText(255).optional(),
   sets: z.array(exerciseSetEntrySchema).max(MAX_SETS_PER_EXERCISE).default([]),
-})
+}).meta({ id: 'WorkoutExerciseEntry' })
 
 export const workoutCreateSchema = workoutInputSchema.extend({
   exercises: z.array(workoutExerciseEntrySchema).max(MAX_EXERCISES_PER_WORKOUT).default([]),
-})
+}).meta({ id: 'CreateWorkoutRequest' })
 
 // `exercises` is required (may be `[]`, which empties the workout): a PUT with
 // no list is more likely a bug than an intent to clear the workout.
 export const replaceWorkoutExercisesSchema = z.object({
   exercises: z.array(workoutExerciseEntrySchema).max(MAX_EXERCISES_PER_WORKOUT),
-})
+}).meta({ id: 'ReplaceWorkoutExercisesRequest' })
 
 export const cloneWorkoutSchema = z.object({
   targetTrainingPlanId: z.number().int().positive(),
   name: requiredText(255),
   dayOfWeek: dayOfWeekSchema,
-})
+}).meta({ id: 'CloneWorkoutRequest' })

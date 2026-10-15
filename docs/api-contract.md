@@ -2,6 +2,8 @@
 
 Base URL (dev): `http://localhost:3000/api`
 
+**Machine-readable contract:** [`openapi.json`](./openapi.json) (OpenAPI 3.1), generated from the route schemas by `npm run openapi` and checked in CI. It has every route with its `operationId`, parameters, request and response schemas, error responses and security scheme (bearer), and is what vertice-web-react and vertice-mobile generate their TypeScript types from (`openapi-typescript`). This document is the prose around it; where the two disagree about a field, the spec is right. The route reference below is generated from it.
+
 All endpoints except `/auth/login`, `/auth/register`, `/auth/password/setup` and `/legal/versions` require:
 `Authorization: Bearer <token>`
 
@@ -30,7 +32,7 @@ Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), 
 | `RESOURCE_EXHAUSTED` | 413 | `TOO_LARGE` | `The requested data is too large to return` (today only `GET /auth/me/export` over vertice-api's export bounds) |
 | anything else (`UNKNOWN`, `INTERNAL`, ...) | 502 | `UPSTREAM_ERROR` | `Upstream error` |
 
-`details` is only set on the BFF's own validation errors (Zod field errors and the like), never from upstream. The BFF's own refusals (`Requires role: TRAINER`, `This client is not one of your clients`, ...) keep their specific messages.
+`details` is only set on the BFF's own validation errors (Zod field errors and the like), never from upstream. For a Zod failure it is Zod's flattened form, `{ "formErrors": string[], "fieldErrors": { "<field>": string[] } }`; the field names are the contract, the English text of each message is not (Zod 4 words them differently from Zod 3, e.g. `Invalid input: expected string, received undefined` instead of `Required`). The BFF's own refusals (`Requires role: TRAINER`, `This client is not one of your clients`, ...) keep their specific messages.
 
 `PRECONDITION_FAILED` (409) means the request was well-formed but the resource's current state forbids it — emitted by `PUT /workouts/:workoutId/exercises`, when a client has already recorded data under the workout; by `DELETE /exercises/:id`, while any workout uses the exercise; and by the deletes that would remove a client's history (vertice-api's `HasRecordedDataException`, P1-05): `DELETE /training-plans/:id` once any of its workouts has a workout log, `DELETE /workouts/:id` once it has a workout log, `DELETE /workout-exercises/:id` and `DELETE /exercise-sets/:id` once a set has a set log. A started session counts even with nothing recorded. The message is the fixed one above; the web shows its own copy on that code (e.g. "já tem treinos registrados e não pode ser excluído"). Distinct from `VALIDATION_ERROR` ("fix the payload").
 
@@ -40,14 +42,153 @@ Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Eve
 
 **`ADMIN` has no defined product yet** (no PRD; audit QUAL-BFF-001, plan item P1-02). Until one exists, an ADMIN keeps only what is generic: their own account and the exercise catalog reads. Every trainer- or client-scoped route answers an ADMIN with **403 `FORBIDDEN` `Requires role: …`** before any upstream call; there is no ADMIN bypass in the BFF's ownership checks. (vertice-api still lets ADMIN through on most RPCs; the BFF is just narrower.) Giving ADMIN a feature needs a short PRD first, then explicit routes.
 
-| Routes | Roles |
-|---|---|
-| `POST /auth/login`, `POST /auth/register`, `POST /auth/password/setup`, `GET /legal/versions`, `GET /health` | public |
-| `GET`/`PATCH`/`DELETE /auth/me`, `GET /auth/me/export`, `POST /auth/me/consent`, `POST /auth/password`, `GET /muscle-groups`, `GET /exercises/:id` (upstream decides visibility) | any role |
-| `GET /exercises` | TRAINER, ADMIN (ADMIN sees the starter set) |
-| `/clients/**`, `GET /dashboard`, `GET /feedback`, `GET /workouts?recent=true`, `POST /exercises`, `PATCH`/`DELETE /exercises/:id`, every plan/workout/workout-exercise/set write (`POST`/`PUT`/`PATCH`/`DELETE`, incl. `POST /workouts/:id/clone`) | TRAINER |
-| `GET /training-plans`, `GET /training-plans/:id`, `GET /training-plans/:planId/workouts`, `GET /workouts/:id`, `GET /workouts/:id/full`, `GET /workouts/:workoutId/exercises`, `GET /workout-exercises/:workoutExerciseId/sets`, `GET /workouts/:workoutId/session`, `GET /workout-logs`, `GET /exercises/:id/progress` | TRAINER, CLIENT (each scoped to their own data) |
-| `POST /workout-sessions/:workoutLogId/{sets,complete}`, `POST /workout-logs/:workoutLogId/feedback` | CLIENT |
+Which roles each route admits is the `Access` column of the route reference below. It is generated from the route declarations, and `src/test/route-authorization.test.ts` pins it to what the routes actually enforce. Notes: `GET /exercises` also admits ADMIN, who sees the starter set; `GET /exercises/:id` is open to any role and vertice-api decides visibility; everything scoped to a trainer or a client is checked against the caller's own data on top of the role.
+
+<!-- BEGIN GENERATED ROUTE REFERENCE (npm run openapi) -->
+<!-- Generated from the routes by `npm run openapi`; CI fails when it is stale. Do not edit by hand. -->
+
+Paths are absolute, `/api` included (the dev server is `http://localhost:3000`). The full request and response schemas,
+with the error responses of each operation, are in [`openapi.json`](./openapi.json) (OpenAPI 3.1).
+
+### Auth
+
+Login, registration, passwords and the caller’s own account (`/auth/me`, LGPD data-subject rights).
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| POST | `/api/auth/login` | public | `login` | Log in |
+| POST | `/api/auth/register` | public | `register` | Register a trainer |
+| GET | `/api/auth/me` | any role | `getMe` | The caller’s own account |
+| PATCH | `/api/auth/me` | any role | `updateMe` | Correct the caller’s own profile |
+| DELETE | `/api/auth/me` | any role | `deleteMe` | Delete the caller’s own account |
+| GET | `/api/auth/me/export` | any role | `exportMyData` | Download the caller’s data |
+| POST | `/api/auth/me/consent` | any role | `recordConsent` | Record the caller’s consent to a legal text |
+| POST | `/api/auth/password` | any role | `changePassword` | Change the caller’s password |
+| POST | `/api/auth/password/setup` | public | `setupPassword` | Choose a password with a first-access token |
+
+### Legal
+
+Versions of the legal texts, for the consent flow.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/legal/versions` | public | `getLegalVersions` | Current versions of the legal texts |
+
+### Clients
+
+A trainer’s roster of clients (TRAINER only).
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/clients` | TRAINER | `listClients` | The trainer’s roster |
+| POST | `/api/clients` | TRAINER | `createClient` | Create a client |
+| GET | `/api/clients/{id}` | TRAINER | `getClient` | A client’s details |
+| PATCH | `/api/clients/{id}` | TRAINER | `updateClient` | Update a client |
+| DELETE | `/api/clients/{id}` | TRAINER | `endClientRelationship` | End the relationship with a client |
+| GET | `/api/clients/{id}/overview` | TRAINER | `getClientOverview` | The header of a client’s detail screen |
+| POST | `/api/clients/{id}/setup-token` | TRAINER | `reissueClientSetupToken` | Re-issue a client’s first-access link |
+
+### Exercises
+
+The exercise catalog (shared starter set plus each trainer’s own) and muscle groups.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/exercises` | TRAINER, ADMIN | `listExercises` | List the exercise catalog |
+| POST | `/api/exercises` | TRAINER | `createExercise` | Create an exercise |
+| GET | `/api/exercises/{id}` | any role | `getExercise` | One exercise |
+| PATCH | `/api/exercises/{id}` | TRAINER | `updateExercise` | Replace an exercise |
+| DELETE | `/api/exercises/{id}` | TRAINER | `deleteExercise` | Delete an exercise |
+| GET | `/api/exercises/{id}/progress` | TRAINER, CLIENT | `getExerciseProgress` | Weight over time for one exercise |
+| GET | `/api/muscle-groups` | any role | `listMuscleGroups` | List the muscle groups |
+
+### Training plans
+
+A plan is one trainer’s and one client’s.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/training-plans` | TRAINER, CLIENT | `listTrainingPlans` | List training plans |
+| POST | `/api/training-plans` | TRAINER | `createTrainingPlan` | Create a training plan |
+| GET | `/api/training-plans/{id}` | TRAINER, CLIENT | `getTrainingPlan` | A training plan with its workouts |
+| PATCH | `/api/training-plans/{id}` | TRAINER | `updateTrainingPlan` | Update a training plan |
+| DELETE | `/api/training-plans/{id}` | TRAINER | `deleteTrainingPlan` | Delete a training plan |
+
+### Workouts
+
+Workouts of a plan, including the full aggregate (`/full`) and cloning.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/training-plans/{planId}/workouts` | TRAINER, CLIENT | `listPlanWorkouts` | The workouts of a plan |
+| POST | `/api/training-plans/{planId}/workouts` | TRAINER | `createWorkout` | Create a workout, with its exercises and sets |
+| GET | `/api/workouts` | TRAINER | `listRecentWorkouts` | The trainer’s workouts across every plan |
+| GET | `/api/workouts/{id}` | TRAINER, CLIENT | `getWorkout` | One workout |
+| PATCH | `/api/workouts/{id}` | TRAINER | `updateWorkout` | Rename a workout or move it to another day |
+| DELETE | `/api/workouts/{id}` | TRAINER | `deleteWorkout` | Delete a workout |
+| GET | `/api/workouts/{id}/full` | TRAINER, CLIENT | `getFullWorkout` | A workout with its exercises and sets |
+| POST | `/api/workouts/{id}/clone` | TRAINER | `cloneWorkout` | Clone a workout into a plan |
+
+### Workout exercises
+
+The exercises of a workout.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/workouts/{workoutId}/exercises` | TRAINER, CLIENT | `listWorkoutExercises` | The exercises of a workout |
+| POST | `/api/workouts/{workoutId}/exercises` | TRAINER | `addWorkoutExercise` | Add an exercise to a workout |
+| PUT | `/api/workouts/{workoutId}/exercises` | TRAINER | `replaceWorkoutExercises` | Replace the whole exercise and set tree of a workout |
+| PATCH | `/api/workout-exercises/{id}` | TRAINER | `updateWorkoutExercise` | Update a workout exercise |
+| DELETE | `/api/workout-exercises/{id}` | TRAINER | `deleteWorkoutExercise` | Remove an exercise from a workout |
+
+### Exercise sets
+
+The sets of a workout exercise.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/workout-exercises/{workoutExerciseId}/sets` | TRAINER, CLIENT | `listExerciseSets` | The sets of a workout exercise |
+| POST | `/api/workout-exercises/{workoutExerciseId}/sets` | TRAINER | `createExerciseSet` | Add a set to a workout exercise |
+| PATCH | `/api/exercise-sets/{id}` | TRAINER | `updateExerciseSet` | Update a set |
+| DELETE | `/api/exercise-sets/{id}` | TRAINER | `deleteExerciseSet` | Delete a set |
+
+### Workout sessions
+
+The client’s “do a workout” flow: the session aggregate, set logs and workout logs.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/workouts/{workoutId}/session` | TRAINER, CLIENT | `getWorkoutSession` | The “do a workout” screen in one call |
+| GET | `/api/workout-logs` | TRAINER, CLIENT | `listWorkoutLogs` | Which workouts were done in a week |
+| POST | `/api/workout-sessions/{workoutLogId}/sets` | CLIENT | `recordSetLog` | Record one set’s actual performance |
+| POST | `/api/workout-sessions/{workoutLogId}/complete` | CLIENT | `completeWorkoutLog` | Mark a workout log done |
+
+### Feedback
+
+Client feedback on a workout log, read by the trainer.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| POST | `/api/workout-logs/{workoutLogId}/feedback` | CLIENT | `submitWorkoutFeedback` | Send feedback on a workout log |
+| GET | `/api/feedback` | TRAINER | `listFeedback` | The trainer’s feedback, newest first |
+
+### Dashboard
+
+The trainer’s landing page in one call.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/dashboard` | TRAINER | `getDashboard` | The trainer dashboard |
+
+### Health
+
+Liveness.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/health` | public | `getHealth` | Liveness |
+
+<!-- END GENERATED ROUTE REFERENCE -->
 
 ## Input bounds
 
@@ -125,8 +266,8 @@ The web compares `termsVersion` / `healthDataVersion` with `GET /legal/versions`
 ## Legal — `/legal`
 - `GET /versions` (public) → `{terms, healthData}`: the current version of the Terms of Use / Privacy Policy and of the health-data consent notice (env `TERMS_VERSION`, `HEALTH_DATA_CONSENT_VERSION`, default `2026-10-draft`; the texts are drafts pending legal review). The web shows the matching texts, sends `terms` as `acceptedTermsVersion` on register and the versions to `POST /auth/me/consent`, and compares them with `GET /auth/me`'s `consent` to tell whether a stored consent is outdated. No upstream call. Cacheable: `Cache-Control: public, max-age=300` (errors stay `no-store`). A version changes only on a BFF deploy that bumps the env var.
 
-## Students — `/students` (TRAINER only)
-A trainer's roster = distinct clients across their training plans (User has no direct trainer link). **This means a newly created student with no training plan yet does not appear in `GET /` until a plan is created for them** — this is pre-existing behavior of the roster derivation, not something the endpoints below change.
+## Clients — `/clients` (TRAINER only)
+A trainer's roster = the clients with an active trainer–client relationship, from vertice-api's `TrainerClientService` (a `User` has no direct trainer link, and the roster is not derived from training plans). A client the trainer just created (`POST /`) is on the roster right away, with `currentPlan: null` until a plan exists. Ending the relationship (`DELETE /:id`) takes the client off it.
 **CPF.** No list carries a CPF. The detail shapes (`ClientDetail`, below) carry it **masked**, `***.***.***-25` (only the two check digits; `""` when the client has none), except `GET /:id?reveal=cpf`.
 
 `ClientDetail` = `{id, name, email, cpf, role}` (`cpf` masked; no `cref`).
@@ -194,7 +335,7 @@ There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is g
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or ADMIN` (CLIENT); 400 `VALIDATION_ERROR` for a non-numeric/0/negative/repeated `muscleGroupId` or `q` >100 chars (field `details`); 404 `NOT_FOUND` for an unknown `muscleGroupId`.
 - `GET /exercises/:id` (any role, upstream decides) → `Exercise`. TRAINER: starter or own; ADMIN: starter only; CLIENT: only an exercise used by a workout in one of their own plans.
   - Errors: 403 `FORBIDDEN` (not visible to you; vertice-api's refusal, fixed message); 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
-- `GET /exercises/:id/progress?clientId=` (TRAINER, CLIENT) → `{weekStartDate, weight}[]` (weight-over-time for a graph). CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
+- `GET /exercises/:id/progress?clientId=` (TRAINER, CLIENT) → `{weekStartDate, weight}[]` (weight-over-time for a graph). **`weight` here is a JSON number**, the one exception to the decimals-are-strings rule below: it is a chart value, converted from the upstream decimal string (`Number(...)`), so it can lose precision. Everywhere else a decimal (`ExerciseSet.weight`, `SetLog.weight`) stays a string. CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or CLIENT` (ADMIN); 400 `VALIDATION_ERROR` `clientId is required` (TRAINER, absent) or field `details` on `clientId` (malformed); 403 `FORBIDDEN` `This client is not one of your clients` (TRAINER).
 - `POST /exercises` `{name, description?, videoUrl?, muscleGroupIds}` (TRAINER only) → `201` `Exercise` (`isStarter: false`, private to the caller).
   - `name` 1..255 chars (must not be blank); `description` ≤255, default `""`; `videoUrl` `""` or an http(s) URL ≤500, default `""`; `muscleGroupIds` at least one positive integer id — duplicates are dropped. A trainer-created exercise has no primary group, so its `muscleGroups` come back in id order whatever order was sent. Duplicate names are allowed.
@@ -289,7 +430,7 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
   "completedToday": [ { "student": "", "workout": "", "time": "HH:MM" } ]
 }
 ```
-This maps directly onto the existing `DashboardView.vue` mockup's data shape (stats tiles, recent feedback list, expiring plans, completed-today list) — swap the hardcoded arrays for a `fetch('/api/dashboard')` call.
+`stats` are the tiles, `recentFeedback` the five newest entries, `expiringPlans` the plans ending within 14 days, `completedToday` the workouts completed today across the roster (`time` is the `HH:MM` clock of the completion instant in UTC).
 
 ---
 
@@ -297,4 +438,4 @@ This maps directly onto the existing `DashboardView.vue` mockup's data shape (st
 1. `cd vertice-api && docker compose up -d` (postgres on 5432)
 2. `cd vertice-api && ./gradlew bootRun --args='--spring.profiles.active=local'` — gRPC on `:9090`, auth disabled for local dev (see `application-local.properties`)
 3. `cd vertice-bff && cp .env.example .env && npm install && npm run dev` — REST API on `:3000`
-4. `cd vertice-web && npm run dev` — Vite dev server, default `:5173`
+4. `cd vertice-web-react && npm install && npm run dev` — Next.js dev server, pinned to `:5173`

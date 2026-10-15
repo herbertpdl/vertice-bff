@@ -455,6 +455,11 @@ const handlers: Record<string, (req: Req) => unknown> = {
         formatVersion: 1,
         exportedAt: FAKE_CONSENT_AT,
         profile: { id: u.id, name: u.name, email: emailOf(u.id), cpf: cpfOf(u.id), role: u.role },
+        consent: {},
+        relationships: [],
+        plans: [],
+        workoutLogs: [],
+        exercises: [],
       }),
     }
   },

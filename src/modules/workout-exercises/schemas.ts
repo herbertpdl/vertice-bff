@@ -8,10 +8,10 @@ export const workoutExerciseCreateSchema = z.object({
   order: orderNumber,
   restSecondsBetweenSets: restSeconds.default(0),
   notes: boundedText(255).default(''),
-})
+}).meta({ id: 'CreateWorkoutExerciseRequest' })
 
 export const workoutExerciseUpdateSchema = z.object({
   order: orderNumber,
   restSecondsBetweenSets: restSeconds.default(0),
   notes: boundedText(255).default(''),
-})
+}).meta({ id: 'UpdateWorkoutExerciseRequest' })
