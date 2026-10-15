@@ -307,10 +307,10 @@ describe('client personal data (P1-03)', () => {
       method: 'PATCH',
       url: `/api/clients/${ids.clientA}`,
       headers: bearer('trainerA'),
-      payload: { name: 'Client A', email: emailOf(ids.clientA), cpf: cpfOf(ids.clientA) },
+      payload: { name: 'Client A', email: emailOf(ids.clientA), cpf: '52998224725' },
     })
     expect(updated.statusCode, updated.body).toBe(200)
-    expect(updated.json().cpf).toBe(maskedCpfOf(ids.clientA))
+    expect(updated.json().cpf).toBe('***.***.***-25')
 
     const created = await app.inject({
       method: 'POST',

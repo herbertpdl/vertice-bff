@@ -49,6 +49,31 @@ Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Eve
 | `GET /training-plans`, `GET /training-plans/:id`, `GET /training-plans/:planId/workouts`, `GET /workouts/:id`, `GET /workouts/:id/full`, `GET /workouts/:workoutId/exercises`, `GET /workout-exercises/:workoutExerciseId/sets`, `GET /workouts/:workoutId/session`, `GET /workout-logs`, `GET /exercises/:id/progress` | TRAINER, CLIENT (each scoped to their own data) |
 | `POST /workout-sessions/:workoutLogId/{sets,complete}`, `POST /workout-logs/:workoutLogId/feedback` | CLIENT |
 
+## Input bounds
+
+Every request body and query string is parsed with Zod before any upstream call; a violation is `400 VALIDATION_ERROR` with field `details`. The rules mirror vertice-api's (its PR #70 is the table of record; vertice-api stays authoritative), and string lengths count UTF-16 code units, like JavaScript's `.length`. "Not blank" means `trim().length > 0`, and the stored text is trimmed.
+
+| Input | Rule |
+|---|---|
+| user `name`, plan `name`, workout `name`, exercise `name` | not blank, ≤ 255 |
+| `email` | trimmed, lower-cased, valid, ≤ 255 (also on `PATCH /clients/:id`) |
+| `password` (register, setup, change) | ≥ 8 characters, ≤ 72 UTF-8 bytes, not blank. **Login and the current-password re-check** only need 1..1000 characters (no policy, uniform 401) |
+| `cpf` | register: required. Clients (create, PATCH) and `PATCH /me`: optional. When set: exactly 11 digits, no punctuation, valid check digits; `""` means none |
+| `cref` | ≤ 20 |
+| plan `description`, exercise `description`, notes (workout exercise, set) | ≤ 255 |
+| `videoUrl` | `""` or `^https?://\S+$`, ≤ 500 (`javascript:`, `data:`, `ftp:` are refused) |
+| feedback `text` | not blank, ≤ 2000 |
+| plan `startDate`, `endDate`, `weekStartDate` | an existing `YYYY-MM-DD` date; `endDate` ≥ `startDate` |
+| `order`, `setNumber` | integer 1..1000 |
+| `reps` | integer 0..1000 |
+| `durationSeconds` | integer 0..86400 |
+| `restSeconds`, `restSecondsBetweenSets` | integer 0..3600 |
+| `weight` | `^\d{1,4}(\.\d{1,2})?$` (`""` = unset on a set; required on a set log) |
+| `loadPercentage` | `^\d{1,3}(\.\d{1,2})?$` (`""` = unset) |
+| exercises per workout / sets per exercise | ≤ 20 / ≤ 10 in the nested bodies (`POST /training-plans/:planId/workouts`, `PUT /workouts/:workoutId/exercises`). The per-item creates are capped by vertice-api, which answers `400 VALIDATION_ERROR` `exercises: must not exceed 20 entries` / `sets: must not exceed 10 entries` |
+| feedback entries per workout log | ≤ 10, enforced by vertice-api |
+| query ids (`clientId`, `trainingPlanId`) | positive integers; a malformed one is a 400 (a CLIENT's `clientId` is still ignored once it parses) |
+
 ## Rate limits
 - **Global:** every route shares a loose per-IP bucket (default 300 requests per minute; `RATE_LIMIT_GLOBAL_MAX`/`RATE_LIMIT_GLOBAL_WINDOW_MS`).
 - **Auth (strict):** separate buckets per route, per IP and (where the body has one) per email, default 5 per 15 minutes (`AUTH_RATE_LIMIT_MAX`/`AUTH_RATE_LIMIT_WINDOW_MS`). Once a bucket is full the next request is `429 RATE_LIMITED`, whatever its credentials, until the window ends.
@@ -170,7 +195,7 @@ There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is g
 - `GET /exercises/:id` (any role, upstream decides) → `Exercise`. TRAINER: starter or own; ADMIN: starter only; CLIENT: only an exercise used by a workout in one of their own plans.
   - Errors: 403 `FORBIDDEN` (not visible to you; vertice-api's refusal, fixed message); 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
 - `GET /exercises/:id/progress?clientId=` (TRAINER, CLIENT) → `{weekStartDate, weight}[]` (weight-over-time for a graph). CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
-  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or CLIENT` (ADMIN); 400 `VALIDATION_ERROR` `clientId is required` / `Invalid clientId: <value>` (TRAINER); 403 `FORBIDDEN` `This client is not one of your clients` (TRAINER).
+  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or CLIENT` (ADMIN); 400 `VALIDATION_ERROR` `clientId is required` (TRAINER, absent) or field `details` on `clientId` (malformed); 403 `FORBIDDEN` `This client is not one of your clients` (TRAINER).
 - `POST /exercises` `{name, description?, videoUrl?, muscleGroupIds}` (TRAINER only) → `201` `Exercise` (`isStarter: false`, private to the caller).
   - `name` 1..255 chars (must not be blank); `description` ≤255, default `""`; `videoUrl` `""` or an http(s) URL ≤500, default `""`; `muscleGroupIds` at least one positive integer id — duplicates are dropped. A trainer-created exercise has no primary group, so its `muscleGroups` come back in id order whatever order was sent. Duplicate names are allowed.
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER` (CLIENT, ADMIN); 400 `VALIDATION_ERROR` with field `details` for Zod failures (`name` missing/empty/too long, `description`/`videoUrl` too long, `videoUrl` not a URL, `muscleGroupIds` missing/empty/non-positive — a body with only the old `muscleGroup` fails here); 400 `VALIDATION_ERROR` with a flat upstream message for `name: must not be blank`, `videoUrl: must be a valid http(s) URL`, `muscleGroupIds: unknown muscle group <id>`.
@@ -236,7 +261,7 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
 
 ## Workout sessions (the client "do a workout" flow)
 - **`GET /workouts/:workoutId/session?weekStartDate=YYYY-MM-DD`** (defaults to the current week's Monday) — CLIENT uses own id (any `clientId` is ignored); TRAINER must pass `?clientId=`, the client of the workout's plan.
-  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or CLIENT` (ADMIN); 400 `VALIDATION_ERROR` `clientId is required` / `Invalid clientId: <value>` (TRAINER); 403 `FORBIDDEN` `You do not have access to this training plan` (another trainer's or client's workout) or `That training plan does not belong to this client` (TRAINER, `clientId` is not the plan's client); 404 `NOT_FOUND` for an unknown workout.
+  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or CLIENT` (ADMIN); 400 `VALIDATION_ERROR` `clientId is required` (TRAINER, absent) or field `details` on `clientId` (malformed); 403 `FORBIDDEN` `You do not have access to this training plan` (another trainer's or client's workout) or `That training plan does not belong to this client` (TRAINER, `clientId` is not the plan's client); 404 `NOT_FOUND` for an unknown workout.
   → `Workout & { exercises: [...FullWorkoutExercise, sets: [...ExerciseSet, lastPerformed: SetLog|null]] , workoutLog: WorkoutLog }`.
   Each `exercise` under `exercises[]` is the `Exercise` shape from the Exercises section (`muscleGroups`, `isStarter`; no `muscleGroup`).
   This auto-starts (or resumes) this week's log and merges in last time's recorded weight/reps per set (`lastPerformed`), so the UI can show "last time: 60kg × 12" inline. **This is the single call the workout-execution screen needs.**

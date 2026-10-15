@@ -113,7 +113,7 @@ const routes: RouteCase[] = [
     public: true,
     ok: {
       url: '/api/auth/register',
-      body: { name: 'Novo', email: 'novo@vertice.test', password: 'secret-123', role: 'TRAINER', acceptedTermsVersion: 'v1' },
+      body: { name: 'Novo', email: 'novo@vertice.test', password: 'secret-123', role: 'TRAINER', cpf: '52998224725', acceptedTermsVersion: 'v1' },
     },
   },
   { route: 'GET /api/auth/me', ok: { as: 'clientA', url: '/api/auth/me' } },
@@ -561,25 +561,25 @@ const routes: RouteCase[] = [
   {
     route: 'POST /api/workouts/:workoutId/exercises',
     roles: ['TRAINER'],
-    ok: { as: 'trainerA', url: `/api/workouts/${ids.workoutA}/exercises`, body: { exerciseId: ids.exercise, order: 0 } },
+    ok: { as: 'trainerA', url: `/api/workouts/${ids.workoutA}/exercises`, body: { exerciseId: ids.exercise, order: 1 } },
     denied: [
       {
         as: 'trainerA',
         url: `/api/workouts/${ids.workoutB}/exercises`,
-        body: { exerciseId: ids.exercise, order: 0 },
+        body: { exerciseId: ids.exercise, order: 1 },
         why: "path: another trainer's workout",
       },
       {
         as: 'trainerA',
         url: `/api/workouts/${ids.workoutA}/exercises`,
-        body: { exerciseId: ids.privateExerciseB, order: 0 },
+        body: { exerciseId: ids.privateExerciseB, order: 1 },
         why: "body: another trainer's private exercise",
         status: 400,
       },
       {
         as: 'trainerA',
         url: `/api/workouts/${ids.workoutA}/exercises`,
-        body: { exerciseId: 9999, order: 0 },
+        body: { exerciseId: 9999, order: 1 },
         why: 'body: an exercise that does not exist (same answer as a private one)',
         status: 400,
       },
@@ -616,12 +616,12 @@ const routes: RouteCase[] = [
   {
     route: 'PATCH /api/workout-exercises/:id',
     roles: ['TRAINER'],
-    ok: { as: 'trainerA', url: `/api/workout-exercises/${ids.workoutExerciseA}`, body: { order: 0 } },
+    ok: { as: 'trainerA', url: `/api/workout-exercises/${ids.workoutExerciseA}`, body: { order: 1 } },
     denied: [
       {
         as: 'trainerA',
         url: `/api/workout-exercises/${ids.workoutExerciseB}`,
-        body: { order: 0 },
+        body: { order: 1 },
         why: "path: another trainer's workout exercise",
       },
     ],

@@ -1,14 +1,17 @@
 import { z } from 'zod'
+import { boundedText, orderNumber, restSeconds } from '../../lib/validation.js'
 
+// Bounds mirror vertice-api's (its PR #70): `order` 1..1000 (the web sends `i + 1`), rest 0..3600,
+// notes at most 255.
 export const workoutExerciseCreateSchema = z.object({
   exerciseId: z.number().int().positive(),
-  order: z.number().int().min(0),
-  restSecondsBetweenSets: z.number().int().min(0).default(0),
-  notes: z.string().default(''),
+  order: orderNumber,
+  restSecondsBetweenSets: restSeconds.default(0),
+  notes: boundedText(255).default(''),
 })
 
 export const workoutExerciseUpdateSchema = z.object({
-  order: z.number().int().min(0),
-  restSecondsBetweenSets: z.number().int().min(0).default(0),
-  notes: z.string().default(''),
+  order: orderNumber,
+  restSecondsBetweenSets: restSeconds.default(0),
+  notes: boundedText(255).default(''),
 })

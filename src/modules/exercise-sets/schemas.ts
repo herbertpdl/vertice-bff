@@ -1,4 +1,16 @@
 import { z } from 'zod'
+import {
+  boundedText,
+  durationSeconds,
+  LOAD_PERCENTAGE_PATTERN,
+  loadPercentageMessage,
+  optionalDecimal,
+  orderNumber,
+  repsCount,
+  restSeconds,
+  WEIGHT_PATTERN,
+  weightMessage,
+} from '../../lib/validation.js'
 
 export const setStrategySchema = z.enum([
   'STRAIGHT',
@@ -12,13 +24,18 @@ export const setStrategySchema = z.enum([
   'FAILURE',
 ])
 
+// Bounds mirror vertice-api's (its PR #70): numbers are capped, `weight` fits NUMERIC(6,2),
+// `loadPercentage` NUMERIC(5,2), notes VARCHAR(255). Shared with the nested entries in `workouts`.
+export const weightSchema = optionalDecimal(WEIGHT_PATTERN, weightMessage)
+export const loadPercentageSchema = optionalDecimal(LOAD_PERCENTAGE_PATTERN, loadPercentageMessage)
+
 export const exerciseSetInputSchema = z.object({
-  setNumber: z.number().int().positive(),
-  reps: z.number().int().min(0).optional(),
-  durationSeconds: z.number().int().min(0).optional(),
-  weight: z.string().optional(),
-  loadPercentage: z.string().optional(),
+  setNumber: orderNumber,
+  reps: repsCount.optional(),
+  durationSeconds: durationSeconds.optional(),
+  weight: weightSchema,
+  loadPercentage: loadPercentageSchema,
   strategy: setStrategySchema,
-  restSeconds: z.number().int().min(0).optional(),
-  notes: z.string().optional(),
+  restSeconds: restSeconds.optional(),
+  notes: boundedText(255).optional(),
 })

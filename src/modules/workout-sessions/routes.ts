@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { parseId, parseRequiredId } from '../../lib/net.js'
+import { parseId, requireQueryId } from '../../lib/net.js'
 import {
   assertExerciseSetInWorkout,
   assertOwnsPlan,
@@ -8,7 +8,7 @@ import {
   assertPlanBelongsToClient,
 } from '../../lib/ownership.js'
 import { currentWeekStartDate } from '../../lib/dates.js'
-import { recordSetLogSchema } from './schemas.js'
+import { recordSetLogSchema, weekStartDateQuerySchema, workoutLogListQuerySchema } from './schemas.js'
 import * as sessionService from './service.js'
 import * as planService from '../training-plans/service.js'
 import { assertIsTrainersClient } from '../clients/service.js'
@@ -23,14 +23,15 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
     async (req) => {
       const workoutId = parseId(req.params.workoutId)
       const user = req.user!
-      const clientId = user.role === 'CLIENT' ? user.id : parseRequiredId(req.query.clientId, 'clientId')
+      const query = weekStartDateQuerySchema.parse(req.query)
+      const clientId = user.role === 'CLIENT' ? user.id : requireQueryId(query.clientId, 'clientId')
 
       const plan = await assertOwnsWorkout(user, workoutId)
       // assertOwnsWorkout already confirmed the plan is the caller's; for a TRAINER the
       // requested client must also be that plan's (a CLIENT's clientId is their own).
       assertPlanBelongsToClient(plan, clientId)
 
-      const weekStartDate = req.query.weekStartDate ?? currentWeekStartDate()
+      const weekStartDate = query.weekStartDate ?? currentWeekStartDate()
       return sessionService.getWorkoutSession(workoutId, clientId, weekStartDate)
     },
   )
@@ -45,8 +46,9 @@ export async function workoutLogRoutes(app: FastifyInstance) {
     '/',
     async (req) => {
       const user = req.user!
-      const clientId = user.role === 'CLIENT' ? user.id : parseRequiredId(req.query.clientId, 'clientId')
-      const trainingPlanId = parseRequiredId(req.query.trainingPlanId, 'trainingPlanId')
+      const query = workoutLogListQuerySchema.parse(req.query)
+      const clientId = user.role === 'CLIENT' ? user.id : requireQueryId(query.clientId, 'clientId')
+      const trainingPlanId = requireQueryId(query.trainingPlanId, 'trainingPlanId')
 
       if (user.role === 'TRAINER') {
         await assertIsTrainersClient(user.id, clientId)
@@ -60,7 +62,7 @@ export async function workoutLogRoutes(app: FastifyInstance) {
       return sessionService.listWorkoutLogs({
         clientId,
         trainingPlanId,
-        weekStartDate: req.query.weekStartDate ?? currentWeekStartDate(),
+        weekStartDate: query.weekStartDate ?? currentWeekStartDate(),
       })
     },
   )

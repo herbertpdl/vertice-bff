@@ -168,6 +168,7 @@ describe('auth routes', () => {
       email: ' Nova@Vertice.test',
       password: 'secret-123',
       role: 'TRAINER',
+      cpf: '52998224725',
       acceptedTermsVersion: '2026-10-draft',
     }
 
@@ -414,6 +415,7 @@ describe('auth routes', () => {
     it.each([
       ['trainerA', 'removing a TRAINER CPF', { cpf: null }],
       ['trainerA', 'an empty TRAINER CPF', { cpf: '' }],
+      ['trainerA', 'a TRAINER CPF with a bad check digit', { cpf: '52998224726' }],
       ['clientA', 'a CREF for a CLIENT', { cref: 'CREF-1' }],
     ] as const)('as %s refuses %s with a 400, never calling UpdateUser', async (as, _why, body) => {
       const res = await patch(body, as)
@@ -620,7 +622,7 @@ describe('auth rate limits', () => {
       app.inject({
         method: 'POST',
         url: '/api/auth/register',
-        payload: { name: 'N', email: `n${i}@vertice.test`, password: 'secret-123', role: 'TRAINER', acceptedTermsVersion: 'v1' },
+        payload: { name: 'N', email: `n${i}@vertice.test`, password: 'secret-123', role: 'TRAINER', cpf: '52998224725', acceptedTermsVersion: 'v1' },
         remoteAddress: '203.0.113.1',
       })
     for (let i = 1; i <= 5; i++) expect((await register(i)).statusCode).toBe(201)

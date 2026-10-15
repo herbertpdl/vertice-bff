@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import { CONSENT_VERSION_PATTERN } from '../../config/env.js'
+import { isValidCpf } from '../../lib/cpf.js'
+import { requiredText } from '../../lib/validation.js'
 
 /** vertice-api's `@Password` policy: not blank, at least 8 characters, at most 72 UTF-8 bytes (bcrypt's limit). */
 export const PASSWORD_MIN_CHARS = 8
@@ -7,6 +9,8 @@ export const PASSWORD_MAX_BYTES = 72
 
 export const passwordSchema = z
   .string()
+  // Every character is at least one byte: a cheap bound before the byte count below.
+  .max(PASSWORD_MAX_BYTES, `Password must be at most ${PASSWORD_MAX_BYTES} bytes`)
   .min(PASSWORD_MIN_CHARS, `Password must be at least ${PASSWORD_MIN_CHARS} characters`)
   .refine((value) => value.trim().length > 0, 'Password must not be blank')
   .refine(
@@ -15,13 +19,36 @@ export const passwordSchema = z
   )
 
 /** Trimmed and lower-cased, the way vertice-api stores emails. */
-export const emailSchema = z.string().trim().toLowerCase().email()
+export const emailSchema = z.string().trim().toLowerCase().email().max(255)
+
+/**
+ * A password as login or a re-check sends it. No policy, on purpose (uniform "Invalid email or
+ * password"); only a sanity cap, so a huge body is never hashed.
+ */
+export const LOGIN_PASSWORD_MAX = 1000
+export const submittedPasswordSchema = z.string().min(1).max(LOGIN_PASSWORD_MAX)
+
+/** `cref`: optional, at most 20 characters, no format (vertice-api `VARCHAR(20)`). */
+export const crefSchema = z.string().max(20).trim()
 
 /**
  * A CPF as a client sends it. The BFF's own mask (`***.***.***-25`, see `lib/cpf.ts`) is refused:
- * echoing a masked detail back would otherwise reach vertice-api as the new CPF.
+ * echoing a masked detail back would otherwise reach vertice-api as the new CPF. Otherwise 11 digits
+ * with valid check digits, or `''`, which means "none" (vertice-api #65): create sends it upstream
+ * as is, and on a PATCH it removes the CPF, as `null` does.
  */
-export const cpfInputSchema = z.string().refine((cpf) => !cpf.includes('*'), 'Send the full CPF, not the masked one')
+export const cpfInputSchema = z
+  .string()
+  .max(20)
+  .refine((cpf) => !cpf.includes('*'), 'Send the full CPF, not the masked one')
+  .refine((cpf) => cpf === '' || cpf.includes('*') || isValidCpf(cpf), 'CPF must be 11 digits, with valid check digits')
+
+/** A CPF that must be there (a TRAINER's): 11 digits, valid check digits. */
+export const requiredCpfSchema = z
+  .string()
+  .max(20)
+  .refine((cpf) => cpf.includes('*') || isValidCpf(cpf), 'CPF must be 11 digits, with valid check digits')
+  .refine((cpf) => !cpf.includes('*'), 'Send the full CPF, not the masked one')
 
 /**
  * A consent text version (Terms of Use / Privacy Policy, health-data notice) in vertice-api's
@@ -35,18 +62,19 @@ export const loginSchema = z.object({
   email: emailSchema,
   // No policy here: login only checks what was stored, and a wrong password must get the same
   // 401 as an unknown email, not a 400 that says something about the input.
-  password: z.string().min(1),
+  password: submittedPasswordSchema,
 })
 
 export const registerSchema = z.object({
-  name: z.string().min(1),
+  name: requiredText(255),
   email: emailSchema,
   password: passwordSchema,
   // Public sign-up is for trainers only: a CLIENT is created by their trainer (POST /clients),
   // which links them to the roster. Trainer onboarding rules (CREF, approval) are PROD-BFF-002.
   role: z.literal('TRAINER'),
-  cpf: z.string().optional(),
-  cref: z.string().optional(),
+  // Required for a TRAINER (vertice-api's `@Cpf`), digits only, with check digits.
+  cpf: requiredCpfSchema,
+  cref: crefSchema.optional(),
   // The Terms of Use / Privacy Policy version the user accepted on the form (P1-04). Required:
   // no account is created without an acceptance on record. Any well-formed version is accepted,
   // not only the current `TERMS_VERSION`, so a web build one release behind still registers.
@@ -60,12 +88,12 @@ export const recordConsentSchema = z.object({
 })
 
 export const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1),
+  currentPassword: submittedPasswordSchema,
   newPassword: passwordSchema,
 })
 
 export const passwordSetupSchema = z.object({
-  token: z.string().trim().min(1),
+  token: z.string().max(512).trim().min(1),
   newPassword: passwordSchema,
 })
 
@@ -78,11 +106,11 @@ export const passwordSetupSchema = z.object({
  * stripped and the stored role is sent.
  */
 export const updateMeSchema = z.object({
-  name: z.string().trim().min(1).optional(),
+  name: requiredText(255).optional(),
   // No verification flow yet: the new address is used as is (follow-up P1-06).
   email: emailSchema.optional(),
   cpf: cpfInputSchema.nullable().optional(),
-  cref: z.string().trim().nullable().optional(),
+  cref: crefSchema.nullable().optional(),
 })
 
 /**
@@ -90,5 +118,5 @@ export const updateMeSchema = z.object({
  * so a stolen session alone can't delete it.
  */
 export const deleteAccountSchema = z.object({
-  password: z.string().min(1),
+  password: submittedPasswordSchema,
 })

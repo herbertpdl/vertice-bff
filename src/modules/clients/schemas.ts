@@ -1,8 +1,9 @@
 import { z } from 'zod'
 import { cpfInputSchema, emailSchema } from '../auth/schemas.js'
+import { requiredText } from '../../lib/validation.js'
 
 export const clientCreateSchema = z.object({
-  name: z.string().min(1),
+  name: requiredText(255),
   email: emailSchema,
   // No password: the client chooses their own through the setup token the
   // create response returns (see clients/service.ts createClient()). A
@@ -16,8 +17,8 @@ export const clientCreateSchema = z.object({
  * since vertice-api's `UpdateUser` replaces every field); a string sets it; `null` removes it.
  */
 export const clientUpdateSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().email(),
+  name: requiredText(255),
+  email: emailSchema,
   cpf: cpfInputSchema.nullable().optional(),
 })
 
