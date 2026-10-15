@@ -187,6 +187,18 @@ consumes (`UserService`, `ExerciseService`, `TrainingPlanService`, `WorkoutServi
 `WorkoutFeedbackService`). They are loaded dynamically at startup via `@grpc/proto-loader`
 (see `src/grpc/loadProto.ts`); client instances live in `src/grpc/clients.ts`.
 
+The protos are **copies**: vertice-api owns them. `protos/.api-ref` pins the vertice-api commit they
+come from, and `npm run sync:protos` rewrites `protos/vertice/**` from that commit (`*.proto` only).
+Workflow for a contract change:
+
+1. Change the proto in `vertice-api` and merge it.
+2. Put the merge commit's full SHA in `protos/.api-ref`.
+3. Run `npm run sync:protos` and commit both. (`-- --local` reads the sibling `../vertice-api` clone instead of GitHub.)
+
+`npm run sync:protos -- --check` changes nothing and exits 1 if the copy differs from the pin; CI runs it,
+so a proto edited by hand, or a pin bumped without syncing, fails the build. `protos/google/**` (well-known
+types) is not synced.
+
 ## Docker
 
 A `Dockerfile` is provided for local development (installs dependencies, then runs

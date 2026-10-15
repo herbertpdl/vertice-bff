@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "sync:protos": "tsx scripts/sync-protos.ts",
     "ops:issue-setup-tokens": "tsx scripts/issue-setup-tokens.ts"
   },
   "dependencies": {

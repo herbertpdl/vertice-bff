@@ -29,6 +29,9 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - name: Protos match the pinned vertice-api commit
+        # vertice-api is public: no token needed. Fails when protos/vertice differs from protos/.api-ref.
+        run: npm run sync:protos -- --check
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
