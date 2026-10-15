@@ -41,13 +41,10 @@ export const registerSchema = z.object({
   role: z.literal('TRAINER'),
   cpf: z.string().optional(),
   cref: z.string().optional(),
-  // The Terms of Use / Privacy Policy version the user accepted on the form (P1-04). Optional
-  // for now, validated when present: it becomes required once vertice-web-react sends it (a
-  // required field before that would break web registration). Rollout: the web sends it → a BFF
-  // PR makes it required → vertice-api turns on CONSENT_TERMS_REQUIRED_ON_REGISTRATION. Any
-  // well-formed version is accepted, not only the current `TERMS_VERSION`, so a web build one
-  // release behind still registers.
-  acceptedTermsVersion: consentVersionSchema.optional(),
+  // The Terms of Use / Privacy Policy version the user accepted on the form (P1-04). Required:
+  // no account is created without an acceptance on record. Any well-formed version is accepted,
+  // not only the current `TERMS_VERSION`, so a web build one release behind still registers.
+  acceptedTermsVersion: consentVersionSchema,
 })
 
 /** `POST /auth/me/consent`: the caller consents, for themself, to one text in one version. */

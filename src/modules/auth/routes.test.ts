@@ -191,13 +191,14 @@ describe('auth routes', () => {
       })
     })
 
-    // Optional until vertice-web-react sends it (P1-04 rollout): then a BFF PR makes it required.
-    it('still registers without an accepted Terms version for now, and sends none upstream', async () => {
+    it('refuses a registration without an accepted Terms version, before any upstream call', async () => {
       const withoutTerms: Partial<typeof body> = { ...body }
       delete withoutTerms.acceptedTermsVersion
       const res = await post('/api/auth/register', withoutTerms)
-      expect(res.statusCode, res.body).toBe(201)
-      expect(upstreamRequest('CreateUser')).not.toHaveProperty('acceptedTermsVersion')
+      expect(res.statusCode).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      expect(res.json().error.details.fieldErrors).toHaveProperty('acceptedTermsVersion')
+      expect(grpcCallMock).not.toHaveBeenCalled()
     })
 
     it.each([

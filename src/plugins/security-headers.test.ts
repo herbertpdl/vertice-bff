@@ -17,6 +17,12 @@ describe('security headers', () => {
 
   beforeAll(async () => {
     app = await buildApp()
+    // A cacheable route that can also fail: its errors must still be no-store.
+    app.get<{ Querystring: { status?: string } }>(
+      '/api/test-cacheable',
+      { config: { cacheControl: 'public, max-age=60' } },
+      async (request, reply) => reply.code(Number(request.query.status ?? 200)).send({ ok: true }),
+    )
     await app.ready()
   })
   afterAll(() => app.close())
@@ -46,6 +52,18 @@ describe('security headers', () => {
     const res = await app.inject({ method, url, headers })
     expect(res.statusCode, res.body).toBe(status)
     expect(res.headers).toMatchObject(apiHeaders)
+  })
+
+  it("uses a route's own Cache-Control on its successful responses", async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/test-cacheable' })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['cache-control']).toBe('public, max-age=60')
+  })
+
+  it.each([400, 404, 500, 503])('keeps a cacheable route at no-store on a %i', async (status) => {
+    const res = await app.inject({ method: 'GET', url: `/api/test-cacheable?status=${status}` })
+    expect(res.statusCode).toBe(status)
+    expect(res.headers['cache-control']).toBe('no-store')
   })
 
   it('sets the security headers outside /api too, but leaves caching alone there', async () => {

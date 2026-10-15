@@ -53,7 +53,7 @@ export async function register(input: {
   role: 'TRAINER'
   cpf?: string
   cref?: string
-  acceptedTermsVersion?: string
+  acceptedTermsVersion: string
 }): Promise<Session> {
   // No pre-check by email: vertice-api's unique email index refuses a duplicate (ALREADY_EXISTS → 409).
   return session(await userService.createUser(input))
