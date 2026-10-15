@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { replaceWorkoutExercisesSchema, workoutCreateSchema } from './schemas.js'
+import { cloneWorkoutSchema, replaceWorkoutExercisesSchema, workoutCreateSchema, workoutListQuerySchema } from './schemas.js'
 
 const set = { reps: 10, weight: '60.0', strategy: 'STRAIGHT' as const }
 const exercise = (sets: unknown[] = [set]) => ({ exerciseId: 12, restSecondsBetweenSets: 90, sets })
@@ -85,5 +85,50 @@ describe('replaceWorkoutExercisesSchema', () => {
   it('rejects 21 exercises', () => {
     const body = { exercises: Array.from({ length: 21 }, () => exercise()) }
     expect(() => replaceWorkoutExercisesSchema.parse(body)).toThrow()
+  })
+})
+
+describe('nested entry bounds', () => {
+  const body = (entry: unknown) => ({ name: 'Treino A', dayOfWeek: 'MONDAY', exercises: [entry] })
+
+  it('accepts a set at every upper bound', () => {
+    const entry = exercise([
+      { reps: 1000, durationSeconds: 86_400, restSeconds: 3600, weight: '9999.99', loadPercentage: '999.99', notes: 'n'.repeat(255) },
+    ])
+    expect(workoutCreateSchema.parse(body({ ...entry, notes: 'n'.repeat(255) })).exercises).toHaveLength(1)
+  })
+
+  it.each([
+    ['reps 1001', { reps: 1001 }],
+    ['durationSeconds 86401', { durationSeconds: 86_401 }],
+    ['restSeconds 3601', { restSeconds: 3601 }],
+    ['a 5-digit weight', { weight: '10000' }],
+    ['a 3-decimal load percentage', { loadPercentage: '1.234' }],
+    ['set notes of 256', { notes: 'n'.repeat(256) }],
+  ])('refuses a set with %s', (_why, patch) => {
+    expect(() => workoutCreateSchema.parse(body(exercise([patch])))).toThrow()
+  })
+
+  it('refuses exercise notes over 255 and rest over 3600', () => {
+    expect(() => workoutCreateSchema.parse(body({ ...exercise(), notes: 'n'.repeat(256) }))).toThrow()
+    expect(() => workoutCreateSchema.parse(body({ ...exercise(), restSecondsBetweenSets: 3601 }))).toThrow()
+  })
+
+  it('refuses a blank or oversized workout name', () => {
+    expect(() => workoutCreateSchema.parse({ name: '  ', dayOfWeek: 'MONDAY' })).toThrow()
+    expect(() => workoutCreateSchema.parse({ name: 'a'.repeat(256), dayOfWeek: 'MONDAY' })).toThrow()
+    expect(() => cloneWorkoutSchema.parse({ targetTrainingPlanId: 1, name: ' ', dayOfWeek: 'MONDAY' })).toThrow()
+  })
+
+  it('applies the same caps on replace', () => {
+    expect(() => replaceWorkoutExercisesSchema.parse({ exercises: [exercise([{ reps: 1001 }])] })).toThrow()
+  })
+})
+
+describe('workoutListQuerySchema', () => {
+  it('only takes recent=true', () => {
+    expect(workoutListQuerySchema.parse({ recent: 'true' })).toEqual({ recent: 'true' })
+    expect(() => workoutListQuerySchema.parse({})).toThrow(/recent=true/)
+    expect(() => workoutListQuerySchema.parse({ recent: 'false' })).toThrow()
   })
 })

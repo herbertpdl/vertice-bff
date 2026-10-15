@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
-import { parseId, parseRequiredId } from '../../lib/net.js'
-import { exerciseInputSchema, exerciseListQuerySchema } from './schemas.js'
+import { parseId, requireQueryId } from '../../lib/net.js'
+import { exerciseInputSchema, exerciseListQuerySchema, exerciseProgressQuerySchema } from './schemas.js'
 import * as exerciseService from './service.js'
 import { getExerciseProgress } from '../workout-sessions/service.js'
 import { assertIsTrainersClient } from '../clients/service.js'
@@ -30,7 +30,8 @@ export default async function exerciseRoutes(app: FastifyInstance) {
       const user = req.user!
       const exerciseId = parseId(req.params.id)
       // A CLIENT only ever sees their own history; a TRAINER must name one of their clients.
-      const clientId = user.role === 'CLIENT' ? user.id : parseRequiredId(req.query.clientId, 'clientId')
+      const query = exerciseProgressQuerySchema.parse(req.query)
+      const clientId = user.role === 'CLIENT' ? user.id : requireQueryId(query.clientId, 'clientId')
       if (user.role === 'TRAINER') await assertIsTrainersClient(user.id, clientId)
       return getExerciseProgress(exerciseId, clientId)
     },

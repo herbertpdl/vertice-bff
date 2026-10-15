@@ -1,5 +1,14 @@
 import { z } from 'zod'
-import { setStrategySchema } from '../exercise-sets/schemas.js'
+import { loadPercentageSchema, setStrategySchema, weightSchema } from '../exercise-sets/schemas.js'
+import {
+  boundedText,
+  durationSeconds,
+  MAX_EXERCISES_PER_WORKOUT,
+  MAX_SETS_PER_EXERCISE,
+  repsCount,
+  requiredText,
+  restSeconds,
+} from '../../lib/validation.js'
 
 export const dayOfWeekSchema = z.enum([
   'MONDAY',
@@ -11,8 +20,13 @@ export const dayOfWeekSchema = z.enum([
   'SUNDAY',
 ])
 
+/** `GET /workouts` query: only `?recent=true` exists (the clone picker); anything else is a 400. */
+export const workoutListQuerySchema = z.object({
+  recent: z.literal('true', { errorMap: () => ({ message: 'GET /workouts requires ?recent=true' }) }),
+})
+
 export const workoutInputSchema = z.object({
-  name: z.string().min(1),
+  name: requiredText(255),
   dayOfWeek: dayOfWeekSchema,
 })
 
@@ -23,36 +37,36 @@ export const workoutInputSchema = z.object({
 // that rule in one place. The per-set `exerciseSetInputSchema` (where strategy
 // is required) is untouched.
 export const exerciseSetEntrySchema = z.object({
-  reps: z.number().int().min(0).optional(),
-  durationSeconds: z.number().int().min(0).optional(),
-  weight: z.string().optional(),
-  loadPercentage: z.string().optional(),
+  reps: repsCount.optional(),
+  durationSeconds: durationSeconds.optional(),
+  weight: weightSchema,
+  loadPercentage: loadPercentageSchema,
   strategy: setStrategySchema.optional(),
-  restSeconds: z.number().int().min(0).optional(),
-  notes: z.string().optional(),
+  restSeconds: restSeconds.optional(),
+  notes: boundedText(255).optional(),
 })
 
 // Caps (20 exercises, 10 sets) mirror vertice-api's, purely to fail fast with
 // a field-level Zod `details` object; the API is authoritative and rejects too.
 export const workoutExerciseEntrySchema = z.object({
   exerciseId: z.number().int().positive(),
-  restSecondsBetweenSets: z.number().int().min(0).optional(),
-  notes: z.string().optional(),
-  sets: z.array(exerciseSetEntrySchema).max(10).default([]),
+  restSecondsBetweenSets: restSeconds.optional(),
+  notes: boundedText(255).optional(),
+  sets: z.array(exerciseSetEntrySchema).max(MAX_SETS_PER_EXERCISE).default([]),
 })
 
 export const workoutCreateSchema = workoutInputSchema.extend({
-  exercises: z.array(workoutExerciseEntrySchema).max(20).default([]),
+  exercises: z.array(workoutExerciseEntrySchema).max(MAX_EXERCISES_PER_WORKOUT).default([]),
 })
 
 // `exercises` is required (may be `[]`, which empties the workout): a PUT with
 // no list is more likely a bug than an intent to clear the workout.
 export const replaceWorkoutExercisesSchema = z.object({
-  exercises: z.array(workoutExerciseEntrySchema).max(20),
+  exercises: z.array(workoutExerciseEntrySchema).max(MAX_EXERCISES_PER_WORKOUT),
 })
 
 export const cloneWorkoutSchema = z.object({
   targetTrainingPlanId: z.number().int().positive(),
-  name: z.string().min(1),
+  name: requiredText(255),
   dayOfWeek: dayOfWeekSchema,
 })

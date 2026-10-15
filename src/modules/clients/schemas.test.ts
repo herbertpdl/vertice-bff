@@ -15,8 +15,22 @@ describe.each([
     expect(parsed.cpf).toBeUndefined()
   })
 
-  it('accepts an empty CPF', () => {
+  it('accepts an empty CPF, which means none', () => {
     expect(schema.parse({ ...body, cpf: '' }).cpf).toBe('')
+  })
+
+  it.each(['5299822472', '529982247250', '529.982.247-25', '52998224726', '11111111111', 'abcdefghijk'])(
+    'rejects the malformed or invalid CPF %s',
+    (cpf) => {
+      expect(() => schema.parse({ ...body, cpf })).toThrow(/CPF must be 11 digits/)
+    },
+  )
+
+  it('trims and lower-cases the email, and caps the name and email', () => {
+    expect(schema.parse({ ...body, email: '  Ana@Vertice.TEST ' }).email).toBe('ana@vertice.test')
+    expect(() => schema.parse({ ...body, name: '   ' })).toThrow()
+    expect(() => schema.parse({ ...body, name: 'a'.repeat(256) })).toThrow()
+    expect(() => schema.parse({ ...body, email: `${'a'.repeat(250)}@vertice.test` })).toThrow()
   })
 
   it('passes a CPF through when given', () => {

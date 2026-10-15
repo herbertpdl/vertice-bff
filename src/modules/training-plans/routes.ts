@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { parseId } from '../../lib/net.js'
 import { assertOwnsPlan } from '../../lib/ownership.js'
-import { trainingPlanInputSchema, trainingPlanUpdateSchema } from './schemas.js'
+import { trainingPlanInputSchema, trainingPlanListQuerySchema, trainingPlanUpdateSchema } from './schemas.js'
 import * as planService from './service.js'
 import * as workoutService from '../workouts/service.js'
 import { assertIsTrainersClient } from '../clients/service.js'
@@ -15,10 +15,8 @@ export default async function trainingPlanRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { clientId?: string } }>('/', async (req) => {
     const user = req.user!
     if (user.role === 'CLIENT') return planService.listTrainingPlans({ clientId: user.id })
-    return planService.listTrainingPlans({
-      trainerId: user.id,
-      clientId: req.query.clientId ? Number(req.query.clientId) : undefined,
-    })
+    const { clientId } = trainingPlanListQuerySchema.parse(req.query)
+    return planService.listTrainingPlans({ trainerId: user.id, clientId })
   })
 
   app.get<{ Params: { id: string } }>('/:id', async (req) => {

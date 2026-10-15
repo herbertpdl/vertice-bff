@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { exerciseInputSchema, exerciseListQuerySchema } from './schemas.js'
+import { exerciseInputSchema, exerciseListQuerySchema, exerciseProgressQuerySchema } from './schemas.js'
 
 describe('exerciseInputSchema', () => {
   const base = { name: 'Remada curvada' }
@@ -70,5 +70,43 @@ describe('exerciseListQuerySchema', () => {
     expect(() => exerciseListQuerySchema.parse({ q: 'a'.repeat(101) })).toThrow()
     expect(exerciseListQuerySchema.parse({ q: '   ' })).toEqual({})
     expect(() => exerciseListQuerySchema.parse({ q: ['a', 'b'] })).toThrow()
+  })
+})
+
+describe('exerciseInputSchema bounds', () => {
+  const body = { name: 'Remada', muscleGroupIds: [1] }
+
+  it('trims the name and refuses a blank one, or one over 255', () => {
+    expect(exerciseInputSchema.parse({ ...body, name: ' Remada ' }).name).toBe('Remada')
+    expect(() => exerciseInputSchema.parse({ ...body, name: '   ' })).toThrow()
+    expect(() => exerciseInputSchema.parse({ ...body, name: 'a'.repeat(256) })).toThrow()
+    expect(() => exerciseInputSchema.parse({ ...body, description: 'd'.repeat(256) })).toThrow()
+  })
+
+  it.each(['http://v.test/a', 'https://v.test/a?b=1'])(
+    'accepts the video link %s',
+    (videoUrl) => {
+      expect(exerciseInputSchema.parse({ ...body, videoUrl }).videoUrl).toBe(videoUrl)
+    },
+  )
+
+  it.each([
+    'javascript:alert(1)',
+    'data:text/html;base64,PHNjcmlwdD4=',
+    'ftp://v.test/a',
+    'file:///etc/passwd',
+    '//v.test/a',
+    'https://',
+    'https://v.test/a b',
+    `https://v.test/${'a'.repeat(500)}`,
+  ])('refuses the video link %s', (videoUrl) => {
+    expect(() => exerciseInputSchema.parse({ ...body, videoUrl })).toThrow()
+  })
+})
+
+describe('exerciseProgressQuerySchema', () => {
+  it('reads clientId and refuses a non-id', () => {
+    expect(exerciseProgressQuerySchema.parse({ clientId: '9' }).clientId).toBe(9)
+    expect(() => exerciseProgressQuerySchema.parse({ clientId: 'abc' })).toThrow()
   })
 })

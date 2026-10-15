@@ -1,12 +1,19 @@
 import { z } from 'zod'
+import { optionalIdQuery, requiredText } from '../../lib/validation.js'
 
-// Length limits mirror vertice-api's purely to fail fast with field-level `details`;
-// upstream is authoritative (blank-after-trim names, the http(s) URL rule and unknown
-// group ids are only checked there).
+// Limits mirror vertice-api's purely to fail fast with field-level `details`; upstream is
+// authoritative (unknown group ids are only checked there).
 export const exerciseInputSchema = z.object({
-  name: z.string().min(1).max(255),
+  name: requiredText(255),
   description: z.string().max(255).default(''),
-  videoUrl: z.string().url().max(500).optional().or(z.literal('')),
+  // http(s) only (`^https?://\S+$`, as vertice-api): the catalog is shared, so a `javascript:` or
+  // `data:` link must never be stored.
+  videoUrl: z
+    .string()
+    .max(500)
+    .regex(/^https?:\/\/\S+$/, 'expected an http(s) URL')
+    .optional()
+    .or(z.literal('')),
   // Duplicates are dropped, not rejected; first occurrence wins so the order the
   // trainer picked (the first id may be the primary group) is preserved.
   muscleGroupIds: z
@@ -30,3 +37,6 @@ export const exerciseListQuerySchema = z.object({
 })
 
 export type ExerciseListQuery = z.infer<typeof exerciseListQuerySchema>
+
+/** `GET /exercises/:id/progress` query: a TRAINER names the client; a CLIENT's value is ignored. */
+export const exerciseProgressQuerySchema = z.object({ clientId: optionalIdQuery })

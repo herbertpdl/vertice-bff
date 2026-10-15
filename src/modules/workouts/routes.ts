@@ -1,8 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { parseId } from '../../lib/net.js'
 import { assertCanUseExercises, assertOwnsPlan, assertOwnsWorkout } from '../../lib/ownership.js'
-import { ValidationError } from '../../lib/errors.js'
-import { workoutInputSchema, workoutCreateSchema, cloneWorkoutSchema } from './schemas.js'
+import { workoutInputSchema, workoutCreateSchema, cloneWorkoutSchema, workoutListQuerySchema } from './schemas.js'
 import * as workoutService from './service.js'
 import * as planService from '../training-plans/service.js'
 
@@ -44,9 +43,7 @@ export async function workoutRoutes(app: FastifyInstance) {
     '/',
     { preHandler: app.requireRole('TRAINER') },
     async (req) => {
-      if (req.query.recent !== 'true') {
-        throw new ValidationError('GET /workouts requires ?recent=true')
-      }
+      workoutListQuerySchema.parse(req.query)
       return workoutService.listRecentWorkoutsForTrainer(req.user!.id)
     },
   )
