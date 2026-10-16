@@ -60,7 +60,7 @@ describe('GET /dashboard', () => {
     // both being shifted, still listed it — but a 20:00 completion (23:00Z on the 11th) would
     // have been dropped. That case is the next test.
     expect(res.json().completedToday).toEqual([
-      { student: 'Client A', workout: `Workout ${ids.workoutA}`, time: '22:00', completedAt: SUNDAY_2200_LOCAL },
+      { student: 'Client A', workout: `Workout ${ids.workoutA}`, completedAt: SUNDAY_2200_LOCAL },
     ])
   })
 
@@ -80,17 +80,16 @@ describe('GET /dashboard', () => {
     expect((await get()).json().completedToday).toEqual([])
   })
 
-  it('answers the business-zone clock in the deprecated `time`, and the instant in `completedAt`', async () => {
+  it('answers the completion instant, and no pre-formatted clock beside it', async () => {
     at(SUNDAY_2330_LOCAL)
     withCompletedLog(SUNDAY_2200_LOCAL)
-    const [entry] = (await get()).json().completedToday as { time: string; completedAt: string }[]
-    // `time: completedAt.slice(11, 16)` used to answer "01:00" here — the UTC wall clock shown as
-    // if it were local, i.e. an evening workout displayed three hours early. It is now the clock
-    // the trainer actually read in São Paulo. The field stays (deprecated) so the web build in
-    // production keeps working until it switches to `completedAt`.
-    expect(entry!.time).toBe('22:00')
+    const [entry] = (await get()).json().completedToday as { completedAt: string }[]
     expect(entry!.completedAt).toBe(SUNDAY_2200_LOCAL)
-    // Which is exactly what a client formatting the instant itself arrives at.
+    // The deprecated `time` (a `HH:MM` wall clock in the business zone) is gone: a pre-formatted
+    // clock carries its zone implicitly, so the route returns the instant and the client formats
+    // it. Doing that yields the clock the trainer actually read in São Paulo — note that
+    // `completedAt.slice(11, 16)` would read "01:00", the UTC clock, three hours early.
+    expect(entry).not.toHaveProperty('time')
     expect(
       new Intl.DateTimeFormat('pt-BR', {
         timeZone: 'America/Sao_Paulo',
@@ -101,11 +100,15 @@ describe('GET /dashboard', () => {
     ).toBe('22:00')
   })
 
-  it('formats `time` past local midnight as 00:xx, not 24:xx', async () => {
+  it('just past local midnight, counts the new local day and drops the minutes before it', async () => {
     at('2026-10-12T04:00:00Z') // 01:00 local on Monday the 12th
     withCompletedLog('2026-10-12T03:10:00Z') // 00:10 local, same Monday
-    const [entry] = (await get()).json().completedToday as { time: string }[]
-    expect(entry!.time).toBe('00:10')
+    expect((await get()).json().completedToday).toHaveLength(1)
+
+    // 23:50 local on the Sunday: twenty minutes earlier, and on the same UTC day (the 12th) as
+    // both the request and the completion above — so only the business day tells them apart.
+    withCompletedLog('2026-10-12T02:50:00Z')
+    expect((await get()).json().completedToday).toEqual([])
   })
 
   /** Answers `ListTrainingPlans` with every one of trainer A's plans ending on `endDate`. */

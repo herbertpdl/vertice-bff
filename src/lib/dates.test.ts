@@ -3,7 +3,6 @@ import {
   addDays,
   BUSINESS_TIME_ZONE,
   businessDateOf,
-  businessTimeOf,
   currentWeekStartDate,
   daysBetween,
   todayInBusinessZone,
@@ -122,31 +121,6 @@ describe('the business time zone', () => {
     })
   })
 
-  describe('businessTimeOf', () => {
-    it('is the clock a person in São Paulo read, not the UTC one', () => {
-      // `completedAt.slice(11, 16)` would answer "01:00" for this instant: three hours early.
-      expect(businessTimeOf('2026-10-12T01:00:00Z')).toBe('22:00')
-      expect(businessTimeOf('2026-10-16T12:34:56Z')).toBe('09:34')
-    })
-
-    it('uses a 24-hour clock with a leading zero, and 00:xx for midnight', () => {
-      expect(businessTimeOf('2026-10-12T03:10:00Z')).toBe('00:10') // not 24:10
-      expect(businessTimeOf('2026-10-12T03:00:00Z')).toBe('00:00')
-      expect(businessTimeOf('2026-10-12T15:00:00Z')).toBe('12:00')
-      expect(businessTimeOf('2026-10-12T02:59:00Z')).toBe('23:59')
-    })
-
-    it('follows the zone across a DST boundary rather than a fixed offset', () => {
-      // -02:00 in the 2018 southern summer: 02:30Z is 00:30, where -03:00 would say 23:30.
-      expect(businessTimeOf('2018-01-15T02:30:00Z')).toBe('00:30')
-      expect(businessTimeOf('2018-06-15T02:30:00Z')).toBe('23:30') // -03:00, same clock time input
-    })
-
-    it('takes a Date too', () => {
-      expect(businessTimeOf(new Date('2026-10-12T01:00:00Z'))).toBe('22:00')
-    })
-  })
-
   describe('weekStartDateOf', () => {
     it('maps every day of one week to its Monday', () => {
       const monday = '2026-10-12'
@@ -228,7 +202,6 @@ describe('the business time zone', () => {
         expect(todayInBusinessZone(), tz).toBe('2026-10-11')
         expect(currentWeekStartDate(), tz).toBe('2026-10-05')
         expect(businessDateOf('2018-01-15T02:30:00Z'), tz).toBe('2018-01-15')
-        expect(businessTimeOf('2026-10-12T01:00:00Z'), tz).toBe('22:00')
         expect(addDays('2026-10-31', 1), tz).toBe('2026-11-01')
         expect(weekStartDateOf('2026-10-11'), tz).toBe('2026-10-05')
         expect(daysBetween('2026-10-16', '2026-10-31'), tz).toBe(15)

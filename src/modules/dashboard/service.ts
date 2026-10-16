@@ -5,7 +5,6 @@ import * as sessionService from '../workout-sessions/service.js'
 import * as feedbackService from '../feedback/service.js'
 import {
   businessDateOf,
-  businessTimeOf,
   currentWeekStartDate,
   daysBetween,
   todayInBusinessZone,
@@ -58,12 +57,8 @@ export async function getTrainerDashboard(trainerId: number) {
         return {
           student: clientsById.get(log.clientId)?.name ?? 'Unknown',
           workout: workout.name,
-          // Deprecated, and additive on purpose: `time` was `completedAt.slice(11, 16)`, the UTC
-          // wall clock shown as if it were local, which put an evening workout ~3 hours earlier.
-          // Formatting it in the business zone fixes that for the client already in production,
-          // so the BFF can deploy on its own; the field goes once the web reads `completedAt`.
-          time: businessTimeOf(log.completedAt),
-          // The instant itself: the field clients should use, formatted at the edge.
+          // The instant itself: the client formats the clock in the zone it wants. There is no
+          // pre-formatted `time` beside it any more — it carried its zone implicitly.
           completedAt: log.completedAt,
         }
       }),
