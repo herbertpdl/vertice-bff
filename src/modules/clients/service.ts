@@ -6,7 +6,7 @@ import * as sessionService from '../workout-sessions/service.js'
 import { trainerClientClient } from '../../grpc/clients.js'
 import { grpcCall } from '../../grpc/call.js'
 import { ForbiddenError, PreconditionFailedError } from '../../lib/errors.js'
-import { currentWeekStartDate } from '../../lib/dates.js'
+import { addDays, businessDateOf, currentWeekStartDate, todayInBusinessZone } from '../../lib/dates.js'
 import { maskCpf } from '../../lib/cpf.js'
 
 /**
@@ -153,9 +153,12 @@ const WEEKDAY_LABELS: WeekdayLabel[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURS
  * an earlier week shows `lastWorkoutAt: null` / an all-empty week strip here,
  * rather than a stale older date — we only surface activity we can actually
  * confirm.
+ *
+ * "Today", "this week" and each dot's day are the business zone's (`lib/dates.ts`), so the strip
+ * matches the days the client lived in São Paulo rather than UTC's.
  */
 export async function listClientsOverviewForTrainer(trainerId: number): Promise<ClientSummary[]> {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayInBusinessZone()
   const weekStartDate = currentWeekStartDate()
   const weekDates = WEEKDAY_LABELS.map((dayOfWeek, i) => ({ dayOfWeek, date: addDays(weekStartDate, i) }))
 
@@ -197,7 +200,9 @@ export async function listClientsOverviewForTrainer(trainerId: number): Promise<
     const logs = (logsByClient.get(client.id) ?? []).sort((a, b) => (a.completedAt > b.completedAt ? -1 : 1))
     const lastWorkoutAt = logs[0]?.completedAt || null
 
-    const completedDates = new Set(logs.map((log) => log.completedAt.slice(0, 10)))
+    // The business day each completion happened on, so a Friday-evening workout lights up Friday's
+    // dot and not Saturday's (`completedAt.slice(0, 10)` is the UTC day).
+    const completedDates = new Set(logs.map((log) => businessDateOf(log.completedAt)))
     const weekActivity = weekDates.map((d) => ({ ...d, completed: completedDates.has(d.date) }))
 
     return {
@@ -232,15 +237,7 @@ export async function endRelationship(trainerId: number, clientId: number): Prom
   await grpcCall(trainerClientClient, 'EndTrainerClientRelationship', { trainerId, clientId })
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000
 const ADHERENCE_LOOKBACK_WEEKS = 4
-
-function addDays(isoDate: string, days: number): string {
-  const d = new Date(`${isoDate}T00:00:00Z`)
-  return new Date(d.getTime() + days * MS_PER_DAY).toISOString().slice(0, 10)
-}
-
-// (shared by both the weekly-activity roster view above and the adherence calc below)
 
 export interface ClientOverview {
   /** CPF always masked here; the reveal is `GET /clients/:id?reveal=cpf`. */
@@ -259,8 +256,9 @@ export interface ClientOverview {
 
 /**
  * Aggregates the "4-tile" header stats for the client detail screen: the
- * client's currently active plan (the one whose date range contains today —
- * if more than one somehow overlaps, the most recently started one wins),
+ * client's currently active plan (the one whose date range contains today in
+ * the business zone — if more than one somehow overlaps, the most recently
+ * started one wins),
  * this week's completed-vs-total workout count for that plan, the most
  * recent completed-workout timestamp, and a trailing-4-week adherence %.
  *
@@ -281,7 +279,7 @@ export async function getClientOverview(trainerId: number, studentId: number): P
   ])
 
   const student = toClientDetail(user)
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayInBusinessZone()
   const activePlan = plans
     .filter((p) => p.startDate <= today && today <= p.endDate)
     .sort((a, b) => b.startDate.localeCompare(a.startDate))[0]

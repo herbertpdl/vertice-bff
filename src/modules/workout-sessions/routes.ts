@@ -35,7 +35,9 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
         roles: ['TRAINER', 'CLIENT'],
         params: idParams('workoutId'),
         query: z.object({
-          weekStartDate: isoDateSchema.optional().describe('Defaults to the current week’s Monday.'),
+          weekStartDate: isoDateSchema
+            .optional()
+            .describe('A business date, and a Monday. Defaults to the current week’s Monday in America/Sao_Paulo.'),
           clientId: idQuery('Required for a TRAINER.'),
         }),
         ok: { status: 200, description: 'The workout, its sets with last results, and the week’s log.', schema: workoutSessionSchema },
@@ -77,7 +79,9 @@ export async function workoutLogRoutes(app: FastifyInstance) {
         roles: ['TRAINER', 'CLIENT'],
         query: z.object({
           trainingPlanId: z.number().int().positive().describe('Required.'),
-          weekStartDate: isoDateSchema.optional().describe('Defaults to the current week’s Monday.'),
+          weekStartDate: isoDateSchema
+            .optional()
+            .describe('A business date, and a Monday. Defaults to the current week’s Monday in America/Sao_Paulo.'),
           clientId: idQuery('Required for a TRAINER.'),
         }),
         ok: { status: 200, description: 'The logs of that week.', schema: z.array(workoutLogSchema) },

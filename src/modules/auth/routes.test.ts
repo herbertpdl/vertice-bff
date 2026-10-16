@@ -498,10 +498,16 @@ describe('auth routes', () => {
       expect(upstreamRequest('ExportUserData')).toEqual({})
     })
 
-    it('names the file after the UTC date of the export', async () => {
-      const res = await exportData()
-      const today = new Date().toISOString().slice(0, 10)
-      expect(res.headers['content-disposition']).toBe(`attachment; filename="vertice-dados-${today}.json"`)
+    it('names the file after the business date of the export, not the UTC one', async () => {
+      // Pinned to 23:30 local on the 11th, which is already the 12th in UTC.
+      // `toFake: ['Date']` only: timers stay real, so `app.inject` is not waiting on a frozen clock.
+      vi.useFakeTimers({ now: new Date('2026-10-12T02:30:00Z'), toFake: ['Date'] })
+      try {
+        const res = await exportData()
+        expect(res.headers['content-disposition']).toBe('attachment; filename="vertice-dados-2026-10-11.json"')
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('answers an export over the upstream bounds (RESOURCE_EXHAUSTED) with 413 and a fixed message', async () => {

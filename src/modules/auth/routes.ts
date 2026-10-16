@@ -11,6 +11,7 @@ import {
 import * as authService from './service.js'
 import * as userService from '../users/service.js'
 import { emailKey, ipKey } from '../../plugins/rate-limit.js'
+import { todayInBusinessZone } from '../../lib/dates.js'
 import { routeDoc } from '../../openapi/docs.js'
 import { consentSchema, dataExportSchema, meSchema, sessionSchema } from '../../openapi/responses.js'
 
@@ -166,7 +167,8 @@ export default async function authRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const json = await userService.exportUserData()
       req.log.info({ audit: 'account.export', actorId: req.user!.id }, 'Own data exported')
-      const date = new Date().toISOString().slice(0, 10)
+      // The day the user is living, not UTC's: a 22:00 export is still today's file.
+      const date = todayInBusinessZone()
       reply
         .type('application/json; charset=utf-8')
         .header('content-disposition', `attachment; filename="vertice-dados-${date}.json"`)

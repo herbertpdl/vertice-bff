@@ -2,6 +2,7 @@ import { status } from '@grpc/grpc-js'
 import jwt from 'jsonwebtoken'
 import { env } from '../config/env.js'
 import { mapGrpcError, withCallerIdentity, type GrpcCallOptions } from '../grpc/call.js'
+import { todayInBusinessZone } from '../lib/dates.js'
 import {
   signToken,
   TOKEN_AUDIENCE,
@@ -149,7 +150,16 @@ export const emailOf = (id: number) => `user${id}@vertice.test`
 /** Each fixture user's CPF: its last two digits are the user id (mod 100), so a mask is predictable. */
 export const cpfOf = (id: number) => `529982247${String(id % 100).padStart(2, '0')}`
 const str = (n: number) => String(n)
-const today = new Date().toISOString().slice(0, 10)
+/**
+ * The business day, as the services compute it — not `toISOString().slice(0, 10)`. The two differ
+ * between 21:00 and 00:00 local, so a UTC "today" here would stop matching the services' "today"
+ * for those three hours every evening, in any test that runs on the real clock.
+ *
+ * It is resolved once, at module load, so a test that pins the clock with fake timers gets this
+ * value rather than its own "today". Those tests set the `completedAt` they need explicitly
+ * (see `dashboard/routes.test.ts`) instead of relying on the fixture.
+ */
+const today = todayInBusinessZone()
 
 function find<T extends { id: number }>(rows: T[], id: unknown, what: string): T {
   const row = rows.find((r) => r.id === Number(id))

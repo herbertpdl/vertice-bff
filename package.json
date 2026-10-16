@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:hostile-tz": "TZ=Pacific/Kiritimati vitest run",
     "sync:protos": "tsx scripts/sync-protos.ts",
     "openapi": "tsx scripts/generate-openapi.ts",
     "ops:issue-setup-tokens": "tsx scripts/issue-setup-tokens.ts"

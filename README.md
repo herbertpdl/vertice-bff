@@ -130,6 +130,7 @@ A basic health check is available at `GET /health`.
 | `npm run typecheck` | Type-check without emitting output |
 | `npm run lint` | Run ESLint |
 | `npm test` | Run the test suite with Vitest |
+| `npm run test:hostile-tz` | Run the whole suite again with the host pinned to `TZ=Pacific/Kiritimati` (UTC+14), proving nothing depends on the host's time zone (see [Dates and times](#dates-and-times)) |
 | `npm run sync:protos [-- --check]` | Copy `protos/vertice/**` from the pinned vertice-api commit (see [gRPC contract](#grpc-contract)) |
 | `npm run openapi [-- --check]` | Write `docs/openapi.json` and the route reference in `docs/api-contract.md` from the route schemas; `--check` fails when either is stale (see [OpenAPI](#openapi)) |
 | `npm run ops:issue-setup-tokens [-- --dry-run]` | Issue a password setup link to every CLIENT (see [Operations](#operations)) |
@@ -138,7 +139,7 @@ A basic health check is available at `GET /health`.
 
 `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`, on the Node
 version in `.nvmrc`: `npm ci`, `npm run sync:protos -- --check`, `npm run openapi -- --check`,
-`npm run typecheck`, `npm run lint`, `npm test`, `npm run build` and
+`npm run typecheck`, `npm run lint`, `npm test`, `npm run test:hostile-tz`, `npm run build` and
 `npm audit --omit=dev --audit-level=high`. The tests mock the upstream, so CI needs no
 running `vertice-api` or Postgres. Run the same commands locally before opening a PR.
 
@@ -186,6 +187,24 @@ shape: `{ "error": { "code": "...", "message": "...", "details": {} } }`.
 See [`docs/api-contract.md`](docs/api-contract.md) for the prose (roles and ownership, error mapping,
 rate limits, known limitations) and a generated route reference, and [`docs/openapi.json`](docs/openapi.json)
 for the machine-readable contract.
+
+### Dates and times
+
+**The business time zone is `America/Sao_Paulo`.** Every date-ish field is either an **instant**
+(ISO-8601 with `Z`, e.g. `completedAt` — an absolute point in time, which a client formats in a zone
+and never slices a clock out of) or a **business date** (`yyyy-MM-dd`, e.g. a plan's `endDate` — a
+local calendar day in that zone, with no time and no zone). "Today" and a week's Monday are derived
+in the business zone through `Intl` (`src/lib/dates.ts`), not from `toISOString().slice(0, 10)`,
+which is the UTC day and flips at 21:00 local. No field carries a fixed `-03:00`: Brazil observed
+DST until 2019, so older instants were recorded at `-02:00`.
+
+The BFF's correctness does not depend on its host's `TZ` and must not start to:
+`npm run test:hostile-tz` runs the whole suite again with the process pinned to
+`Pacific/Kiritimati` (UTC+14), and CI runs it. The rule, the per-field table and what clients must
+do are in [`docs/api-contract.md`](docs/api-contract.md) ("Dates and times"); vertice-api's
+[README](https://github.com/herbertpdl/vertice-api/blob/main/README.md) ("Dates and times") and
+[CLAUDE.md](https://github.com/herbertpdl/vertice-api/blob/main/CLAUDE.md) ("Time: instants vs.
+business dates") are the source of truth.
 
 ### OpenAPI
 
