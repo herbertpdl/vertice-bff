@@ -205,10 +205,9 @@ them differently:
 | **Business date** | `yyyy-MM-dd`, e.g. `2026-10-31` | A local calendar day in `America/Sao_Paulo`. No time, no zone. | a plan's `startDate`/`endDate`, a log's `weekStartDate`, `expiringPlans[].end`, `weekActivity[].date`, the export filename's date |
 
 Instants are relayed from vertice-api verbatim, in UTC, and no field carries a fixed `-03:00`.
-There is one deprecated exception to the two kinds: `GET /dashboard`'s `completedToday[].time`, a
-pre-formatted `HH:MM` wall clock in the business zone, kept only until vertice-web-react reads
-`completedAt` instead. Don't add another — a bare local time has an implicit zone, and that
-ambiguity is what this section exists to remove.
+There is no third kind: no response field is a pre-formatted local time. A bare local time has an
+implicit zone, and that ambiguity is what this section exists to remove — a route that wants to
+show a clock returns the instant, and the client formats it.
 
 What a client must do:
 
@@ -477,17 +476,16 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
   "stats": { "activeClients": 0, "activePlans": 0, "recentFeedbackCount": 0, "expiringPlansCount": 0 },
   "recentFeedback": [ { "...EnrichedFeedback" } ],
   "expiringPlans": [ { "name": "", "student": "", "end": "YYYY-MM-DD", "daysLeft": 0 } ],
-  "completedToday": [ { "student": "", "workout": "", "time": "22:00", "completedAt": "2026-10-11T22:00:00Z" } ]
+  "completedToday": [ { "student": "", "workout": "", "completedAt": "2026-10-11T22:00:00Z" } ]
 }
 ```
 `stats` are the tiles, `recentFeedback` the five newest entries, `expiringPlans` the plans ending within 14 days (`end` a business date, `daysLeft` whole calendar days from today, `0` on the day it ends), `completedToday` the workouts completed today across the roster.
 
 "Today" and "this week" here are the business day and week in `America/Sao_Paulo` (see "Dates and times"), so a Sunday-evening workout counts as Sunday's.
 
-- **`completedAt`** is the completion **instant** (ISO-8601, `Z`) and is the field to use: format the clock in the business zone, e.g. `Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false })`.
-- **`time`** is **deprecated**. It is the `HH:MM` wall clock of the completion in `America/Sao_Paulo` — a pre-formatted local time with the zone implicit, which is why it is going away. It used to be `completedAt.slice(11, 16)`, the UTC clock presented as a local one, which displayed an evening workout about three hours early (audit REL-API-008, plan item P2-02); it now reads correctly. It is kept so clients can migrate without a simultaneous deploy, and **will be removed in a follow-up PR once vertice-web-react reads `completedAt`**.
+`completedToday[].completedAt` is the completion **instant** (ISO-8601, `Z`): format the clock in the business zone, e.g. `Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false })`. Never `completedAt.slice(11, 16)` — that is the UTC clock, which shows an evening workout about three hours early (audit REL-API-008, plan item P2-02).
 
-Both fields describe the same completion, so this release is additive: a client reading `time` keeps working, and a client reading `completedAt` gets the instant.
+The deprecated `completedToday[].time`, a pre-formatted `HH:MM` wall clock, **was removed** (plan item P2-02); it only ever existed so clients could migrate off it without a simultaneous deploy. Both generated clients must now regenerate from the current `docs/openapi.json`: bumping `src/lib/api/.bff-ref` in vertice-web-react and vertice-mobile is **required**, not optional, because their committed `src/lib/api/schema.ts` still declares `time` as a required property of the entry.
 
 ---
 
