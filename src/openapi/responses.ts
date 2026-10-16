@@ -380,12 +380,22 @@ export const dashboardSchema = named(
       z.object({
         student: z.string(),
         workout: z.string(),
+        time: z
+          .string()
+          .describe(
+            'DEPRECATED, use `completedAt`. The `HH:MM` wall clock of the completion in ' +
+              'America/Sao_Paulo — a pre-formatted local time, with the zone implicit, which is why ' +
+              'it is going away. It is kept only so clients can migrate: it used to be the UTC ' +
+              'clock (`completedAt.slice(11, 16)`), which displayed an evening workout about 3 ' +
+              'hours early, and it now reads correctly. It will be removed once vertice-web-react ' +
+              'reads `completedAt`.',
+          )
+          .meta({ deprecated: true }),
         completedAt: instant.describe(
-          'When the workout was completed, as an ISO-8601 instant in UTC (`Z`). The client formats ' +
-            'the clock in America/Sao_Paulo (`Intl.DateTimeFormat` with `timeZone`), e.g. 20:30. It ' +
-            'used to be a pre-formatted `time: "HH:MM"` read straight off the UTC string, which ' +
-            'showed an evening workout about 3 hours early. "Today" is still the server\'s: the ' +
-            'entries are the completions whose business day in America/Sao_Paulo is today.',
+          'When the workout was completed, as an ISO-8601 instant in UTC (`Z`). Prefer this over ' +
+            'the deprecated `time`: format the clock in America/Sao_Paulo (`Intl.DateTimeFormat` ' +
+            'with `timeZone`), e.g. 20:30. "Today" is still the server\'s: the entries are the ' +
+            'completions whose business day in America/Sao_Paulo is today.',
         ),
       }),
     ),

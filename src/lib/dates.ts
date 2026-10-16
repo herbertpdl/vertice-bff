@@ -37,6 +37,19 @@ const businessDayParts = new Intl.DateTimeFormat('en-US', {
   day: '2-digit',
 })
 
+/**
+ * `hourCycle: 'h23'` so midnight is `00:xx` and not some locale's `24:xx`. Only `GET /dashboard`'s
+ * deprecated `completedToday[].time` uses this: a pre-formatted clock is a third kind of value,
+ * with an implicit zone, and the field exists only until vertice-web-react reads `completedAt`.
+ * Don't add another one — return the instant and let the client format it.
+ */
+const businessTimeParts = new Intl.DateTimeFormat('en-US', {
+  timeZone: BUSINESS_TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
 const pad = (n: number) => String(n).padStart(2, '0')
 
 /** Splits a `yyyy-MM-dd` business date into its three numbers. Assumes a validated string. */
@@ -71,6 +84,19 @@ export function businessDateOf(instant: Date | string): string {
 /** Today's business date. */
 export function todayInBusinessZone(now: Date = new Date()): string {
   return businessDateOf(now)
+}
+
+/**
+ * The `HH:MM` wall clock an instant shows in the business zone — what a person in São Paulo read
+ * off their own clock at that moment. `isoInstant.slice(11, 16)` is the UTC clock, which is the
+ * same number about three hours early.
+ *
+ * Only for `GET /dashboard`'s deprecated `completedToday[].time`; see `businessTimeParts`.
+ */
+export function businessTimeOf(instant: Date | string): string {
+  const parts = businessTimeParts.formatToParts(instant instanceof Date ? instant : new Date(instant))
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)!.value
+  return `${value('hour')}:${value('minute')}`
 }
 
 /**
