@@ -105,11 +105,11 @@
                   },
                   "startDate": {
                     "type": "string",
-                    "description": "Calendar date, YYYY-MM-DD"
+                    "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
                   },
                   "endDate": {
                     "type": "string",
-                    "description": "Calendar date, YYYY-MM-DD"
+                    "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
                   }
                 },
                 "required": [
@@ -150,7 +150,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "description": "ISO-8601 instant"
+                "description": "ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone (the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the string, and never assume a fixed -03:00 (instants from before 2019 are -02:00)."
               },
               {
                 "type": "null"
@@ -205,7 +205,7 @@
                   },
                   "endDate": {
                     "type": "string",
-                    "description": "Calendar date, YYYY-MM-DD"
+                    "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
                   }
                 },
                 "required": [
@@ -225,13 +225,13 @@
             "anyOf": [
               {
                 "type": "string",
-                "description": "ISO-8601 instant"
+                "description": "ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone (the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the string, and never assume a fixed -03:00 (instants from before 2019 are -02:00)."
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Most recent completed log in the current week only."
+            "description": "Most recent completed log in the current week only. An ISO-8601 instant in UTC (`Z`): format it in America/Sao_Paulo."
           },
           "weekActivity": {
             "type": "array",
@@ -240,7 +240,7 @@
               "properties": {
                 "date": {
                   "type": "string",
-                  "description": "Calendar date, YYYY-MM-DD"
+                  "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
                 },
                 "dayOfWeek": {
                   "$ref": "#/components/schemas/Weekday"
@@ -306,7 +306,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "description": "ISO-8601 instant"
+                "description": "ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone (the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the string, and never assume a fixed -03:00 (instants from before 2019 are -02:00)."
               },
               {
                 "type": "null"
@@ -324,7 +324,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "description": "ISO-8601 instant"
+                "description": "ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone (the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the string, and never assume a fixed -03:00 (instants from before 2019 are -02:00)."
               },
               {
                 "type": "null"
@@ -536,7 +536,7 @@
                 },
                 "end": {
                   "type": "string",
-                  "description": "Calendar date, YYYY-MM-DD"
+                  "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
                 },
                 "daysLeft": {
                   "type": "integer",
@@ -564,15 +564,15 @@
                 "workout": {
                   "type": "string"
                 },
-                "time": {
+                "completedAt": {
                   "type": "string",
-                  "description": "HH:MM (UTC)"
+                  "description": "When the workout was completed, as an ISO-8601 instant in UTC (`Z`). The client formats the clock in America/Sao_Paulo (`Intl.DateTimeFormat` with `timeZone`), e.g. 20:30. It used to be a pre-formatted `time: \"HH:MM\"` read straight off the UTC string, which showed an evening workout about 3 hours early. \"Today\" is still the server's: the entries are the completions whose business day in America/Sao_Paulo is today."
                 }
               },
               "required": [
                 "student",
                 "workout",
-                "time"
+                "completedAt"
               ],
               "additionalProperties": false
             }
@@ -670,7 +670,7 @@
           },
           "createdAt": {
             "type": "string",
-            "description": "ISO-8601 instant"
+            "description": "ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone (the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the string, and never assume a fixed -03:00 (instants from before 2019 are -02:00)."
           },
           "clientName": {
             "type": "string"
@@ -1221,7 +1221,7 @@
           },
           "expiresAt": {
             "type": "string",
-            "description": "ISO-8601 instant"
+            "description": "ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone (the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the string, and never assume a fixed -03:00 (instants from before 2019 are -02:00)."
           }
         },
         "required": [
@@ -1243,7 +1243,7 @@
         "properties": {
           "weekStartDate": {
             "type": "string",
-            "description": "Calendar date, YYYY-MM-DD"
+            "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
           },
           "weight": {
             "type": "number"
@@ -1444,7 +1444,7 @@
           },
           "recordedAt": {
             "type": "string",
-            "description": "ISO-8601 instant"
+            "description": "ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone (the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the string, and never assume a fixed -03:00 (instants from before 2019 are -02:00)."
           }
         },
         "required": [
@@ -1510,11 +1510,11 @@
           },
           "startDate": {
             "type": "string",
-            "description": "Calendar date, YYYY-MM-DD"
+            "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
           },
           "endDate": {
             "type": "string",
-            "description": "Calendar date, YYYY-MM-DD"
+            "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
           },
           "level": {
             "$ref": "#/components/schemas/PlanLevel"
@@ -1558,11 +1558,11 @@
           },
           "startDate": {
             "type": "string",
-            "description": "Calendar date, YYYY-MM-DD"
+            "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
           },
           "endDate": {
             "type": "string",
-            "description": "Calendar date, YYYY-MM-DD"
+            "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
           },
           "level": {
             "$ref": "#/components/schemas/PlanLevel"
@@ -1893,7 +1893,7 @@
           },
           "createdAt": {
             "type": "string",
-            "description": "ISO-8601 instant"
+            "description": "ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone (the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the string, and never assume a fixed -03:00 (instants from before 2019 are -02:00)."
           }
         },
         "required": [
@@ -1927,11 +1927,11 @@
           },
           "weekStartDate": {
             "type": "string",
-            "description": "Calendar date, YYYY-MM-DD"
+            "description": "Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. Never put it through a UTC conversion — `new Date(\"2026-10-31\")` is UTC midnight, which renders as 30/10/2026 in Brazil."
           },
           "startedAt": {
             "type": "string",
-            "description": "ISO-8601 instant"
+            "description": "ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone (the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the string, and never assume a fixed -03:00 (instants from before 2019 are -02:00)."
           },
           "completedAt": {
             "type": "string",
@@ -5695,7 +5695,7 @@
             "in": "query",
             "name": "weekStartDate",
             "required": false,
-            "description": "Defaults to the current week’s Monday."
+            "description": "A business date, and a Monday. Defaults to the current week’s Monday in America/Sao_Paulo."
           },
           {
             "schema": {
@@ -5810,7 +5810,7 @@
             "in": "query",
             "name": "weekStartDate",
             "required": false,
-            "description": "Defaults to the current week’s Monday."
+            "description": "A business date, and a Monday. Defaults to the current week’s Monday in America/Sao_Paulo."
           },
           {
             "schema": {
@@ -6226,7 +6226,7 @@
         "tags": [
           "Dashboard"
         ],
-        "description": "Roles: TRAINER. Stat tiles, recent feedback, plans nearing their end and workouts completed today, in one call.",
+        "description": "Roles: TRAINER. Stat tiles, recent feedback, plans nearing their end and workouts completed today, in one call. \"Today\" and \"this week\" are the business day and week in America/Sao_Paulo.",
         "security": [
           {
             "bearerAuth": []

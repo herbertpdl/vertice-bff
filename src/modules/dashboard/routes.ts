@@ -13,7 +13,9 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       schema: routeDoc({
         operationId: 'getDashboard',
         summary: 'The trainer dashboard',
-        description: 'Stat tiles, recent feedback, plans nearing their end and workouts completed today, in one call.',
+        description:
+          'Stat tiles, recent feedback, plans nearing their end and workouts completed today, in one call. ' +
+          '"Today" and "this week" are the business day and week in America/Sao_Paulo.',
         tag: 'Dashboard',
         roles: ['TRAINER'],
         ok: { status: 200, description: 'The dashboard.', schema: dashboardSchema },

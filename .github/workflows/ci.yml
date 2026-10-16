@@ -38,6 +38,11 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      - name: The suite passes under a hostile host time zone
+        # The business zone is America/Sao_Paulo and nothing may depend on the host's TZ (P2-02).
+        # Pacific/Kiritimati is UTC+14, across the date line from it, so any dependence that slipped
+        # in shows up as a wrong day. vertice-api's `hostileTimeZoneTest` does the same for the JVM.
+        run: npm run test:hostile-tz
       - run: npm run build
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high

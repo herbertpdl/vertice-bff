@@ -27,10 +27,25 @@ import type * as workoutService from '../modules/workouts/service.js'
 const named = <T extends z.ZodType>(id: string, schema: T): T => schema.meta({ id })
 
 const id = z.number().int().positive()
-/** ISO-8601 instant, e.g. `2026-08-26T16:52:17.169082Z`. */
-const instant = z.string().describe('ISO-8601 instant')
-/** `YYYY-MM-DD`. */
-const date = z.string().describe('Calendar date, YYYY-MM-DD')
+/**
+ * An instant: an absolute point in time, e.g. `2026-08-26T16:52:17.169082Z`. One of the two date
+ * kinds in this contract (`docs/api-contract.md`, "Dates and times"); `date` below is the other.
+ */
+const instant = z
+  .string()
+  .describe(
+    'ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone ' +
+      '(the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the ' +
+      'string, and never assume a fixed -03:00 (instants from before 2019 are -02:00).',
+  )
+/** A business date: a calendar day in `America/Sao_Paulo`, `YYYY-MM-DD`. */
+const date = z
+  .string()
+  .describe(
+    'Business date, `YYYY-MM-DD`: a calendar day in America/Sao_Paulo, with no time and no zone. ' +
+      'Never put it through a UTC conversion — `new Date("2026-10-31")` is UTC midnight, which ' +
+      'renders as 30/10/2026 in Brazil.',
+  )
 
 export const roleSchema = named('Role', z.enum(['ADMIN', 'TRAINER', 'CLIENT']))
 
@@ -173,7 +188,12 @@ export const clientSummarySchema = named(
       .object({ id, name: z.string(), endDate: date })
       .nullable()
       .describe('The date-active plan (startDate <= today <= endDate), null if none.'),
-    lastWorkoutAt: instant.nullable().describe('Most recent completed log in the current week only.'),
+    lastWorkoutAt: instant
+      .nullable()
+      .describe(
+        'Most recent completed log in the current week only. An ISO-8601 instant in UTC (`Z`): ' +
+          'format it in America/Sao_Paulo.',
+      ),
     weekActivity: z
       .array(z.object({ date, dayOfWeek: weekdaySchema, completed: z.boolean() }))
       .describe('Monday to Friday of the current week.'),
@@ -356,7 +376,19 @@ export const dashboardSchema = named(
     expiringPlans: z.array(
       z.object({ name: z.string(), student: z.string(), end: date, daysLeft: z.number().int() }),
     ),
-    completedToday: z.array(z.object({ student: z.string(), workout: z.string(), time: z.string().describe('HH:MM (UTC)') })),
+    completedToday: z.array(
+      z.object({
+        student: z.string(),
+        workout: z.string(),
+        completedAt: instant.describe(
+          'When the workout was completed, as an ISO-8601 instant in UTC (`Z`). The client formats ' +
+            'the clock in America/Sao_Paulo (`Intl.DateTimeFormat` with `timeZone`), e.g. 20:30. It ' +
+            'used to be a pre-formatted `time: "HH:MM"` read straight off the UTC string, which ' +
+            'showed an evening workout about 3 hours early. "Today" is still the server\'s: the ' +
+            'entries are the completions whose business day in America/Sao_Paulo is today.',
+        ),
+      }),
+    ),
   }),
 )
 
