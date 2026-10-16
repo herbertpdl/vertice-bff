@@ -190,6 +190,53 @@ Liveness.
 
 <!-- END GENERATED ROUTE REFERENCE -->
 
+## Dates and times
+
+**The business time zone is `America/Sao_Paulo`.** The rule is vertice-api's, stated in its
+[`README.md`](https://github.com/herbertpdl/vertice-api/blob/main/README.md) ("Dates and times") and
+[`CLAUDE.md`](https://github.com/herbertpdl/vertice-api/blob/main/CLAUDE.md) ("Time: instants vs.
+business dates"), which are the source of truth; this section is the same rule as the BFF's HTTP
+surface presents it. Every date-ish field here is one of exactly two kinds, and a client must treat
+them differently:
+
+| Kind | Over the wire | Meaning | Examples |
+| --- | --- | --- | --- |
+| **Instant** | ISO-8601 with the `Z` designator, e.g. `2026-10-17T01:00:00Z` | An absolute point in time. Format it for display in a time zone — never read the clock or the calendar day off the string. | `startedAt`, `completedAt`, `recordedAt`, `createdAt`, `expiresAt`, `lastWorkoutAt`, the consent timestamps, `completedToday[].completedAt` |
+| **Business date** | `yyyy-MM-dd`, e.g. `2026-10-31` | A local calendar day in `America/Sao_Paulo`. No time, no zone. | a plan's `startDate`/`endDate`, a log's `weekStartDate`, `expiringPlans[].end`, `weekActivity[].date`, the export filename's date |
+
+Instants are relayed from vertice-api verbatim, in UTC. There is no third kind: no field is a bare
+local time, and none carries a fixed `-03:00`.
+
+What a client must do:
+
+- **Format an instant in a zone, with `Intl`.** `Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })`,
+  not `completedAt.slice(11, 16)`. Slicing the string reads the UTC wall clock, so an evening
+  workout displays about three hours early (audit REL-API-008).
+- **Never put a business date through a UTC conversion.** `new Date("2026-10-31")` is UTC midnight,
+  which renders as 30/10/2026 in Brazil. Parse the three parts, or parse it as local midnight.
+- **Derive "today" and a week start in `America/Sao_Paulo`**, never from
+  `new Date().toISOString().slice(0, 10)` — that is the UTC day, so it flips at 21:00 local and put
+  Sunday-evening workouts into next week's log (audit XREPO-006).
+- **Don't assume a fixed −03:00 offset.** Brazil observed DST until 2019, so instants from before
+  then were recorded at −02:00. Use the zone, not an offset.
+
+What the BFF does, so a client doesn't have to:
+
+- Every "today" and "this week" the BFF computes is the business day and the business week —
+  `GET /dashboard` (which plans are active, which are expiring, which completions are today's),
+  `GET /clients` (the current plan, the Monday–Friday activity strip), `GET /clients/:id/overview`
+  (the active plan, this week's count, the 4-week adherence lookback), the `weekStartDate` default
+  on `GET /workouts/:workoutId/session` and `GET /workout-logs`, and the date in
+  `GET /auth/me/export`'s filename. All of it is `src/lib/dates.ts`.
+- `daysLeft` on `GET /dashboard` counts whole calendar days between two business dates, so a plan
+  ending today is `0` all day rather than turning negative during the afternoon.
+- The BFF's correctness does not depend on its host's `TZ`, and must not come to: `npm run test:hostile-tz`
+  runs the whole suite a second time under `TZ=Pacific/Kiritimati` (UTC+14), and CI runs it. The
+  contract itself is `src/lib/dates.test.ts`, the counterpart of vertice-api's
+  `BusinessTimeZoneIntegrationTest`.
+- Historic rows keep whatever key they were written with: logs keyed by a UTC-derived week are left
+  alone, and the rule applies going forward (plan item P2-02).
+
 ## Input bounds
 
 Every request body and query string is parsed with Zod before any upstream call; a violation is `400 VALIDATION_ERROR` with field `details`. The rules mirror vertice-api's (its PR #70 is the table of record; vertice-api stays authoritative), and string lengths count UTF-16 code units, like JavaScript's `.length`. "Not blank" means `trim().length > 0`, and the stored text is trimmed.
@@ -427,10 +474,12 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
   "stats": { "activeClients": 0, "activePlans": 0, "recentFeedbackCount": 0, "expiringPlansCount": 0 },
   "recentFeedback": [ { "...EnrichedFeedback" } ],
   "expiringPlans": [ { "name": "", "student": "", "end": "YYYY-MM-DD", "daysLeft": 0 } ],
-  "completedToday": [ { "student": "", "workout": "", "time": "HH:MM" } ]
+  "completedToday": [ { "student": "", "workout": "", "completedAt": "2026-10-11T22:00:00Z" } ]
 }
 ```
-`stats` are the tiles, `recentFeedback` the five newest entries, `expiringPlans` the plans ending within 14 days, `completedToday` the workouts completed today across the roster (`time` is the `HH:MM` clock of the completion instant in UTC).
+`stats` are the tiles, `recentFeedback` the five newest entries, `expiringPlans` the plans ending within 14 days (`end` a business date, `daysLeft` whole calendar days from today, `0` on the day it ends), `completedToday` the workouts completed today across the roster.
+
+"Today" and "this week" here are the business day and week in `America/Sao_Paulo` (see "Dates and times"), so a Sunday-evening workout counts as Sunday's. `completedAt` is the completion **instant** (ISO-8601, `Z`): the client formats the clock in the business zone. It replaced a `time: "HH:MM"` field that was `completedAt.slice(11, 16)`, i.e. the UTC wall clock shown as if it were local, which displayed an evening workout about three hours early (audit REL-API-008, plan item P2-02). **This is a breaking change for `GET /dashboard` consumers:** `time` is gone, `completedAt` is new, and a client that renders it must format it rather than slice it.
 
 ---
 
