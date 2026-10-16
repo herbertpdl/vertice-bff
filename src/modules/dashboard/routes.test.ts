@@ -100,13 +100,15 @@ describe('GET /dashboard', () => {
     ).toBe('22:00')
   })
 
-  it('just past local midnight, counts the new local day and drops the minutes before it', async () => {
+  it('just past local midnight, counts the new local day and not the minutes before it', async () => {
     at('2026-10-12T04:00:00Z') // 01:00 local on Monday the 12th
     withCompletedLog('2026-10-12T03:10:00Z') // 00:10 local, same Monday
     expect((await get()).json().completedToday).toHaveLength(1)
 
-    // 23:50 local on the Sunday: twenty minutes earlier, and on the same UTC day (the 12th) as
-    // both the request and the completion above — so only the business day tells them apart.
+    // The second `withCompletedLog` *replaces* the first (`mockImplementation`), so this is the
+    // same single fixture log moved back to 23:50 local on the Sunday — the two completions never
+    // coexist. Twenty minutes earlier, and on the same UTC day (the 12th) as both the request and
+    // the completion above, so only the business day tells them apart: this one is yesterday's.
     withCompletedLog('2026-10-12T02:50:00Z')
     expect((await get()).json().completedToday).toEqual([])
   })

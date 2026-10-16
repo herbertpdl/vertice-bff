@@ -483,9 +483,9 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
 
 "Today" and "this week" here are the business day and week in `America/Sao_Paulo` (see "Dates and times"), so a Sunday-evening workout counts as Sunday's.
 
-- **`completedAt`** is the completion **instant** (ISO-8601, `Z`): format the clock in the business zone, e.g. `Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false })`. Never `completedAt.slice(11, 16)` — that is the UTC clock, which shows an evening workout about three hours early (audit REL-API-008, plan item P2-02).
+`completedToday[].completedAt` is the completion **instant** (ISO-8601, `Z`): format the clock in the business zone, e.g. `Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false })`. Never `completedAt.slice(11, 16)` — that is the UTC clock, which shows an evening workout about three hours early (audit REL-API-008, plan item P2-02).
 
-The deprecated `completedToday[].time`, a pre-formatted `HH:MM` wall clock, **was removed** (plan item P2-02): it only ever existed so the clients could migrate off it without a simultaneous deploy, and they have.
+The deprecated `completedToday[].time`, a pre-formatted `HH:MM` wall clock, **was removed** (plan item P2-02); it only ever existed so clients could migrate off it without a simultaneous deploy. Both generated clients must now regenerate from the current `docs/openapi.json`: bumping `src/lib/api/.bff-ref` in vertice-web-react and vertice-mobile is **required**, not optional, because their committed `src/lib/api/schema.ts` still declares `time` as a required property of the entry.
 
 ---
 
