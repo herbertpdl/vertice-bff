@@ -108,18 +108,54 @@ describe('GET /dashboard', () => {
     expect(entry!.time).toBe('00:10')
   })
 
-  it('counts a plan ending today as 0 days left, not as expired, late in the local day', async () => {
-    at('2026-10-12T02:30:00Z')
+  /** Answers `ListTrainingPlans` with every one of trainer A's plans ending on `endDate`. */
+  function withPlansEndingOn(endDate: string) {
     grpcCallMock.mockImplementation(async (client, method, request, options) => {
       const res = await fakeGrpcCall(client, method, request, options)
       if (method !== 'ListTrainingPlans') return res as never
       const { trainingPlans } = res as unknown as { trainingPlans: { id: string }[] }
-      // Every plan ends on the local day the clock is pinned to.
-      return { trainingPlans: trainingPlans.map((p) => ({ ...p, endDate: '2026-10-11' })) } as never
+      return { trainingPlans: trainingPlans.map((p) => ({ ...p, endDate })) } as never
     })
+  }
+
+  it('counts a plan ending today as 0 days left, not as expired, late in the local day', async () => {
+    at('2026-10-12T02:30:00Z') // 23:30 local on the 11th
+    withPlansEndingOn('2026-10-11')
     const dashboard = (await get()).json()
     // Trainer A has three plans in the fixtures, all of them now ending on the local today.
     expect(dashboard.expiringPlans.map((p: { daysLeft: number }) => p.daysLeft)).toEqual([0, 0, 0])
     expect(dashboard.stats.activePlans).toBe(3) // startDate <= today <= endDate, in the local day
+  })
+
+  // `daysLeft` went from milliseconds-since-now to whole business days, so the 14-day window's
+  // edges are worth pinning: inclusive at both ends, and measured in local days rather than
+  // drifting with the time of day.
+  it.each([
+    ['2026-10-25', 14, 3], // exactly 14 days out: the last day that counts as expiring
+    ['2026-10-26', 15, 0], // one day past the window
+    ['2026-10-12', 1, 3], // tomorrow
+    ['2026-10-10', -1, 0], // ended yesterday: expired, not expiring
+  ])('a plan ending %s is %i days out and %i plans are listed as expiring', async (endDate, daysLeft, listed) => {
+    at('2026-10-12T02:30:00Z') // 23:30 local on Sunday the 11th
+    withPlansEndingOn(endDate)
+    const dashboard = (await get()).json()
+    expect(dashboard.expiringPlans).toHaveLength(listed)
+    expect(dashboard.stats.expiringPlansCount).toBe(listed)
+    if (listed > 0) {
+      expect(dashboard.expiringPlans.every((p: { daysLeft: number }) => p.daysLeft === daysLeft)).toBe(true)
+      expect(dashboard.expiringPlans.every((p: { end: string }) => p.end === endDate)).toBe(true)
+    }
+  })
+
+  it('measures the 14-day window in local days, so it does not shift with the time of day', async () => {
+    withPlansEndingOn('2026-10-25') // 14 local days after Sunday the 11th
+    for (const instant of ['2026-10-11T12:00:00Z', '2026-10-11T23:30:00Z', '2026-10-12T02:59:00Z']) {
+      at(instant) // midday, 20:30 and 23:59 local, all still the 11th
+      const dashboard = (await get()).json()
+      expect(dashboard.expiringPlans.map((p: { daysLeft: number }) => p.daysLeft), instant).toEqual([14, 14, 14])
+    }
+    // Past local midnight the same plan is one day closer, and still inside the window.
+    at('2026-10-12T03:30:00Z')
+    expect((await get()).json().expiringPlans.map((p: { daysLeft: number }) => p.daysLeft)).toEqual([13, 13, 13])
   })
 })

@@ -22,9 +22,10 @@ Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web-react`
 - `npm run lint` — ESLint (flat config, `eslint.config.js`, typescript-eslint recommended rules)
 - `npm run ops:issue-setup-tokens [-- --dry-run]` — one-off: issue a password setup link to every CLIENT, CSV on stdout (`scripts/issue-setup-tokens.ts` → `src/ops/`; see the README's "Operations")
 - `npm test` — Vitest (`vitest run`); unit tests live next to the code as `*.test.ts` (e.g. `src/modules/workouts/schemas.test.ts`, `src/grpc/call.test.ts`) and don't spin up gRPC
+- `npm run test:hostile-tz` — the same suite with the process pinned to `TZ=Pacific/Kiritimati` (UTC+14), proving nothing depends on the host's time zone (see **Dates and times** below). CI runs it as its own step, after `npm test`. It is load-bearing, not ceremony: the `Intl.DateTimeFormat`s in `lib/dates.ts` are built once at module load, so a missing `timeZone` option resolves to the host's zone and still passes the ordinary run — only this pass catches it.
 - `docker build .` / the provided `Dockerfile` — containerized dev, runs `npm run dev:docker`
 
-Node 22 (`.nvmrc`, `engines.node` `>=22 <23`, `node:22-alpine` in the Dockerfile). CI (`.github/workflows/ci.yml`, job `build-and-test`) runs `npm ci`, `sync:protos --check`, `openapi --check`, typecheck, lint, test, build and `npm audit --omit=dev --audit-level=high` on every PR and push to `main`; tests must stay runnable without vertice-api, Postgres or a `.env`.
+Node 22 (`.nvmrc`, `engines.node` `>=22 <23`, `node:22-alpine` in the Dockerfile). CI (`.github/workflows/ci.yml`, job `build-and-test`) runs `npm ci`, `sync:protos --check`, `openapi --check`, typecheck, lint, test, `test:hostile-tz`, build and `npm audit --omit=dev --audit-level=high` on every PR and push to `main`; tests must stay runnable without vertice-api, Postgres or a `.env`.
 
 Single-file / single-test runs use standard Vitest filtering: `npx vitest run src/grpc/call.test.ts` or `npx vitest run -t "name"`.
 

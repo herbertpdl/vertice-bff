@@ -74,6 +74,11 @@ const toBusinessDate = (civil: Date): string =>
  * The business date an instant falls on — the calendar day a person in São Paulo was living when it
  * happened. This is the only correct way to get a day out of an instant: `isoInstant.slice(0, 10)`
  * is the UTC day, which is tomorrow's from 21:00 local onwards.
+ *
+ * A string argument must carry `Z` or an explicit offset. A naive `2026-10-11T22:00:00` parses as
+ * *host*-local, which is the one way the host's zone could still reach a result here — and the
+ * hostile-TZ pass cannot catch it, because such a string never occurs: every instant comes from
+ * vertice-api's `Instant.toString()`, which always ends in `Z`. Keep it that way.
  */
 export function businessDateOf(instant: Date | string): string {
   const parts = businessDayParts.formatToParts(instant instanceof Date ? instant : new Date(instant))
@@ -90,6 +95,8 @@ export function todayInBusinessZone(now: Date = new Date()): string {
  * The `HH:MM` wall clock an instant shows in the business zone — what a person in São Paulo read
  * off their own clock at that moment. `isoInstant.slice(11, 16)` is the UTC clock, which is the
  * same number about three hours early.
+ *
+ * A string argument must carry `Z` or an explicit offset, as `businessDateOf` explains.
  *
  * Only for `GET /dashboard`'s deprecated `completedToday[].time`; see `businessTimeParts`.
  */

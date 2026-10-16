@@ -152,8 +152,12 @@ export const cpfOf = (id: number) => `529982247${String(id % 100).padStart(2, '0
 const str = (n: number) => String(n)
 /**
  * The business day, as the services compute it — not `toISOString().slice(0, 10)`. The two differ
- * between 21:00 and 00:00 local, so a UTC "today" here would silently stop matching the "today"
- * under test for those three hours every evening.
+ * between 21:00 and 00:00 local, so a UTC "today" here would stop matching the services' "today"
+ * for those three hours every evening, in any test that runs on the real clock.
+ *
+ * It is resolved once, at module load, so a test that pins the clock with fake timers gets this
+ * value rather than its own "today". Those tests set the `completedAt` they need explicitly
+ * (see `dashboard/routes.test.ts`) instead of relying on the fixture.
  */
 const today = todayInBusinessZone()
 
