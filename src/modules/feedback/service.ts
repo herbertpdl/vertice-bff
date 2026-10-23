@@ -54,11 +54,12 @@ export async function submitWorkoutFeedback(
   workoutLogId: number,
   rating: FeedbackRating,
   text: string,
+  clientKey = '',
 ): Promise<WorkoutFeedback> {
-  const res = await grpcCall<{ workoutLogId: number; rating: string; text: string }, WorkoutFeedbackResponse>(
+  const res = await grpcCall<{ workoutLogId: number; rating: string; text: string; clientKey: string }, WorkoutFeedbackResponse>(
     workoutFeedbackClient,
     'SubmitWorkoutFeedback',
-    { workoutLogId, rating: `FEEDBACK_RATING_${rating}`, text },
+    { workoutLogId, rating: `FEEDBACK_RATING_${rating}`, text, clientKey },
   )
   return toFeedback(res)
 }

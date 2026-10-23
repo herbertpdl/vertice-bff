@@ -122,8 +122,15 @@ describe('client workout lifecycle routes', () => {
         workoutLogId: ids.workoutLogA,
         rating: 'FEEDBACK_RATING_HARD',
         text: '',
+        clientKey: '',
       })
       expect(res.json()).toMatchObject({ rating: 'HARD', text: '', replaced: false })
+    })
+
+    it('passes the idempotency key upstream', async () => {
+      const res = await send('POST', `/api/workout-logs/${ids.workoutLogA}/feedback`, 'clientA', { rating: 'EASY', clientKey: 'k-1' })
+      expect(res.statusCode, res.body).toBe(201)
+      expect(upstreamRequest('SubmitWorkoutFeedback')).toMatchObject({ clientKey: 'k-1' })
     })
   })
 
