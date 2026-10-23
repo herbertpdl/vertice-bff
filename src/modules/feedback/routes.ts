@@ -33,7 +33,7 @@ export async function submitFeedbackRoutes(app: FastifyInstance) {
       const body = submitFeedbackSchema.parse(req.body)
       await assertOwnsWorkoutLog(req.user!, workoutLogId)
       reply.status(201)
-      return feedbackService.submitWorkoutFeedback(workoutLogId, body.rating, body.text)
+      return feedbackService.submitWorkoutFeedback(workoutLogId, body.rating, body.text, body.clientKey)
     },
   )
 }

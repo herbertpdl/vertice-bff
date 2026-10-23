@@ -44,6 +44,10 @@ message SubmitWorkoutFeedbackRequest {
   string text = 2;
   // Required: FEEDBACK_RATING_UNSPECIFIED is INVALID_ARGUMENT.
   FeedbackRating rating = 3;
+  // Optional idempotency key the client generates once per feedback ([A-Za-z0-9_-], 1-64
+  // characters): a retry with the same key for the same session returns the feedback already
+  // stored instead of adding another (a client resends when an answer is lost). Empty = no key.
+  string client_key = 4;
 }
 
 message ListWorkoutFeedbackRequest {
