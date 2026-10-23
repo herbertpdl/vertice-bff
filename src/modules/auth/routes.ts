@@ -13,7 +13,7 @@ import * as userService from '../users/service.js'
 import { emailKey, ipKey } from '../../plugins/rate-limit.js'
 import { todayInBusinessZone } from '../../lib/dates.js'
 import { routeDoc } from '../../openapi/docs.js'
-import { consentSchema, dataExportSchema, meSchema, sessionSchema } from '../../openapi/responses.js'
+import { clientTrainerSchema, consentSchema, dataExportSchema, meSchema, sessionSchema } from '../../openapi/responses.js'
 
 export default async function authRoutes(app: FastifyInstance) {
   // Strict buckets (see plugins/rate-limit.ts). Login and setup count failed attempts only;
@@ -143,6 +143,27 @@ export default async function authRoutes(app: FastifyInstance) {
       req.log.info({ audit: 'account.delete', actorId: req.user!.id }, 'Own account deleted')
       reply.status(204)
     },
+  )
+
+  // A client's trainer card (client workout experience R74-R79): the name, and only the contacts the
+  // trainer chose to show and filled in. 404 when the client has no active trainer.
+  app.get(
+    '/me/trainer',
+    {
+      preHandler: [app.authenticate, app.requireRole('CLIENT')],
+      schema: routeDoc({
+        operationId: 'getMyTrainer',
+        summary: 'The client’s trainer and the contacts they share',
+        description:
+          'The caller’s active trainer: the name always; `email`, `whatsapp`, `instagram` only when the trainer shows ' +
+          'them and filled them in (`""` otherwise). 404 when the client has no active trainer.',
+        tag: 'Auth',
+        roles: ['CLIENT'],
+        ok: { status: 200, description: 'The trainer card.', schema: clientTrainerSchema },
+        errors: [404],
+      }),
+    },
+    async (req) => authService.getMyTrainer(req.user!.id),
   )
 
   // LGPD art. 18 II and V: vertice-api's JSON document passed through as a file download. Still

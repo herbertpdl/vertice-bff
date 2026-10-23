@@ -1,4 +1,6 @@
 import * as userService from '../users/service.js'
+import { trainerClientClient } from '../../grpc/clients.js'
+import { grpcCall } from '../../grpc/call.js'
 import { env } from '../../config/env.js'
 import { signToken, type Role } from '../../lib/jwt.js'
 import { HttpError, PreconditionFailedError, UnauthorizedError, ValidationError } from '../../lib/errors.js'
@@ -93,6 +95,11 @@ export interface UpdateMeInput {
   email?: string
   cpf?: string | null
   cref?: string | null
+  whatsapp?: string | null
+  instagram?: string | null
+  showEmail?: boolean
+  showWhatsapp?: boolean
+  showInstagram?: boolean
 }
 
 /**
@@ -105,22 +112,34 @@ export interface UpdateMeInput {
 export async function updateMe(userId: number, input: UpdateMeInput): Promise<userService.Me> {
   const stored = await userService.getSelf(userId)
   if (stored.role !== 'TRAINER' && input.cref) throw new ValidationError('cref: only a trainer has a CREF')
+  const setsContacts =
+    !!input.whatsapp || !!input.instagram || !!input.showEmail || !!input.showWhatsapp || !!input.showInstagram
+  if (stored.role !== 'TRAINER' && setsContacts) {
+    throw new ValidationError('contacts: only a trainer shares contacts with clients')
+  }
   const cpf = input.cpf === undefined ? stored.cpf : (input.cpf ?? '')
   if (stored.role === 'TRAINER' && !cpf.trim()) throw new ValidationError('cpf: required for a trainer')
-  const updated = await userService.updateUser(userId, {
+  // Contacts are proto3 `optional`: an omitted key stays absent, so vertice-api keeps the stored value.
+  const updated = await userService.updateUserRaw(userId, {
     name: input.name ?? stored.name,
     email: input.email ?? stored.email,
     cpf,
     cref: input.cref === undefined ? stored.cref : (input.cref ?? ''),
     role: stored.role,
+    ...(input.whatsapp === undefined ? {} : { whatsapp: input.whatsapp ?? '' }),
+    ...(input.instagram === undefined ? {} : { instagram: input.instagram ?? '' }),
+    ...(input.showEmail === undefined ? {} : { showEmail: input.showEmail }),
+    ...(input.showWhatsapp === undefined ? {} : { showWhatsapp: input.showWhatsapp }),
+    ...(input.showInstagram === undefined ? {} : { showInstagram: input.showInstagram }),
   })
   return {
-    id: updated.id,
+    id: Number(updated.id),
     name: updated.name,
     email: updated.email,
     cpf: maskCpf(updated.cpf),
     cref: updated.cref,
     role: updated.role,
+    ...userService.toContacts(updated),
     consent: userService.toConsent(stored.consent),
   }
 }
@@ -156,4 +175,20 @@ export async function setupPassword(token: string, newPassword: string): Promise
     }
     throw err
   }
+}
+
+export interface ClientTrainer {
+  name: string
+  email: string
+  whatsapp: string
+  instagram: string
+}
+
+/** The caller's (a CLIENT's) active trainer with the contacts they show (`GetClientTrainer`). */
+export async function getMyTrainer(clientId: number): Promise<ClientTrainer> {
+  const res = await grpcCall<
+    { clientId: number },
+    { trainerId: string; name: string; email: string; whatsapp: string; instagram: string }
+  >(trainerClientClient, 'GetClientTrainer', { clientId })
+  return { name: res.name, email: res.email, whatsapp: res.whatsapp, instagram: res.instagram }
 }

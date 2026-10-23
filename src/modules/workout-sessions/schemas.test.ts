@@ -9,8 +9,11 @@ describe('recordSetLogSchema', () => {
     expect(recordSetLogSchema.parse({ ...log, reps: 0 }).reps).toBe(0)
   })
 
+  it('accepts an empty weight: a set ticked without one', () => {
+    expect(recordSetLogSchema.parse({ exerciseSetId: 1, weight: '', reps: 10 }).weight).toBe('')
+  })
+
   it.each([
-    ['an empty weight', { weight: '' }],
     ['a 5-digit weight', { weight: '10000' }],
     ['3 decimals', { weight: '1.234' }],
     ['a negative weight', { weight: '-5' }],

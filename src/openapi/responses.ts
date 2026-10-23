@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { FEEDBACK_RATINGS } from '../modules/feedback/schemas.js'
 import { dayOfWeekSchema } from '../modules/workouts/schemas.js'
 import { setStrategySchema } from '../modules/exercise-sets/schemas.js'
 import { planLevelSchema } from '../modules/training-plans/schemas.js'
@@ -117,7 +118,22 @@ export const meSchema = named(
     cpf: z.string().describe('Masked (`***.***.***-25`), `""` when none. Never revealed here.'),
     cref: z.string().describe('`""` for anyone but a trainer who set one.'),
     role: roleSchema,
+    whatsapp: z.string().describe("A trainer's WhatsApp, digits only; `\"\"` when none."),
+    instagram: z.string().describe("A trainer's Instagram handle without `@`; `\"\"` when none."),
+    showEmail: z.boolean().describe('Whether the trainer shows their e-mail to their clients.'),
+    showWhatsapp: z.boolean(),
+    showInstagram: z.boolean(),
     consent: consentSchema,
+  }),
+)
+
+export const clientTrainerSchema = named(
+  'ClientTrainer',
+  z.object({
+    name: z.string(),
+    email: z.string().describe('`""` unless the trainer shows it.'),
+    whatsapp: z.string().describe('Digits with area code; `""` unless the trainer shows it.'),
+    instagram: z.string().describe('Handle without `@`; `""` unless the trainer shows it.'),
   }),
 )
 
@@ -299,6 +315,23 @@ export const recentWorkoutSummarySchema = named(
 
 // ---- sessions, logs, feedback -------------------------------------------------------------------
 
+export const workoutLogStatusSchema = named(
+  'WorkoutLogStatus',
+  z
+    .enum(['IN_PROGRESS', 'COMPLETED', 'SUPERSEDED'])
+    .describe('`SUPERSEDED`: replaced by a redo finished in the same week (never in the week list).'),
+)
+
+export const completionKindSchema = named(
+  'CompletionKind',
+  z.enum(['CLIENT', 'AUTO', '']).describe('Who finished it: the client, or the weekly rollover (`AUTO`); `""` in progress.'),
+)
+
+export const feedbackRatingSchema = named(
+  'FeedbackRating',
+  z.enum(FEEDBACK_RATINGS).describe('How hard the workout felt, hardest first.'),
+)
+
 export const workoutLogSchema = named(
   'WorkoutLog',
   z.object({
@@ -308,6 +341,8 @@ export const workoutLogSchema = named(
     weekStartDate: date,
     startedAt: instant,
     completedAt: z.string().describe('ISO-8601 instant, `""` until the workout is completed.'),
+    status: workoutLogStatusSchema,
+    completionKind: completionKindSchema,
   }),
 )
 
@@ -317,7 +352,7 @@ export const setLogSchema = named(
     id,
     workoutLogId: id,
     exerciseSetId: id,
-    weight: z.string().describe('Decimal string.'),
+    weight: z.string().describe('Decimal string; `""` when the set was ticked without a weight.'),
     reps: z.number().int(),
     recordedAt: instant,
   }),
@@ -332,6 +367,9 @@ export const workoutSessionSchema = named(
         sets: z.array(
           exerciseSetSchema.extend({
             lastPerformed: setLogSchema.nullable().describe('What the client recorded last time, null if never.'),
+            current: setLogSchema
+              .nullable()
+              .describe("What this session recorded for the set (it's ticked), null if not: resumes a session on another device."),
           }),
         ),
       }),
@@ -353,7 +391,9 @@ export const workoutFeedbackSchema = named(
     workoutId: id,
     trainingPlanId: id,
     clientId: id,
-    text: z.string(),
+    text: z.string().describe('`""` when the client only rated the workout.'),
+    rating: feedbackRatingSchema.nullable().describe('Null on feedback given before ratings existed.'),
+    replaced: z.boolean().describe("The session was replaced by a redo finished in the same week."),
     createdAt: instant,
   }),
 )

@@ -3,6 +3,7 @@ import { grpcCall } from '../../grpc/call.js'
 import * as userService from '../users/service.js'
 import * as workoutService from '../workouts/service.js'
 import * as planService from '../training-plans/service.js'
+import { FEEDBACK_RATINGS, type FeedbackRating } from './schemas.js'
 
 export interface WorkoutFeedback {
   id: number
@@ -11,6 +12,8 @@ export interface WorkoutFeedback {
   trainingPlanId: number
   clientId: number
   text: string
+  rating: FeedbackRating | null
+  replaced: boolean
   createdAt: string
 }
 
@@ -21,7 +24,16 @@ interface WorkoutFeedbackResponse {
   trainingPlanId: string
   clientId: string
   text: string
+  /** `FEEDBACK_RATING_*` (proto enum as a string); `UNSPECIFIED` on old feedback. */
+  rating?: string
+  replaced?: boolean
   createdAt: string
+}
+
+/** The rating without its proto prefix; null for feedback given before ratings existed. */
+function toRating(value: string | undefined): FeedbackRating | null {
+  const rating = value?.replace(/^FEEDBACK_RATING_/, '')
+  return (FEEDBACK_RATINGS as readonly string[]).includes(rating ?? '') ? (rating as FeedbackRating) : null
 }
 
 function toFeedback(r: WorkoutFeedbackResponse): WorkoutFeedback {
@@ -32,15 +44,21 @@ function toFeedback(r: WorkoutFeedbackResponse): WorkoutFeedback {
     trainingPlanId: Number(r.trainingPlanId),
     clientId: Number(r.clientId),
     text: r.text,
+    rating: toRating(r.rating),
+    replaced: r.replaced ?? false,
     createdAt: r.createdAt,
   }
 }
 
-export async function submitWorkoutFeedback(workoutLogId: number, text: string): Promise<WorkoutFeedback> {
-  const res = await grpcCall<{ workoutLogId: number; text: string }, WorkoutFeedbackResponse>(
+export async function submitWorkoutFeedback(
+  workoutLogId: number,
+  rating: FeedbackRating,
+  text: string,
+): Promise<WorkoutFeedback> {
+  const res = await grpcCall<{ workoutLogId: number; rating: string; text: string }, WorkoutFeedbackResponse>(
     workoutFeedbackClient,
     'SubmitWorkoutFeedback',
-    { workoutLogId, text },
+    { workoutLogId, rating: `FEEDBACK_RATING_${rating}`, text },
   )
   return toFeedback(res)
 }

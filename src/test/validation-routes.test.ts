@@ -47,17 +47,22 @@ describe('input bounds at the routes', () => {
     const url = `/api/workout-logs/${ids.workoutLogA}/feedback`
 
     it('a 10 KB text is a 400 at the BFF, with no upstream call', async () => {
-      await expectRefused('POST', url, 'clientA', { text: 'x'.repeat(10 * 1024) }, 'text')
+      await expectRefused('POST', url, 'clientA', { rating: 'HARD', text: 'x'.repeat(10 * 1024) }, 'text')
     })
 
     it('a text of 2001 characters is a 400, one of 2000 gets past validation', async () => {
-      await expectRefused('POST', url, 'clientA', { text: 'x'.repeat(2001) }, 'text')
-      const res = await app.inject({ method: 'POST', url, headers: bearer('clientA'), payload: { text: 'x'.repeat(2000) } })
+      await expectRefused('POST', url, 'clientA', { rating: 'HARD', text: 'x'.repeat(2001) }, 'text')
+      const res = await app.inject({
+        method: 'POST',
+        url,
+        headers: bearer('clientA'),
+        payload: { rating: 'HARD', text: 'x'.repeat(2000) },
+      })
       expect(res.statusCode, res.body).toBe(201)
     })
 
-    it('a whitespace-only text is a 400', async () => {
-      await expectRefused('POST', url, 'clientA', { text: '   ' }, 'text')
+    it('a missing rating is a 400', async () => {
+      await expectRefused('POST', url, 'clientA', { text: 'Pesado' }, 'rating')
     })
   })
 

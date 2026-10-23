@@ -8,7 +8,8 @@ option java_multiple_files = true;
 service WorkoutFeedbackService {
   // Authorization (P1-01, matrix in vertice-api CLAUDE.md): needs a user token.
 
-  // The log's client or ADMIN; anyone else, or a missing log, is PERMISSION_DENIED.
+  // The log's client or ADMIN; anyone else, or a missing log, is PERMISSION_DENIED. Only on a
+  // completed session (FAILED_PRECONDITION otherwise).
   rpc SubmitWorkoutFeedback(SubmitWorkoutFeedbackRequest) returns (WorkoutFeedbackResponse);
   // TRAINER with their own trainer_id (anything else is PERMISSION_DENIED), or ADMIN.
   rpc ListWorkoutFeedback(ListWorkoutFeedbackRequest) returns (ListWorkoutFeedbackResponse);
@@ -22,11 +23,27 @@ message WorkoutFeedbackResponse {
   int64 client_id = 5;
   string text = 6;
   string created_at = 7;
+  // Unspecified on feedback given before ratings existed.
+  FeedbackRating rating = 8;
+  // The session was replaced by a redo finished in the same week.
+  bool replaced = 9;
+}
+
+enum FeedbackRating {
+  FEEDBACK_RATING_UNSPECIFIED = 0;
+  FEEDBACK_RATING_VERY_HARD = 1;
+  FEEDBACK_RATING_HARD = 2;
+  FEEDBACK_RATING_JUST_RIGHT = 3;
+  FEEDBACK_RATING_EASY = 4;
+  FEEDBACK_RATING_VERY_EASY = 5;
 }
 
 message SubmitWorkoutFeedbackRequest {
   int64 workout_log_id = 1;
+  // Optional, at most 2000 characters.
   string text = 2;
+  // Required: FEEDBACK_RATING_UNSPECIFIED is INVALID_ARGUMENT.
+  FeedbackRating rating = 3;
 }
 
 message ListWorkoutFeedbackRequest {

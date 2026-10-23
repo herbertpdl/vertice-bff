@@ -115,6 +115,24 @@ export const updateMeSchema = z.object({
   email: emailSchema.optional(),
   cpf: cpfInputSchema.nullable().optional(),
   cref: crefSchema.nullable().optional(),
+  // A trainer's contacts for their clients (client workout experience R77, R78); `null` removes.
+  whatsapp: z
+    .string()
+    .trim()
+    .transform((value) => value.replace(/\D/g, ''))
+    .pipe(z.string().regex(/^(\d{10,11})?$/, 'expected a phone number with area code (10 or 11 digits)'))
+    .nullable()
+    .optional(),
+  instagram: z
+    .string()
+    .trim()
+    .transform((value) => value.replace(/^@/, ''))
+    .pipe(z.string().regex(/^([A-Za-z0-9._]{1,30})?$/, 'expected an Instagram handle'))
+    .nullable()
+    .optional(),
+  showEmail: z.boolean().optional(),
+  showWhatsapp: z.boolean().optional(),
+  showInstagram: z.boolean().optional(),
 }).meta({ id: 'UpdateMeRequest' })
 
 /**

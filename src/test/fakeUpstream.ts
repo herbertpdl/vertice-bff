@@ -247,6 +247,8 @@ const workoutLogRes = (l: (typeof workoutLogs)[number]) => ({
   weekStartDate: today,
   startedAt: `${today}T08:00:00Z`,
   completedAt: '',
+  status: 'WORKOUT_LOG_STATUS_IN_PROGRESS',
+  completionKind: 'COMPLETION_KIND_UNSPECIFIED',
 })
 const exercises: { id: number; ownerId: number | null; inUse?: true }[] = [
   { id: ids.exercise, ownerId: null },
@@ -570,7 +572,22 @@ const handlers: Record<string, (req: Req) => unknown> = {
     reps: r.reps,
     recordedAt: `${today}T08:05:00Z`,
   }),
-  CompleteWorkoutLog: (r) => ({ ...workoutLogRes(find(workoutLogs, r.id, 'WorkoutLog')), completedAt: `${today}T09:00:00Z` }),
+  CompleteWorkoutLog: (r) => ({
+    ...workoutLogRes(find(workoutLogs, r.id, 'WorkoutLog')),
+    completedAt: `${today}T09:00:00Z`,
+    status: 'WORKOUT_LOG_STATUS_COMPLETED',
+    completionKind: 'COMPLETION_KIND_CLIENT',
+  }),
+  RestartWorkoutLog: (r) => ({
+    ...workoutLogRes(
+      workoutLogs.find((l) => l.workoutId === Number(r.workoutId) && l.clientId === Number(r.clientId)) ??
+        workoutLogs[0]!,
+    ),
+    id: '901',
+  }),
+  DiscardWorkoutLog: () => ({}),
+  DeleteSetLog: () => ({}),
+  ListSetLogs: () => ({ setLogs: [] }),
   ListWorkoutLogs: (r) => ({
     workoutLogs: workoutLogs
       .filter((l) => l.clientId === Number(r.clientId))
@@ -591,6 +608,8 @@ const handlers: Record<string, (req: Req) => unknown> = {
       trainingPlanId: str(workout.trainingPlanId),
       clientId: str(log.clientId),
       text: r.text,
+      rating: r.rating,
+      replaced: false,
       createdAt: `${today}T09:00:00Z`,
     }
   },
@@ -617,6 +636,12 @@ const handlers: Record<string, (req: Req) => unknown> = {
     }
     return {}
   },
+  GetClientTrainer: (r) => {
+    const link = trainerClients.find(([, c]) => c === Number(r.clientId))
+    if (!link) throw Object.assign(new Error('not found'), { code: 5 })
+    const trainer = find(users, link[0], 'User')
+    return { trainerId: str(trainer.id), name: trainer.name, email: '', whatsapp: '11987654321', instagram: '' }
+  },
   IsTrainersClient: (r) => ({
     isClient: trainerClients.some(([t, c]) => t === Number(r.trainerId) && c === Number(r.clientId)),
   }),
@@ -624,7 +649,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
 
 /** RPCs that change upstream state. A refused request must never reach one. */
 export const isWriteRpc = (method: string) =>
-  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End)/.test(method)
+  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard)/.test(method)
 
 /**
  * Drop-in implementation for the mocked `grpcCall`; unknown methods, and calls without a valid

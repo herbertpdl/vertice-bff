@@ -268,6 +268,11 @@ describe('auth routes', () => {
         cpf: '***.***.***-10',
         cref: `CREF-${ids.trainerA}`,
         role: 'TRAINER',
+        whatsapp: '',
+        instagram: '',
+        showEmail: false,
+        showWhatsapp: false,
+        showInstagram: false,
         consent: {
           termsVersion: '2026-01',
           termsAcceptedAt: '2026-01-15T12:00:00Z',

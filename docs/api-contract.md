@@ -61,6 +61,7 @@ Login, registration, passwords and the caller’s own account (`/auth/me`, LGPD 
 | GET | `/api/auth/me` | any role | `getMe` | The caller’s own account |
 | PATCH | `/api/auth/me` | any role | `updateMe` | Correct the caller’s own profile |
 | DELETE | `/api/auth/me` | any role | `deleteMe` | Delete the caller’s own account |
+| GET | `/api/auth/me/trainer` | CLIENT | `getMyTrainer` | The client’s trainer and the contacts they share |
 | GET | `/api/auth/me/export` | any role | `exportMyData` | Download the caller’s data |
 | POST | `/api/auth/me/consent` | any role | `recordConsent` | Record the caller’s consent to a legal text |
 | POST | `/api/auth/password` | any role | `changePassword` | Change the caller’s password |
@@ -159,8 +160,11 @@ The client’s “do a workout” flow: the session aggregate, set logs and work
 | Method | Path | Access | `operationId` | Summary |
 |---|---|---|---|---|
 | GET | `/api/workouts/{workoutId}/session` | TRAINER, CLIENT | `getWorkoutSession` | The “do a workout” screen in one call |
+| POST | `/api/workouts/{workoutId}/session/restart` | CLIENT | `restartWorkoutSession` | Redo the week’s finished workout |
 | GET | `/api/workout-logs` | TRAINER, CLIENT | `listWorkoutLogs` | Which workouts were done in a week |
 | POST | `/api/workout-sessions/{workoutLogId}/sets` | CLIENT | `recordSetLog` | Record one set’s actual performance |
+| DELETE | `/api/workout-sessions/{workoutLogId}` | CLIENT | `discardWorkoutLog` | Discard a session in progress |
+| DELETE | `/api/workout-sessions/{workoutLogId}/sets/{exerciseSetId}` | CLIENT | `deleteSetLog` | Untick a set |
 | POST | `/api/workout-sessions/{workoutLogId}/complete` | CLIENT | `completeWorkoutLog` | Mark a workout log done |
 
 ### Feedback
