@@ -41,7 +41,7 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
           clientId: idQuery('Required for a TRAINER.'),
         }),
         ok: { status: 200, description: 'The workout, its sets with last results, and the week’s log.', schema: workoutSessionSchema },
-        errors: [403, 404],
+        errors: [403, 404, 409],
       }),
     },
     async (req) => {

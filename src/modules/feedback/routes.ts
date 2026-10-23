@@ -18,13 +18,13 @@ export async function submitFeedbackRoutes(app: FastifyInstance) {
       schema: routeDoc({
         operationId: 'submitWorkoutFeedback',
         summary: 'Send feedback on a workout log',
-        description: 'On their own log.',
+        description: 'On their own log. 409 unless the session is completed, or when it was finished automatically (no feedback then).',
         tag: 'Feedback',
         roles: ['CLIENT'],
         params: idParams('workoutLogId'),
         body: submitFeedbackSchema,
         ok: { status: 201, description: 'The feedback.', schema: workoutFeedbackSchema },
-        errors: [403, 404],
+        errors: [403, 404, 409],
       }),
     },
     async (req, reply) => {
