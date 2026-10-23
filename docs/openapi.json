@@ -5914,7 +5914,7 @@
         "tags": [
           "Workout sessions"
         ],
-        "description": "Roles: TRAINER, CLIENT. Starts (or resumes) the week’s log and merges in what was recorded last time per set (`lastPerformed`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the client of the workout’s plan.",
+        "description": "Roles: TRAINER, CLIENT. Starts (or resumes) the week’s log and merges in what was recorded last time per set (`lastPerformed`) and this session’s (`current`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the client of the workout’s plan. 409 when no log exists for an earlier week (logs are only started in the current one).",
         "parameters": [
           {
             "schema": {
@@ -6000,6 +6000,16 @@
           },
           "404": {
             "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6228,7 +6238,7 @@
         "tags": [
           "Feedback"
         ],
-        "description": "Roles: CLIENT. On their own log.",
+        "description": "Roles: CLIENT. On their own log. 409 unless the session is completed, or when it was finished automatically (no feedback then).",
         "requestBody": {
           "required": true,
           "content": {
@@ -6302,6 +6312,16 @@
           },
           "404": {
             "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
             "content": {
               "application/json": {
                 "schema": {

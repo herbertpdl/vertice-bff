@@ -30,7 +30,8 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
         summary: 'The “do a workout” screen in one call',
         description:
           'Starts (or resumes) the week’s log and merges in what was recorded last time per set ' +
-          '(`lastPerformed`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the client of the workout’s plan.',
+          '(`lastPerformed`) and this session’s (`current`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the ' +
+          'client of the workout’s plan. 409 when no log exists for an earlier week (logs are only started in the current one).',
         tag: 'Workout sessions',
         roles: ['TRAINER', 'CLIENT'],
         params: idParams('workoutId'),
