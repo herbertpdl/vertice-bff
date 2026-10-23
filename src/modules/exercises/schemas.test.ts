@@ -30,7 +30,10 @@ describe('exerciseInputSchema', () => {
     const body = { ...base, muscleGroupIds: [1] }
     expect(exerciseInputSchema.parse(body).videoUrl).toBeUndefined()
     expect(exerciseInputSchema.parse({ ...body, videoUrl: '' }).videoUrl).toBe('')
-    expect(exerciseInputSchema.parse({ ...body, videoUrl: 'https://x.test/v' }).videoUrl).toBe('https://x.test/v')
+    expect(exerciseInputSchema.parse({ ...body, videoUrl: 'https://youtu.be/dQw4w9WgXcQ' }).videoUrl).toBe(
+      'https://youtu.be/dQw4w9WgXcQ',
+    )
+    expect(() => exerciseInputSchema.parse({ ...body, videoUrl: 'https://x.test/v' })).toThrow()
     expect(() => exerciseInputSchema.parse({ ...body, videoUrl: 'not a url' })).toThrow()
   })
 
@@ -39,7 +42,7 @@ describe('exerciseInputSchema', () => {
     expect(() => exerciseInputSchema.parse({ ...body, name: 'a'.repeat(256) })).toThrow()
     expect(() => exerciseInputSchema.parse({ ...body, description: 'a'.repeat(256) })).toThrow()
     expect(() =>
-      exerciseInputSchema.parse({ ...body, videoUrl: `https://x.test/${'a'.repeat(500)}` }),
+      exerciseInputSchema.parse({ ...body, videoUrl: `https://youtu.be/dQw4w9WgXcQ?x=${'a'.repeat(500)}` }),
     ).toThrow()
     expect(() =>
       exerciseInputSchema.parse({ name: 'a'.repeat(255), description: 'a'.repeat(255), muscleGroupIds: [1] }),
@@ -83,7 +86,12 @@ describe('exerciseInputSchema bounds', () => {
     expect(() => exerciseInputSchema.parse({ ...body, description: 'd'.repeat(256) })).toThrow()
   })
 
-  it.each(['http://v.test/a', 'https://v.test/a?b=1'])(
+  it.each([
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    'http://youtu.be/dQw4w9WgXcQ?si=x',
+    'https://m.youtube.com/shorts/dQw4w9WgXcQ',
+    'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ',
+  ])(
     'accepts the video link %s',
     (videoUrl) => {
       expect(exerciseInputSchema.parse({ ...body, videoUrl }).videoUrl).toBe(videoUrl)
@@ -98,6 +106,9 @@ describe('exerciseInputSchema bounds', () => {
     '//v.test/a',
     'https://',
     'https://v.test/a b',
+    'https://vimeo.com/824512',
+    'https://www.youtube.com/watch?v=short',
+    'https://youtube.com.evil.test/watch?v=dQw4w9WgXcQ',
     `https://v.test/${'a'.repeat(500)}`,
   ])('refuses the video link %s', (videoUrl) => {
     expect(() => exerciseInputSchema.parse({ ...body, videoUrl })).toThrow()

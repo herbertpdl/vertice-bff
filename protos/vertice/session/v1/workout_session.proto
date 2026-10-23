@@ -5,19 +5,37 @@ package vertice.session.v1;
 option java_package = "com.vertice.api.generated.grpc.session.v1";
 option java_multiple_files = true;
 
+import "google/protobuf/empty.proto";
+
 service WorkoutSessionService {
   // Authorization (P1-01, matrix in vertice-api CLAUDE.md): needs a user token. A log belongs to
   // its client, who alone (with ADMIN) writes into it; the plan's trainer reads its plans' logs.
   // A client_id in a request must be a CLIENT caller's own. To anyone but ADMIN a missing id and
   // someone else's id are the same PERMISSION_DENIED.
 
-  // The workout's plan's trainer or client, ADMIN.
+  // The workout's plan's trainer or client, ADMIN. Resumes the week's session in progress, else
+  // returns the week's completed one, else starts one (only in the current business week:
+  // FAILED_PRECONDITION for an earlier one). Sessions left in progress from earlier weeks are
+  // rolled over first (finished when they have a set, deleted when not).
   rpc GetOrStartWorkoutLog(GetOrStartWorkoutLogRequest) returns (WorkoutLogResponse);
+  // The workout's plan's client (as themself), ADMIN. Starts a redo next to the week's completed
+  // session (or resumes the one in progress); finishing it supersedes the completed one. Current
+  // business week only (FAILED_PRECONDITION for an earlier one).
+  rpc RestartWorkoutLog(RestartWorkoutLogRequest) returns (WorkoutLogResponse);
+  // The log's client or ADMIN. Deletes a session in progress and its set logs;
+  // FAILED_PRECONDITION once it is completed.
+  rpc DiscardWorkoutLog(DiscardWorkoutLogRequest) returns (google.protobuf.Empty);
+  // The log's client or ADMIN. Unticks a set: deletes its set log (none is fine);
+  // FAILED_PRECONDITION once the session is completed.
+  rpc DeleteSetLog(DeleteSetLogRequest) returns (google.protobuf.Empty);
+  // One session's set logs: its client, the plan's trainer, ADMIN.
+  rpc ListSetLogs(ListSetLogsRequest) returns (ListSetLogsResponse);
   // One log by id: its client, the plan's trainer, ADMIN.
   rpc GetWorkoutLog(GetWorkoutLogRequest) returns (WorkoutLogResponse);
   // The log's client or ADMIN.
   rpc RecordSetLog(RecordSetLogRequest) returns (SetLogResponse);
-  // The log's client or ADMIN.
+  // The log's client or ADMIN. Idempotent: a finished session comes back unchanged, which may be
+  // one the weekly rollover finished (completion_kind AUTO): the client then skips feedback.
   rpc CompleteWorkoutLog(CompleteWorkoutLogRequest) returns (WorkoutLogResponse);
   // The plan's trainer or client, ADMIN.
   rpc ListWorkoutLogs(ListWorkoutLogsRequest) returns (ListWorkoutLogsResponse);
@@ -34,6 +52,48 @@ message WorkoutLogResponse {
   string week_start_date = 4;
   string started_at = 5;
   string completed_at = 6;
+  WorkoutLogStatus status = 7;
+  // Unspecified while in progress.
+  CompletionKind completion_kind = 8;
+}
+
+enum WorkoutLogStatus {
+  WORKOUT_LOG_STATUS_UNSPECIFIED = 0;
+  WORKOUT_LOG_STATUS_IN_PROGRESS = 1;
+  WORKOUT_LOG_STATUS_COMPLETED = 2;
+  // Replaced by a redo finished in the same week; out of "last time" and progress.
+  WORKOUT_LOG_STATUS_SUPERSEDED = 3;
+}
+
+enum CompletionKind {
+  COMPLETION_KIND_UNSPECIFIED = 0;
+  // The client finished it.
+  COMPLETION_KIND_CLIENT = 1;
+  // The weekly rollover finished it, left in progress with at least one set.
+  COMPLETION_KIND_AUTO = 2;
+}
+
+message RestartWorkoutLogRequest {
+  int64 workout_id = 1;
+  int64 client_id = 2;
+  string week_start_date = 3;
+}
+
+message DiscardWorkoutLogRequest {
+  int64 id = 1;
+}
+
+message DeleteSetLogRequest {
+  int64 workout_log_id = 1;
+  int64 exercise_set_id = 2;
+}
+
+message ListSetLogsRequest {
+  int64 workout_log_id = 1;
+}
+
+message ListSetLogsResponse {
+  repeated SetLogResponse set_logs = 1;
 }
 
 message SetLogResponse {
@@ -58,6 +118,7 @@ message GetWorkoutLogRequest {
 message RecordSetLogRequest {
   int64 workout_log_id = 1;
   int64 exercise_set_id = 2;
+  // Optional: '' ticks the set without a weight (a bodyweight exercise).
   string weight = 3;
   int32 reps = 4;
 }

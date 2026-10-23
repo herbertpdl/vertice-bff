@@ -119,6 +119,21 @@ const routes: RouteCase[] = [
   },
   { route: 'GET /api/auth/me', ok: { as: 'clientA', url: '/api/auth/me' } },
   {
+    // Self only: the client's own trainer, from the token.
+    route: 'GET /api/auth/me/trainer',
+    roles: ['CLIENT'],
+    ok: { as: 'clientA', url: '/api/auth/me/trainer' },
+    scoped: [
+      {
+        as: 'clientA',
+        url: '/api/auth/me/trainer',
+        why: "no id input: the caller's own trainer",
+        rpc: 'GetClientTrainer',
+        sends: { clientId: ids.clientA },
+      },
+    ],
+  },
+  {
     // Self only: the user id comes from the token; a body id or role goes nowhere.
     route: 'PATCH /api/auth/me',
     ok: { as: 'clientA', url: '/api/auth/me', body: { name: 'Novo Nome' } },
@@ -766,12 +781,12 @@ const routes: RouteCase[] = [
   {
     route: 'POST /api/workout-logs/:workoutLogId/feedback',
     roles: ['CLIENT'],
-    ok: { as: 'clientA', url: `/api/workout-logs/${ids.workoutLogA}/feedback`, body: { text: 'Pesado' } },
+    ok: { as: 'clientA', url: `/api/workout-logs/${ids.workoutLogA}/feedback`, body: { rating: 'HARD', text: 'Pesado' } },
     denied: [
       {
         as: 'clientA',
         url: `/api/workout-logs/${ids.workoutLogB}/feedback`,
-        body: { text: 'Pesado' },
+        body: { rating: 'HARD', text: 'Pesado' },
         why: "path: another client's workout log",
       },
     ],
@@ -800,6 +815,39 @@ const routes: RouteCase[] = [
         body: { ...setLogBody, exerciseSetId: 9999 },
         why: 'body: a set that does not exist (same answer as a foreign one)',
         status: 400,
+      },
+    ],
+  },
+  {
+    route: 'POST /api/workouts/:workoutId/session/restart',
+    roles: ['CLIENT'],
+    ok: { as: 'clientA', url: `/api/workouts/${ids.workoutA}/session/restart` },
+    denied: [{ as: 'clientA', url: `/api/workouts/${ids.workoutB}/session/restart`, why: "path: another client's workout" }],
+    scoped: [
+      {
+        as: 'clientA',
+        url: `/api/workouts/${ids.workoutA}/session/restart`,
+        why: 'no client input: a redo is always the caller’s own',
+        rpc: 'RestartWorkoutLog',
+        sends: { workoutId: ids.workoutA, clientId: ids.clientA },
+      },
+    ],
+  },
+  {
+    route: 'DELETE /api/workout-sessions/:workoutLogId',
+    roles: ['CLIENT'],
+    ok: { as: 'clientA', url: `/api/workout-sessions/${ids.workoutLogA}` },
+    denied: [{ as: 'clientA', url: `/api/workout-sessions/${ids.workoutLogB}`, why: "path: another client's workout log" }],
+  },
+  {
+    route: 'DELETE /api/workout-sessions/:workoutLogId/sets/:exerciseSetId',
+    roles: ['CLIENT'],
+    ok: { as: 'clientA', url: `/api/workout-sessions/${ids.workoutLogA}/sets/${ids.exerciseSetA}` },
+    denied: [
+      {
+        as: 'clientA',
+        url: `/api/workout-sessions/${ids.workoutLogB}/sets/${ids.exerciseSetB}`,
+        why: "path: another client's workout log",
       },
     ],
   },

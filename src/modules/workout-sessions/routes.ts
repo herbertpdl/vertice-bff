@@ -30,7 +30,8 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
         summary: 'The “do a workout” screen in one call',
         description:
           'Starts (or resumes) the week’s log and merges in what was recorded last time per set ' +
-          '(`lastPerformed`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the client of the workout’s plan.',
+          '(`lastPerformed`) and this session’s (`current`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the ' +
+          'client of the workout’s plan. 409 when no log exists for an earlier week (logs are only started in the current one).',
         tag: 'Workout sessions',
         roles: ['TRAINER', 'CLIENT'],
         params: idParams('workoutId'),
@@ -41,7 +42,7 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
           clientId: idQuery('Required for a TRAINER.'),
         }),
         ok: { status: 200, description: 'The workout, its sets with last results, and the week’s log.', schema: workoutSessionSchema },
-        errors: [403, 404],
+        errors: [403, 404, 409],
       }),
     },
     async (req) => {
@@ -57,6 +58,40 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
 
       const weekStartDate = query.weekStartDate ?? currentWeekStartDate()
       return sessionService.getWorkoutSession(workoutId, clientId, weekStartDate)
+    },
+  )
+
+  app.post<{ Params: { workoutId: string }; Querystring: { weekStartDate?: string } }>(
+    '/restart',
+    {
+      preHandler: app.requireRole('CLIENT'),
+      schema: routeDoc({
+        operationId: 'restartWorkoutSession',
+        summary: 'Redo the week’s finished workout',
+        description:
+          'Starts a new session next to the week’s completed one (or returns the one already in progress), in the ' +
+          'same `WorkoutSession` shape. Finishing it replaces the completed session; discarding it keeps the original. ' +
+          'Current week only (409 for an earlier one).',
+        tag: 'Workout sessions',
+        roles: ['CLIENT'],
+        params: idParams('workoutId'),
+        query: z.object({
+          weekStartDate: isoDateSchema
+            .optional()
+            .describe('A business date, and a Monday. Defaults to the current week’s Monday in America/Sao_Paulo.'),
+        }),
+        ok: { status: 201, description: 'The workout, its sets and the redo session.', schema: workoutSessionSchema },
+        errors: [403, 404, 409],
+      }),
+    },
+    async (req, reply) => {
+      const workoutId = parseId(req.params.workoutId)
+      const user = req.user!
+      const query = weekStartDateQuerySchema.parse(req.query)
+      const plan = await assertOwnsWorkout(user, workoutId)
+      assertPlanBelongsToClient(plan, user.id)
+      reply.status(201)
+      return sessionService.restartWorkoutSession(workoutId, user.id, query.weekStartDate ?? currentWeekStartDate())
     },
   )
 }
@@ -141,6 +176,55 @@ export async function workoutSessionActionRoutes(app: FastifyInstance) {
       await assertExerciseSetInWorkout(body.exerciseSetId, log.workoutId)
       reply.status(201)
       return sessionService.recordSetLog(workoutLogId, body.exerciseSetId, body.weight, body.reps)
+    },
+  )
+
+  app.delete<{ Params: { workoutLogId: string } }>(
+    '/:workoutLogId',
+    {
+      schema: routeDoc({
+        operationId: 'discardWorkoutLog',
+        summary: 'Discard a session in progress',
+        description: 'On their own log: deletes it with its set logs. 409 once it is completed.',
+        tag: 'Workout sessions',
+        roles: ['CLIENT'],
+        params: idParams('workoutLogId'),
+        ok: { status: 204, description: 'Discarded.' },
+        errors: [403, 404, 409],
+      }),
+    },
+    async (req, reply) => {
+      const workoutLogId = parseId(req.params.workoutLogId)
+      await assertOwnsWorkoutLog(req.user!, workoutLogId)
+      await sessionService.discardWorkoutLog(workoutLogId)
+      reply.status(204)
+    },
+  )
+
+  app.delete<{ Params: { workoutLogId: string; exerciseSetId: string } }>(
+    '/:workoutLogId/sets/:exerciseSetId',
+    {
+      schema: routeDoc({
+        operationId: 'deleteSetLog',
+        summary: 'Untick a set',
+        description: 'On their own log: deletes the set’s log (none is fine). 409 once the session is completed.',
+        tag: 'Workout sessions',
+        roles: ['CLIENT'],
+        params: z.object({
+          workoutLogId: idParams('workoutLogId').shape.workoutLogId,
+          exerciseSetId: idParams('exerciseSetId').shape.exerciseSetId,
+        }),
+        ok: { status: 204, description: 'Unticked.' },
+        errors: [403, 404, 409],
+      }),
+    },
+    async (req, reply) => {
+      const workoutLogId = parseId(req.params.workoutLogId)
+      const exerciseSetId = parseId(req.params.exerciseSetId)
+      const log = await assertOwnsWorkoutLog(req.user!, workoutLogId)
+      await assertExerciseSetInWorkout(exerciseSetId, log.workoutId)
+      await sessionService.deleteSetLog(workoutLogId, exerciseSetId)
+      reply.status(204)
     },
   )
 

@@ -29,6 +29,12 @@ export interface UserResponse {
   cpf: string
   cref: string
   role: Role
+  /** A trainer's contacts and what their clients see (self and detail views; empty otherwise). */
+  whatsapp?: string
+  instagram?: string
+  showEmail?: boolean
+  showWhatsapp?: boolean
+  showInstagram?: boolean
   /** Only in the self view (`GetUser` on the caller's own id); null otherwise. */
   consent?: ConsentStateResponse | null
 }
@@ -75,7 +81,24 @@ export interface Me {
   cpf: string
   cref: string
   role: Role
+  /** A trainer's WhatsApp (digits) and Instagram handle, and what their clients see; `""`/false otherwise. */
+  whatsapp: string
+  instagram: string
+  showEmail: boolean
+  showWhatsapp: boolean
+  showInstagram: boolean
   consent: Consent
+}
+
+/** The contact fields of a self-view user (all empty/false for anyone but a trainer). */
+export function toContacts(r: UserResponse) {
+  return {
+    whatsapp: r.whatsapp ?? '',
+    instagram: r.instagram ?? '',
+    showEmail: r.showEmail ?? false,
+    showWhatsapp: r.showWhatsapp ?? false,
+    showInstagram: r.showInstagram ?? false,
+  }
 }
 
 /** Built field by field from the self view, the CPF masked. */
@@ -87,6 +110,7 @@ export function toMe(r: UserResponse): Me {
     cpf: maskCpf(r.cpf),
     cref: r.cref,
     role: r.role,
+    ...toContacts(r),
     consent: toConsent(r.consent),
   }
 }
@@ -281,14 +305,24 @@ export interface UserUpdateInput {
   cpf?: string
   cref?: string
   role: Role
+  /** A trainer's contacts; `undefined` keeps the stored value (proto3 `optional`). */
+  whatsapp?: string
+  instagram?: string
+  showEmail?: boolean
+  showWhatsapp?: boolean
+  showInstagram?: boolean
 }
 
 export async function updateUser(id: number, input: UserUpdateInput): Promise<User> {
-  const res = await grpcCall<{ id: number; user: UserUpdateInput }, UserResponse>(userClient, 'UpdateUser', {
+  return toUser(await updateUserRaw(id, input))
+}
+
+/** `UpdateUser`, answering vertice-api's detail view as is (contacts included). */
+export async function updateUserRaw(id: number, input: UserUpdateInput): Promise<UserResponse> {
+  return grpcCall<{ id: number; user: UserUpdateInput }, UserResponse>(userClient, 'UpdateUser', {
     id,
     user: { ...input, cpf: input.cpf ?? '', cref: input.cref ?? '' },
   })
-  return toUser(res)
 }
 
 /**

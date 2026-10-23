@@ -98,6 +98,13 @@ message UserResponse {
   string cref = 5;
   Role role = 6;
   ConsentState consent = 7;
+  // A trainer's contacts and what their clients see of them (detail and self views; empty and
+  // false for anyone else). The client reads them through TrainerClientService.GetClientTrainer.
+  string whatsapp = 8;
+  string instagram = 9;
+  bool show_email = 10;
+  bool show_whatsapp = 11;
+  bool show_instagram = 12;
 }
 
 // What the user has consented to. Empty strings mean "not given yet": the client then shows the
@@ -133,6 +140,15 @@ message UserRequest {
   string cpf = 3;
   string cref = 4;
   Role role = 5;
+  // A TRAINER's contacts (INVALID_ARGUMENT for anyone else). Optional: a field left out keeps its
+  // value, so a caller that doesn't know them never clears them. whatsapp: 10-11 digits, empty
+  // removes it; instagram: the handle without "@" (letters, digits, "." and "_", at most 30),
+  // empty removes it.
+  optional string whatsapp = 6;
+  optional string instagram = 7;
+  optional bool show_email = 8;
+  optional bool show_whatsapp = 9;
+  optional bool show_instagram = 10;
 }
 
 message UserCreateRequest {

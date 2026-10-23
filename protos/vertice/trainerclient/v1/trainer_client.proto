@@ -24,6 +24,22 @@ service TrainerClientService {
   // new plans for the client, UpdateTrainingPlan) and keeps the plan-tree access of the plans
   // they wrote: the client keeps reading them too.
   rpc EndTrainerClientRelationship(EndTrainerClientRelationshipRequest) returns (google.protobuf.Empty);
+  // A CLIENT's active trainer, with only the contacts the trainer chose to show (and filled in):
+  // the client as themself, or ADMIN. NOT_FOUND when the client has no active trainer.
+  rpc GetClientTrainer(GetClientTrainerRequest) returns (ClientTrainerResponse);
+}
+
+message GetClientTrainerRequest {
+  int64 client_id = 1;
+}
+
+message ClientTrainerResponse {
+  int64 trainer_id = 1;
+  string name = 2;
+  // Empty unless the trainer shows it.
+  string email = 3;
+  string whatsapp = 4;
+  string instagram = 5;
 }
 
 message CreateClientForTrainerRequest {

@@ -3,8 +3,8 @@ import { isoDateSchema, optionalIdQuery, repsCount, WEIGHT_PATTERN, weightMessag
 
 export const recordSetLogSchema = z.object({
   exerciseSetId: z.number().int().positive(),
-  // Required here (a log without a weight is not a log), unlike a set's optional weight.
-  weight: z.string().regex(WEIGHT_PATTERN, weightMessage),
+  // `""` ticks the set without a weight (a bodyweight exercise).
+  weight: z.string().regex(WEIGHT_PATTERN, weightMessage).or(z.literal('')),
   reps: repsCount,
 }).meta({ id: 'RecordSetLogRequest' })
 

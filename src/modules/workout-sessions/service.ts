@@ -2,6 +2,9 @@ import { workoutSessionClient } from '../../grpc/clients.js'
 import { grpcCall } from '../../grpc/call.js'
 import * as workoutService from '../workouts/service.js'
 
+export type WorkoutLogStatus = 'IN_PROGRESS' | 'COMPLETED' | 'SUPERSEDED'
+export type CompletionKind = 'CLIENT' | 'AUTO' | ''
+
 export interface WorkoutLog {
   id: number
   workoutId: number
@@ -9,6 +12,8 @@ export interface WorkoutLog {
   weekStartDate: string
   startedAt: string
   completedAt: string
+  status: WorkoutLogStatus
+  completionKind: CompletionKind
 }
 
 interface WorkoutLogResponse {
@@ -18,6 +23,25 @@ interface WorkoutLogResponse {
   weekStartDate: string
   startedAt: string
   completedAt: string
+  /** `WORKOUT_LOG_STATUS_*` (proto enum as a string). */
+  status: string
+  /** `COMPLETION_KIND_*`. */
+  completionKind: string
+}
+
+/**
+ * The status without its proto prefix. A log from an API that predates statuses says
+ * `UNSPECIFIED`: read it from `completedAt`, as those logs were.
+ */
+function toStatus(r: WorkoutLogResponse): WorkoutLogStatus {
+  const status = r.status?.replace(/^WORKOUT_LOG_STATUS_/, '')
+  if (status === 'IN_PROGRESS' || status === 'COMPLETED' || status === 'SUPERSEDED') return status
+  return r.completedAt ? 'COMPLETED' : 'IN_PROGRESS'
+}
+
+function toCompletionKind(r: WorkoutLogResponse): CompletionKind {
+  const kind = r.completionKind?.replace(/^COMPLETION_KIND_/, '')
+  return kind === 'CLIENT' || kind === 'AUTO' ? kind : ''
 }
 
 function toWorkoutLog(r: WorkoutLogResponse): WorkoutLog {
@@ -28,6 +52,8 @@ function toWorkoutLog(r: WorkoutLogResponse): WorkoutLog {
     weekStartDate: r.weekStartDate,
     startedAt: r.startedAt,
     completedAt: r.completedAt,
+    status: toStatus(r),
+    completionKind: toCompletionKind(r),
   }
 }
 
@@ -92,6 +118,42 @@ export async function recordSetLog(
   return toSetLog(res)
 }
 
+/** A redo next to the week's completed session (or the one already in progress). */
+export async function restartWorkoutLog(
+  workoutId: number,
+  clientId: number,
+  weekStartDate: string,
+): Promise<WorkoutLog> {
+  const res = await grpcCall<{ workoutId: number; clientId: number; weekStartDate: string }, WorkoutLogResponse>(
+    workoutSessionClient,
+    'RestartWorkoutLog',
+    { workoutId, clientId, weekStartDate },
+  )
+  return toWorkoutLog(res)
+}
+
+/** Deletes a session in progress and its set logs. */
+export async function discardWorkoutLog(id: number): Promise<void> {
+  await grpcCall<{ id: number }, unknown>(workoutSessionClient, 'DiscardWorkoutLog', { id })
+}
+
+/** Unticks a set of a session in progress (a no-op when it wasn't ticked). */
+export async function deleteSetLog(workoutLogId: number, exerciseSetId: number): Promise<void> {
+  await grpcCall<{ workoutLogId: number; exerciseSetId: number }, unknown>(workoutSessionClient, 'DeleteSetLog', {
+    workoutLogId,
+    exerciseSetId,
+  })
+}
+
+export async function listSetLogs(workoutLogId: number): Promise<SetLog[]> {
+  const res = await grpcCall<{ workoutLogId: number }, { setLogs: SetLogResponse[] }>(
+    workoutSessionClient,
+    'ListSetLogs',
+    { workoutLogId },
+  )
+  return res.setLogs.map(toSetLog)
+}
+
 export async function completeWorkoutLog(id: number): Promise<WorkoutLog> {
   const res = await grpcCall<{ id: number }, WorkoutLogResponse>(
     workoutSessionClient,
@@ -144,17 +206,36 @@ export async function getExerciseProgress(exerciseId: number, clientId: number):
  * 60kg" without orchestrating four separate requests.
  */
 export async function getWorkoutSession(workoutId: number, clientId: number, weekStartDate: string) {
+  return composeSession(workoutId, clientId, getOrStartWorkoutLog(workoutId, clientId, weekStartDate))
+}
+
+/** The same aggregate over a redo of the week's completed workout (`RestartWorkoutLog`). */
+export async function restartWorkoutSession(workoutId: number, clientId: number, weekStartDate: string) {
+  return composeSession(workoutId, clientId, restartWorkoutLog(workoutId, clientId, weekStartDate))
+}
+
+/**
+ * The workout, the session, what was recorded last time per set (`lastPerformed`) and what this
+ * session recorded (`current`, so a session resumes on another device).
+ */
+async function composeSession(workoutId: number, clientId: number, session: Promise<WorkoutLog>) {
   const [workout, workoutLog, lastSetLogs] = await Promise.all([
     workoutService.getFullWorkout(workoutId),
-    getOrStartWorkoutLog(workoutId, clientId, weekStartDate),
+    session,
     getLastSetLogs(clientId, workoutId),
   ])
+  const currentSetLogs = await listSetLogs(workoutLog.id)
 
   const lastByExerciseSetId = new Map(lastSetLogs.map((log) => [log.exerciseSetId, log]))
+  const currentByExerciseSetId = new Map(currentSetLogs.map((log) => [log.exerciseSetId, log]))
 
   const exercises = workout.exercises.map((we) => ({
     ...we,
-    sets: we.sets.map((set) => ({ ...set, lastPerformed: lastByExerciseSetId.get(set.id) ?? null })),
+    sets: we.sets.map((set) => ({
+      ...set,
+      lastPerformed: lastByExerciseSetId.get(set.id) ?? null,
+      current: currentByExerciseSetId.get(set.id) ?? null,
+    })),
   }))
 
   return { ...workout, exercises, workoutLog }

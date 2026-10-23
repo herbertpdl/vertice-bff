@@ -269,6 +269,33 @@
         ],
         "additionalProperties": false
       },
+      "ClientTrainer": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "description": "`\"\"` unless the trainer shows it."
+          },
+          "whatsapp": {
+            "type": "string",
+            "description": "Digits with area code; `\"\"` unless the trainer shows it."
+          },
+          "instagram": {
+            "type": "string",
+            "description": "Handle without `@`; `\"\"` unless the trainer shows it."
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "whatsapp",
+          "instagram"
+        ],
+        "additionalProperties": false
+      },
       "CloneWorkoutRequest": {
         "type": "object",
         "properties": {
@@ -291,6 +318,15 @@
           "name",
           "dayOfWeek"
         ]
+      },
+      "CompletionKind": {
+        "type": "string",
+        "enum": [
+          "CLIENT",
+          "AUTO",
+          ""
+        ],
+        "description": "Who finished it: the client, or the weekly rollover (`AUTO`); `\"\"` in progress."
       },
       "Consent": {
         "type": "object",
@@ -672,7 +708,23 @@
             "maximum": 9007199254740991
           },
           "text": {
-            "type": "string"
+            "type": "string",
+            "description": "`\"\"` when the client only rated the workout."
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedbackRating"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on feedback given before ratings existed."
+          },
+          "replaced": {
+            "type": "boolean",
+            "description": "The session was replaced by a redo finished in the same week."
           },
           "createdAt": {
             "type": "string",
@@ -695,6 +747,8 @@
           "trainingPlanId",
           "clientId",
           "text",
+          "rating",
+          "replaced",
           "createdAt",
           "clientName",
           "workoutName",
@@ -808,7 +862,6 @@
             "anyOf": [
               {
                 "type": "string",
-                "pattern": "^https?:\\/\\/\\S+$",
                 "maxLength": 500
               },
               {
@@ -1005,6 +1058,17 @@
           "strategy"
         ]
       },
+      "FeedbackRating": {
+        "type": "string",
+        "enum": [
+          "VERY_HARD",
+          "HARD",
+          "JUST_RIGHT",
+          "EASY",
+          "VERY_EASY"
+        ],
+        "description": "How hard the workout felt, hardest first."
+      },
       "FullWorkout": {
         "type": "object",
         "properties": {
@@ -1166,6 +1230,24 @@
           "role": {
             "$ref": "#/components/schemas/Role"
           },
+          "whatsapp": {
+            "type": "string",
+            "description": "A trainer's WhatsApp, digits only; `\"\"` when none."
+          },
+          "instagram": {
+            "type": "string",
+            "description": "A trainer's Instagram handle without `@`; `\"\"` when none."
+          },
+          "showEmail": {
+            "type": "boolean",
+            "description": "Whether the trainer shows their e-mail to their clients."
+          },
+          "showWhatsapp": {
+            "type": "boolean"
+          },
+          "showInstagram": {
+            "type": "boolean"
+          },
           "consent": {
             "$ref": "#/components/schemas/Consent"
           }
@@ -1177,6 +1259,11 @@
           "cpf",
           "cref",
           "role",
+          "whatsapp",
+          "instagram",
+          "showEmail",
+          "showWhatsapp",
+          "showInstagram",
           "consent"
         ],
         "additionalProperties": false
@@ -1312,8 +1399,16 @@
             "maximum": 9007199254740991
           },
           "weight": {
-            "type": "string",
-            "pattern": "^\\d{1,4}(\\.\\d{1,2})?$"
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{1,4}(\\.\\d{1,2})?$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
           },
           "reps": {
             "type": "integer",
@@ -1441,7 +1536,7 @@
           },
           "weight": {
             "type": "string",
-            "description": "Decimal string."
+            "description": "Decimal string; `\"\"` when the set was ticked without a weight."
           },
           "reps": {
             "type": "integer",
@@ -1480,14 +1575,24 @@
       "SubmitFeedbackRequest": {
         "type": "object",
         "properties": {
-          "text": {
+          "rating": {
             "type": "string",
-            "minLength": 1,
+            "enum": [
+              "VERY_HARD",
+              "HARD",
+              "JUST_RIGHT",
+              "EASY",
+              "VERY_EASY"
+            ]
+          },
+          "text": {
+            "default": "",
+            "type": "string",
             "maxLength": 2000
           }
         },
         "required": [
-          "text"
+          "rating"
         ]
       },
       "TrainingPlan": {
@@ -1697,6 +1802,27 @@
                 "type": "null"
               }
             ]
+          },
+          "whatsapp": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instagram": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "showEmail": {
+            "type": "boolean"
+          },
+          "showWhatsapp": {
+            "type": "boolean"
+          },
+          "showInstagram": {
+            "type": "boolean"
           }
         }
       },
@@ -1895,7 +2021,23 @@
             "maximum": 9007199254740991
           },
           "text": {
-            "type": "string"
+            "type": "string",
+            "description": "`\"\"` when the client only rated the workout."
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedbackRating"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on feedback given before ratings existed."
+          },
+          "replaced": {
+            "type": "boolean",
+            "description": "The session was replaced by a redo finished in the same week."
           },
           "createdAt": {
             "type": "string",
@@ -1909,6 +2051,8 @@
           "trainingPlanId",
           "clientId",
           "text",
+          "rating",
+          "replaced",
           "createdAt"
         ],
         "additionalProperties": false
@@ -1942,6 +2086,12 @@
           "completedAt": {
             "type": "string",
             "description": "ISO-8601 instant, `\"\"` until the workout is completed."
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkoutLogStatus"
+          },
+          "completionKind": {
+            "$ref": "#/components/schemas/CompletionKind"
           }
         },
         "required": [
@@ -1950,9 +2100,20 @@
           "clientId",
           "weekStartDate",
           "startedAt",
-          "completedAt"
+          "completedAt",
+          "status",
+          "completionKind"
         ],
         "additionalProperties": false
+      },
+      "WorkoutLogStatus": {
+        "type": "string",
+        "enum": [
+          "IN_PROGRESS",
+          "COMPLETED",
+          "SUPERSEDED"
+        ],
+        "description": "`SUPERSEDED`: replaced by a redo finished in the same week (never in the week list)."
       },
       "WorkoutRequest": {
         "type": "object",
@@ -2085,6 +2246,17 @@
                           }
                         ],
                         "description": "What the client recorded last time, null if never."
+                      },
+                      "current": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/components/schemas/SetLog"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "What this session recorded for the set (it's ticked), null if not: resumes a session on another device."
                       }
                     },
                     "required": [
@@ -2098,7 +2270,8 @@
                       "strategy",
                       "restSeconds",
                       "notes",
-                      "lastPerformed"
+                      "lastPerformed",
+                      "current"
                     ],
                     "additionalProperties": false
                   }
@@ -2442,6 +2615,56 @@
           },
           "429": {
             "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me/trainer": {
+      "get": {
+        "operationId": "getMyTrainer",
+        "summary": "The client’s trainer and the contacts they share",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Roles: CLIENT. The caller’s active trainer: the name always; `email`, `whatsapp`, `instagram` only when the trainer shows them and filled them in (`\"\"` otherwise). 404 when the client has no active trainer.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The trainer card.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientTrainer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5691,7 +5914,7 @@
         "tags": [
           "Workout sessions"
         ],
-        "description": "Roles: TRAINER, CLIENT. Starts (or resumes) the week’s log and merges in what was recorded last time per set (`lastPerformed`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the client of the workout’s plan.",
+        "description": "Roles: TRAINER, CLIENT. Starts (or resumes) the week’s log and merges in what was recorded last time per set (`lastPerformed`) and this session’s (`current`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the client of the workout’s plan. 409 when no log exists for an earlier week (logs are only started in the current one).",
         "parameters": [
           {
             "schema": {
@@ -5777,6 +6000,118 @@
           },
           "404": {
             "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workouts/{workoutId}/session/restart": {
+      "post": {
+        "operationId": "restartWorkoutSession",
+        "summary": "Redo the week’s finished workout",
+        "tags": [
+          "Workout sessions"
+        ],
+        "description": "Roles: CLIENT. Starts a new session next to the week’s completed one (or returns the one already in progress), in the same `WorkoutSession` shape. Finishing it replaces the completed session; discarding it keeps the original. Current week only (409 for an earlier one).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "weekStartDate",
+            "required": false,
+            "description": "A business date, and a Monday. Defaults to the current week’s Monday in America/Sao_Paulo."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "CLIENT"
+        ],
+        "responses": {
+          "201": {
+            "description": "The workout, its sets and the redo session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkoutSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5903,7 +6238,7 @@
         "tags": [
           "Feedback"
         ],
-        "description": "Roles: CLIENT. On their own log.",
+        "description": "Roles: CLIENT. On their own log. 409 unless the session is completed, or when it was finished automatically (no feedback then).",
         "requestBody": {
           "required": true,
           "content": {
@@ -5984,6 +6319,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -6036,6 +6381,186 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workout-sessions/{workoutLogId}": {
+      "delete": {
+        "operationId": "discardWorkoutLog",
+        "summary": "Discard a session in progress",
+        "tags": [
+          "Workout sessions"
+        ],
+        "description": "Roles: CLIENT. On their own log: deletes it with its set logs. 409 once it is completed.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutLogId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "CLIENT"
+        ],
+        "responses": {
+          "204": {
+            "description": "Discarded."
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workout-sessions/{workoutLogId}/sets/{exerciseSetId}": {
+      "delete": {
+        "operationId": "deleteSetLog",
+        "summary": "Untick a set",
+        "tags": [
+          "Workout sessions"
+        ],
+        "description": "Roles: CLIENT. On their own log: deletes the set’s log (none is fine). 409 once the session is completed.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "workoutLogId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "exerciseSetId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "CLIENT"
+        ],
+        "responses": {
+          "204": {
+            "description": "Unticked."
           },
           "400": {
             "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",

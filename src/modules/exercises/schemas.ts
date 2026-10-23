@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { youtubeVideoId } from '../../lib/youtube.js'
 import { boundedText, optionalIdQuery, requiredText, utf16String } from '../../lib/validation.js'
 
 // Limits mirror vertice-api's purely to fail fast with field-level `details`; upstream is
@@ -6,10 +7,10 @@ import { boundedText, optionalIdQuery, requiredText, utf16String } from '../../l
 export const exerciseInputSchema = z.object({
   name: requiredText(255),
   description: boundedText(255).default(''),
-  // http(s) only (`^https?://\S+$`, as vertice-api): the catalog is shared, so a `javascript:` or
-  // `data:` link must never be stored.
+  // A YouTube video only (R61, as vertice-api): the client app plays it in an embedded player. An
+  // http(s) URL by construction, so a `javascript:` or `data:` link is never stored.
   videoUrl: utf16String(500)
-    .regex(/^https?:\/\/\S+$/, 'expected an http(s) URL')
+    .refine((url) => youtubeVideoId(url) !== null, 'expected a YouTube video link (youtube.com or youtu.be)')
     .optional()
     .or(z.literal('')),
   // Duplicates are dropped, not rejected; first occurrence wins so the order the
