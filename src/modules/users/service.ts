@@ -261,12 +261,26 @@ export async function createPasswordSetupToken(userId: number, options?: GrpcCal
   return { token: res.token, expiresAt: res.expiresAt }
 }
 
+/** Whose first access a redeemed setup token was: what the web needs to pick its success screen. */
+export interface RedeemedSetup {
+  role: Role
+  email: string
+}
+
 /**
- * Sets the password of the token's user and consumes the token. A bad token rejects with a 401
- * HttpError. Public (first access), so it goes out with the service token.
+ * Sets the password of the token's user, consumes the token and returns who that user is
+ * (`RedeemPasswordSetupToken`, contact view upstream; only the role and email are kept). A bad
+ * token rejects with a 401 HttpError and returns nothing. Public (first access), so it goes out
+ * with the service token.
  */
-export async function setPasswordWithToken(token: string, password: string): Promise<void> {
-  await grpcCall(userClient, 'SetPasswordWithToken', { token, password }, { asService: true })
+export async function redeemPasswordSetupToken(token: string, password: string): Promise<RedeemedSetup> {
+  const res = await grpcCall<{ token: string; password: string }, UserResponse>(
+    userClient,
+    'RedeemPasswordSetupToken',
+    { token, password },
+    { asService: true },
+  )
+  return { role: res.role, email: res.email }
 }
 
 export interface UserCreateInput {

@@ -193,12 +193,15 @@ describe('input bounds at the routes', () => {
       await expectRefused('POST', `/api/workout-sessions/${ids.workoutLogA}/sets`, 'clientA', { exerciseSetId: ids.exerciseSetA, weight: '20', reps: 1001 }, 'reps')
     })
 
-    it.each([`/api/workouts/${ids.workoutA}/session`, `/api/workout-logs?trainingPlanId=${ids.planA}&clientId=${ids.clientA}`])(
+    it.each([
+      [`/api/workouts/${ids.workoutA}/session`, 'clientA'],
+      [`/api/workout-logs?trainingPlanId=${ids.planA}&clientId=${ids.clientA}`, 'trainerA'],
+    ] as const)(
       'GET %s parses weekStartDate with Zod',
-      async (base) => {
+      async (base, as) => {
         const sep = base.includes('?') ? '&' : '?'
-        await expectRefused('GET', `${base}${sep}weekStartDate=2026-13-45`, 'trainerA', undefined, 'weekStartDate')
-        await expectRefused('GET', `${base}${sep}weekStartDate=yesterday`, 'trainerA', undefined, 'weekStartDate')
+        await expectRefused('GET', `${base}${sep}weekStartDate=2026-13-45`, as, undefined, 'weekStartDate')
+        await expectRefused('GET', `${base}${sep}weekStartDate=yesterday`, as, undefined, 'weekStartDate')
       },
     )
 

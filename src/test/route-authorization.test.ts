@@ -699,22 +699,9 @@ const routes: RouteCase[] = [
   // sessions, logs and feedback
   {
     route: 'GET /api/workouts/:workoutId/session',
-    roles: ['TRAINER', 'CLIENT'],
+    roles: ['CLIENT'],
     ok: { as: 'clientA', url: `/api/workouts/${ids.workoutA}/session` },
-    denied: [
-      { as: 'clientA', url: `/api/workouts/${ids.workoutB}/session`, why: "path: another client's workout" },
-      {
-        as: 'trainerA',
-        url: `/api/workouts/${ids.workoutB}/session?clientId=${ids.clientB}`,
-        why: "path: another trainer's workout",
-      },
-      {
-        as: 'trainerA',
-        url: `/api/workouts/${ids.workoutA}/session?clientId=${ids.clientB}`,
-        why: 'query: a client the workout is not assigned to',
-      },
-      { as: 'trainerA', url: `/api/workouts/${ids.workoutA}/session`, why: 'query: clientId missing', status: 400 },
-    ],
+    denied: [{ as: 'clientA', url: `/api/workouts/${ids.workoutB}/session`, why: "path: another client's workout" }],
     scoped: [
       {
         as: 'clientA',
@@ -1016,7 +1003,7 @@ describe('route authorization', () => {
   })
 
   it("pins the BFF's service-token RPCs to the API contract: exactly the three public auth RPCs", () => {
-    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual(['CreateUser', 'SetPasswordWithToken', 'VerifyCredentials'])
+    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual(['CreateUser', 'RedeemPasswordSetupToken', 'VerifyCredentials'])
     expect([...SERVICE_TOKEN_RPCS].sort()).toEqual([...API_SERVICE_SUBJECT_RPCS['service:bff']!].sort())
   })
 

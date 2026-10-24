@@ -528,17 +528,24 @@ describe('auth routes', () => {
   })
 
   describe('POST /auth/password/setup', () => {
-    it('sets the password with the token', async () => {
+    it("sets the password with the token and says whose first access it was, role and email only", async () => {
       const token = setupTokenFor(ids.clientA2)
       const res = await post('/api/auth/password/setup', { token, newPassword: NEW_PASSWORD })
-      expect(res.statusCode, res.body).toBe(204)
-      expect(upstreamRequest('SetPasswordWithToken')).toEqual({ token, password: NEW_PASSWORD })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json()).toEqual({ role: 'CLIENT', email: emailOf(ids.clientA2) })
+      expect(upstreamRequest('RedeemPasswordSetupToken')).toEqual({ token, password: NEW_PASSWORD })
+    })
+
+    it("answers a trainer's token with the TRAINER role", async () => {
+      const res = await post('/api/auth/password/setup', { token: setupTokenFor(ids.trainerA), newPassword: NEW_PASSWORD })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json()).toEqual({ role: 'TRAINER', email: emailOf(ids.trainerA) })
     })
 
     it('maps a bad, expired or used token to 400 INVALID_SETUP_TOKEN, not a 401', async () => {
       const res = await post('/api/auth/password/setup', { token: 'not-a-token', newPassword: NEW_PASSWORD })
       expect(res.statusCode).toBe(400)
-      expect(res.json().error.code).toBe('INVALID_SETUP_TOKEN')
+      expect(res.json()).toEqual({ error: { code: 'INVALID_SETUP_TOKEN', message: 'Invalid or expired password setup link' } })
     })
 
     it('checks the password policy before calling upstream', async () => {

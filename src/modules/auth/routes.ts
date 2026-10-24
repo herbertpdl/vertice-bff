@@ -13,7 +13,14 @@ import * as userService from '../users/service.js'
 import { emailKey, ipKey } from '../../plugins/rate-limit.js'
 import { todayInBusinessZone } from '../../lib/dates.js'
 import { routeDoc } from '../../openapi/docs.js'
-import { clientTrainerSchema, consentSchema, dataExportSchema, meSchema, sessionSchema } from '../../openapi/responses.js'
+import {
+  clientTrainerSchema,
+  consentSchema,
+  dataExportSchema,
+  meSchema,
+  passwordSetupResultSchema,
+  sessionSchema,
+} from '../../openapi/responses.js'
 
 export default async function authRoutes(app: FastifyInstance) {
   // Strict buckets (see plugins/rate-limit.ts). Login and setup count failed attempts only;
@@ -251,18 +258,19 @@ export default async function authRoutes(app: FastifyInstance) {
         summary: 'Choose a password with a first-access token',
         description:
           'The token comes from `POST /clients` or `POST /clients/{id}/setup-token`. An unknown, expired (72h) or used ' +
-          'token is 400 `INVALID_SETUP_TOKEN`. Failed attempts are rate limited.',
+          'token is 400 `INVALID_SETUP_TOKEN`. Failed attempts are rate limited. On success the answer says whose first ' +
+          'access it was (`role`, `email`), never before the token is used: the web shows a CLIENT the “use the app” ' +
+          'screen with the email filled in. No session is created; log in normally.',
         tag: 'Auth',
         auth: 'public',
         body: passwordSetupSchema,
-        ok: { status: 204, description: 'Password set; log in normally. No body.' },
+        ok: { status: 200, description: 'Password set: the account’s role and email.', schema: passwordSetupResultSchema },
         errors: [429],
       }),
     },
-    async (req, reply) => {
+    async (req) => {
       const body = passwordSetupSchema.parse(req.body)
-      await authService.setupPassword(body.token, body.newPassword)
-      reply.status(204)
+      return authService.setupPassword(body.token, body.newPassword)
     },
   )
 }

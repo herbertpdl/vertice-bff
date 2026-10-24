@@ -1305,6 +1305,24 @@
           "newPassword"
         ]
       },
+      "PasswordSetupResult": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "description": "Whose first access it was: the web shows a CLIENT the “use the app” screen.",
+            "$ref": "#/components/schemas/Role"
+          },
+          "email": {
+            "type": "string",
+            "description": "The account’s email, so the client can be sent to the app with it filled in."
+          }
+        },
+        "required": [
+          "role",
+          "email"
+        ],
+        "additionalProperties": false
+      },
       "PasswordSetupToken": {
         "type": "object",
         "properties": {
@@ -2862,7 +2880,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Public: no token needed. The token comes from `POST /clients` or `POST /clients/{id}/setup-token`. An unknown, expired (72h) or used token is 400 `INVALID_SETUP_TOKEN`. Failed attempts are rate limited.",
+        "description": "Public: no token needed. The token comes from `POST /clients` or `POST /clients/{id}/setup-token`. An unknown, expired (72h) or used token is 400 `INVALID_SETUP_TOKEN`. Failed attempts are rate limited. On success the answer says whose first access it was (`role`, `email`), never before the token is used: the web shows a CLIENT the “use the app” screen with the email filled in. No session is created; log in normally.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2875,8 +2893,15 @@
         },
         "security": [],
         "responses": {
-          "204": {
-            "description": "Password set; log in normally. No body."
+          "200": {
+            "description": "Password set: the account’s role and email.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordSetupResult"
+                }
+              }
+            }
           },
           "400": {
             "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
@@ -5919,7 +5944,7 @@
         "tags": [
           "Workout sessions"
         ],
-        "description": "Roles: TRAINER, CLIENT. Starts (or resumes) the week’s log and merges in what was recorded last time per set (`lastPerformed`) and this session’s (`current`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the client of the workout’s plan. 409 when no log exists for an earlier week (logs are only started in the current one).",
+        "description": "Roles: CLIENT. Starts (or resumes) the week’s log and merges in what was recorded last time per set (`lastPerformed`) and this session’s (`current`). The caller’s own session: CLIENT only (a trainer reads logs through `GET /workout-logs`). 409 when no log exists for an earlier week (logs are only started in the current one).",
         "parameters": [
           {
             "schema": {
@@ -5930,17 +5955,6 @@
             "name": "weekStartDate",
             "required": false,
             "description": "A business date, and a Monday. Defaults to the current week’s Monday in America/Sao_Paulo."
-          },
-          {
-            "schema": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "in": "query",
-            "name": "clientId",
-            "required": false,
-            "description": "Required for a TRAINER."
           },
           {
             "schema": {
@@ -5959,7 +5973,6 @@
           }
         ],
         "x-roles": [
-          "TRAINER",
           "CLIENT"
         ],
         "responses": {

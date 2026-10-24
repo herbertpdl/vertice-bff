@@ -13,7 +13,8 @@ service WorkoutSessionService {
   // A client_id in a request must be a CLIENT caller's own. To anyone but ADMIN a missing id and
   // someone else's id are the same PERMISSION_DENIED.
 
-  // The workout's plan's trainer or client, ADMIN. Resumes the week's session in progress, else
+  // The workout's plan's client (as themself), ADMIN; the plan's trainer reads logs but never
+  // starts one for their client (PERMISSION_DENIED). Resumes the week's session in progress, else
   // returns the week's completed one, else starts one (only in the current business week:
   // FAILED_PRECONDITION for an earlier one). Sessions left in progress from earlier weeks are
   // rolled over first (finished when they have a set, deleted when not).
