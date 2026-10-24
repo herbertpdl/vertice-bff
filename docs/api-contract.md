@@ -7,6 +7,9 @@ Base URL (dev): `http://localhost:3000/api`
 All endpoints except `/auth/login`, `/auth/register`, `/auth/password/setup` and `/legal/versions` require:
 `Authorization: Bearer <token>`
 
+`/auth/login` serves every role, the same for the web and the mobile app: each app decides whom it
+lets in (the web admits trainers only and refuses any other role before it creates its session).
+
 The token is the one `/auth/login` or `/auth/register` returned. Treat it as opaque: it carries
 only the user id and role (scoped `iss: vertice-bff`, `aud: vertice-api`, with an expiry), not the
 name or email. Read those from the login/register response or `GET /auth/me`. A token issued
@@ -159,7 +162,7 @@ The client’s “do a workout” flow: the session aggregate, set logs and work
 
 | Method | Path | Access | `operationId` | Summary |
 |---|---|---|---|---|
-| GET | `/api/workouts/{workoutId}/session` | TRAINER, CLIENT | `getWorkoutSession` | The “do a workout” screen in one call |
+| GET | `/api/workouts/{workoutId}/session` | CLIENT | `getWorkoutSession` | The “do a workout” screen in one call |
 | POST | `/api/workouts/{workoutId}/session/restart` | CLIENT | `restartWorkoutSession` | Redo the week’s finished workout |
 | GET | `/api/workout-logs` | TRAINER, CLIENT | `listWorkoutLogs` | Which workouts were done in a week |
 | POST | `/api/workout-sessions/{workoutLogId}/sets` | CLIENT | `recordSetLog` | Record one set’s actual performance |
@@ -315,7 +318,7 @@ Consent = {
 ```
 The web compares `termsVersion` / `healthDataVersion` with `GET /legal/versions`: null or different means "show the text and ask" (first access, or the text changed). Users created before P1-04, and every trainer-created client, start with all four null.
 - `POST /password` (auth, any role) `{currentPassword, newPassword}` → `204`. Changes the caller's own password after re-checking the current one. A wrong `currentPassword` is **`400 INVALID_CURRENT_PASSWORD`**, not a 401: the session is still valid, so clients must not log out on it.
-- `POST /password/setup` (public) `{token, newPassword}` → `204`. First access: the client chooses a password with the setup token from `POST /clients` (or `POST /clients/:id/setup-token`), then logs in normally. An unknown, expired (72h) or already used token is **`400 INVALID_SETUP_TOKEN`** (vertice-api's `UNAUTHENTICATED`, mapped so clients don't read it as a logout). The token is single-use, and issuing a new one invalidates the previous one.
+- `POST /password/setup` (public) `{token, newPassword}` → `200` `{role, email}`. First access: the client chooses a password with the setup token from `POST /clients` (or `POST /clients/:id/setup-token`), then logs in normally. The answer says whose first access it was, so the web can send a CLIENT to the mobile app with the email filled in: the one public route that returns personal data, and only after the token was used (vertice-api's `RedeemPasswordSetupToken`; no lookup of an unused token exists). No session is created. An unknown, expired (72h) or already used token is **`400 INVALID_SETUP_TOKEN`** (vertice-api's `UNAUTHENTICATED`, mapped so clients don't read it as a logout). The token is single-use, and issuing a new one invalidates the previous one.
 
 ## Legal — `/legal`
 - `GET /versions` (public) → `{terms, healthData}`: the current version of the Terms of Use / Privacy Policy and of the health-data consent notice (env `TERMS_VERSION`, `HEALTH_DATA_CONSENT_VERSION`, default `2026-10-draft`; the texts are drafts pending legal review). The web shows the matching texts, sends `terms` as `acceptedTermsVersion` on register and the versions to `POST /auth/me/consent`, and compares them with `GET /auth/me`'s `consent` to tell whether a stored consent is outdated. No upstream call. Cacheable: `Cache-Control: public, max-age=300` (errors stay `no-store`). A version changes only on a BFF deploy that bumps the env var.
@@ -455,8 +458,8 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
 `strategy`: `STRAIGHT | WARM_UP | BACKOFF | DROPSET | REST_PAUSE | CLUSTER | AMRAP | ISOMETRIC_HOLD | FAILURE`
 
 ## Workout sessions (the client "do a workout" flow)
-- **`GET /workouts/:workoutId/session?weekStartDate=YYYY-MM-DD`** (defaults to the current week's Monday) — CLIENT uses own id (any `clientId` is ignored); TRAINER must pass `?clientId=`, the client of the workout's plan.
-  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or CLIENT` (ADMIN); 400 `VALIDATION_ERROR` `clientId is required` (TRAINER, absent) or field `details` on `clientId` (malformed); 403 `FORBIDDEN` `You do not have access to this training plan` (another trainer's or client's workout) or `That training plan does not belong to this client` (TRAINER, `clientId` is not the plan's client); 404 `NOT_FOUND` for an unknown workout.
+- **`GET /workouts/:workoutId/session?weekStartDate=YYYY-MM-DD`** (defaults to the current week's Monday) — **CLIENT only**, the caller's own session (any `clientId` is ignored). Starting a session is the client's own: a trainer reads logs through `GET /workout-logs`, never opens one as their client (vertice-api refuses it too).
+  - Errors: 403 `FORBIDDEN` `Requires role: CLIENT` (TRAINER, ADMIN); 403 `FORBIDDEN` `You do not have access to this training plan` (another client's workout); 404 `NOT_FOUND` for an unknown workout.
   → `Workout & { exercises: [...FullWorkoutExercise, sets: [...ExerciseSet, lastPerformed: SetLog|null]] , workoutLog: WorkoutLog }`.
   Each `exercise` under `exercises[]` is the `Exercise` shape from the Exercises section (`muscleGroups`, `isStarter`; no `muscleGroup`).
   This auto-starts (or resumes) this week's log and merges in last time's recorded weight/reps per set (`lastPerformed`), so the UI can show "last time: 60kg × 12" inline. **This is the single call the workout-execution screen needs.**

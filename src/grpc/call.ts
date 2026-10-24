@@ -9,7 +9,7 @@ import { requestContext } from '../lib/request-context.js'
  * auth routes, where no user is behind the call (login, register, password setup). vertice-api
  * allows `service:bff` on exactly these.
  */
-export const SERVICE_TOKEN_RPCS: ReadonlySet<string> = new Set(['VerifyCredentials', 'CreateUser', 'SetPasswordWithToken'])
+export const SERVICE_TOKEN_RPCS: ReadonlySet<string> = new Set(['VerifyCredentials', 'CreateUser', 'RedeemPasswordSetupToken'])
 
 export interface GrpcCallOptions {
   /** Extra metadata. An `authorization` already in it is sent as is (the ops script's own token). */

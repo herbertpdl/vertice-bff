@@ -55,7 +55,7 @@ describe('grpcCall', () => {
     expect(inAnonymousRequest.stub.seen).toBeUndefined()
   })
 
-  it.each(['VerifyCredentials', 'CreateUser', 'SetPasswordWithToken'])(
+  it.each(['VerifyCredentials', 'CreateUser', 'RedeemPasswordSetupToken'])(
     'sends the service token on %s with asService and no user',
     async (method) => {
       const { stub, call } = requestContext.run({}, () => callRpc(method, { asService: true }))
@@ -73,7 +73,7 @@ describe('grpcCall', () => {
   })
 
   it('allows the service token on exactly the three public auth RPCs', () => {
-    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual(['CreateUser', 'SetPasswordWithToken', 'VerifyCredentials'])
+    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual(['CreateUser', 'RedeemPasswordSetupToken', 'VerifyCredentials'])
   })
 
   describe('anonymous', () => {

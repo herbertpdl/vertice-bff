@@ -166,9 +166,9 @@ export async function deleteAccount(userId: number, password: string): Promise<v
  * First access: sets the password with a setup token. An unknown, expired or used token is a
  * 400 `INVALID_SETUP_TOKEN` rather than the upstream 401, which clients read as a logout.
  */
-export async function setupPassword(token: string, newPassword: string): Promise<void> {
+export async function setupPassword(token: string, newPassword: string): Promise<userService.RedeemedSetup> {
   try {
-    await userService.setPasswordWithToken(token, newPassword)
+    return await userService.redeemPasswordSetupToken(token, newPassword)
   } catch (err) {
     if (err instanceof HttpError && err.statusCode === 401) {
       throw new HttpError(400, 'Invalid or expired password setup link', 'INVALID_SETUP_TOKEN')

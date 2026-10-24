@@ -104,7 +104,7 @@ export function addFakeUsers(count: number, role: Role = 'CLIENT'): { ids: numbe
 export const FAKE_PASSWORD = 'correct-horse-battery'
 const withoutPassword = new Set<number>([ids.clientA2])
 
-/** What the fake `CreatePasswordSetupToken` issues; `SetPasswordWithToken` accepts only these. */
+/** What the fake `CreatePasswordSetupToken` issues; `RedeemPasswordSetupToken` accepts only these. */
 export const setupTokenFor = (userId: number) => `issued-${userId}`
 
 const trainerClients: [trainerId: number, clientId: number][] = [
@@ -272,7 +272,7 @@ const exerciseRes = (e: (typeof exercises)[number] = exercises[0]!) => ({
  * ops scripts' `service:ops` only on what `issue-setup-tokens` needs. Both carry `role: SERVICE`.
  */
 export const API_SERVICE_SUBJECT_RPCS: Readonly<Record<string, readonly string[]>> = {
-  'service:bff': ['VerifyCredentials', 'CreateUser', 'SetPasswordWithToken'],
+  'service:bff': ['VerifyCredentials', 'CreateUser', 'RedeemPasswordSetupToken'],
   'service:ops': ['ListUsers', 'CreatePasswordSetupToken'],
 }
 
@@ -488,12 +488,13 @@ const handlers: Record<string, (req: Req) => unknown> = {
     token: setupTokenFor(Number(r.userId)),
     expiresAt: '2099-01-01T00:00:00Z',
   }),
-  SetPasswordWithToken: (r) => {
+  RedeemPasswordSetupToken: (r) => {
     const userId = Number(/^issued-(\d+)$/.exec(String(r.token))?.[1])
-    if (!users.some((u) => u.id === userId)) {
+    const user = users.find((u) => u.id === userId)
+    if (!user) {
       upstreamError(status.UNAUTHENTICATED, 'Invalid or expired password setup token')
     }
-    return {}
+    return userRes(user, 'contact')
   },
   ListUsersWithoutPassword: (r) => ({
     users: users

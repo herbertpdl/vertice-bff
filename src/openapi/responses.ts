@@ -99,6 +99,14 @@ const sessionUserSchema = named(
 
 export const sessionSchema = named('AuthSession', z.object({ token: z.string(), user: sessionUserSchema }))
 
+export const passwordSetupResultSchema = named(
+  'PasswordSetupResult',
+  z.object({
+    role: roleSchema.describe('Whose first access it was: the web shows a CLIENT the “use the app” screen.'),
+    email: z.string().describe('The account’s email, so the client can be sent to the app with it filled in.'),
+  }),
+)
+
 export const consentSchema = named(
   'Consent',
   z.object({
@@ -453,6 +461,7 @@ type Resolved<F extends (...args: never[]) => Promise<unknown>> = Awaited<Return
 export type ResponseSchemasMatchServices = [
   Assert<SameShape<Out<typeof roleSchema>, userService.Role>>,
   Assert<SameShape<Out<typeof sessionSchema>, authService.Session>>,
+  Assert<SameShape<Out<typeof passwordSetupResultSchema>, userService.RedeemedSetup>>,
   Assert<SameShape<Out<typeof consentSchema>, userService.Consent>>,
   Assert<SameShape<Out<typeof meSchema>, userService.Me>>,
   Assert<SameShape<Out<typeof legalVersionsSchema>, LegalVersions>>,

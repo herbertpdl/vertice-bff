@@ -71,8 +71,14 @@ service UserService {
   rpc CreatePasswordSetupToken(CreatePasswordSetupTokenRequest) returns (CreatePasswordSetupTokenResponse);
   // Sets the password of the token's user and consumes the token. An unknown, expired or already
   // used token fails the same way: UNAUTHENTICATED "Invalid or expired password setup token".
-  // service:bff only.
+  // service:bff only. Deprecated: use RedeemPasswordSetupToken, which also says whose password it was.
   rpc SetPasswordWithToken(SetPasswordWithTokenRequest) returns (google.protobuf.Empty);
+  // Same as SetPasswordWithToken, and returns the token's user in the contact view (id, name, role,
+  // email), so the caller can tell a client's first access from a trainer's and point a client to
+  // the mobile app with their email filled in. The user is only ever returned after the token was
+  // consumed: an unknown, expired or used token fails exactly like SetPasswordWithToken and reveals
+  // nothing about whose it was. service:bff only.
+  rpc RedeemPasswordSetupToken(RedeemPasswordSetupTokenRequest) returns (UserResponse);
   // Users who have no password yet (e.g. clients created by a trainer), optionally filtered by role,
   // so a setup token can be issued to each of them. ADMIN and service:ops see everyone; a TRAINER
   // only their own active clients. Summary view, not paginated.
@@ -237,6 +243,11 @@ message CreatePasswordSetupTokenResponse {
   string token = 1;
   // ISO-8601 instant after which the token is rejected.
   string expires_at = 2;
+}
+
+message RedeemPasswordSetupTokenRequest {
+  string token = 1;
+  string password = 2;
 }
 
 message SetPasswordWithTokenRequest {

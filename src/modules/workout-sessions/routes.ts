@@ -22,24 +22,26 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
   app.addHook('preHandler', app.requireRole('TRAINER', 'CLIENT'))
 
-  app.get<{ Params: { workoutId: string }; Querystring: { weekStartDate?: string; clientId?: string } }>(
+  app.get<{ Params: { workoutId: string }; Querystring: { weekStartDate?: string } }>(
     '/',
     {
+      // Starting (or resuming) a session is the client's own: a trainer reads logs, never opens a
+      // session as their client (vertice-api's GetOrStartWorkoutLog refuses a TRAINER too).
+      preHandler: app.requireRole('CLIENT'),
       schema: routeDoc({
         operationId: 'getWorkoutSession',
         summary: 'The “do a workout” screen in one call',
         description:
           'Starts (or resumes) the week’s log and merges in what was recorded last time per set ' +
-          '(`lastPerformed`) and this session’s (`current`). A CLIENT’s `clientId` is ignored; a TRAINER must pass the ' +
-          'client of the workout’s plan. 409 when no log exists for an earlier week (logs are only started in the current one).',
+          '(`lastPerformed`) and this session’s (`current`). The caller’s own session: CLIENT only (a trainer reads ' +
+          'logs through `GET /workout-logs`). 409 when no log exists for an earlier week (logs are only started in the current one).',
         tag: 'Workout sessions',
-        roles: ['TRAINER', 'CLIENT'],
+        roles: ['CLIENT'],
         params: idParams('workoutId'),
         query: z.object({
           weekStartDate: isoDateSchema
             .optional()
             .describe('A business date, and a Monday. Defaults to the current week’s Monday in America/Sao_Paulo.'),
-          clientId: idQuery('Required for a TRAINER.'),
         }),
         ok: { status: 200, description: 'The workout, its sets with last results, and the week’s log.', schema: workoutSessionSchema },
         errors: [403, 404, 409],
@@ -49,15 +51,11 @@ export async function workoutSessionRoutes(app: FastifyInstance) {
       const workoutId = parseId(req.params.workoutId)
       const user = req.user!
       const query = weekStartDateQuerySchema.parse(req.query)
-      const clientId = user.role === 'CLIENT' ? user.id : requireQueryId(query.clientId, 'clientId')
-
       const plan = await assertOwnsWorkout(user, workoutId)
-      // assertOwnsWorkout already confirmed the plan is the caller's; for a TRAINER the
-      // requested client must also be that plan's (a CLIENT's clientId is their own).
-      assertPlanBelongsToClient(plan, clientId)
+      assertPlanBelongsToClient(plan, user.id)
 
       const weekStartDate = query.weekStartDate ?? currentWeekStartDate()
-      return sessionService.getWorkoutSession(workoutId, clientId, weekStartDate)
+      return sessionService.getWorkoutSession(workoutId, user.id, weekStartDate)
     },
   )
 
