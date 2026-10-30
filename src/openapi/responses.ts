@@ -253,6 +253,14 @@ export const exerciseSchema = named(
   }),
 )
 
+export const exercisePageSchema = named(
+  'ExercisePage',
+  z.object({
+    exercises: z.array(exerciseSchema).describe('In upstream order: do not re-sort client-side.'),
+    nextCursor: z.string().nullable().describe('Send back as `cursor` (same filter) for the next page; `null` on the last page.'),
+  }),
+)
+
 // ---- plans, workouts, sets ----------------------------------------------------------------------
 
 export const trainingPlanSchema = named(
@@ -472,6 +480,7 @@ export type ResponseSchemasMatchServices = [
   Assert<SameShape<Out<typeof clientOverviewSchema>, clientService.ClientOverview>>,
   Assert<SameShape<Out<typeof muscleGroupSchema>, exerciseService.MuscleGroup>>,
   Assert<SameShape<Out<typeof exerciseSchema>, exerciseService.Exercise>>,
+  Assert<SameShape<Out<typeof exercisePageSchema>, exerciseService.ExercisePage>>,
   Assert<SameShape<Out<typeof trainingPlanSchema>, planService.TrainingPlan>>,
   Assert<SameShape<Out<typeof workoutSchema>, workoutService.Workout>>,
   Assert<SameShape<Out<typeof exerciseSetSchema>, exerciseSetService.ExerciseSet>>,

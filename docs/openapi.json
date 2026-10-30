@@ -845,6 +845,30 @@
         ],
         "additionalProperties": false
       },
+      "ExercisePage": {
+        "type": "object",
+        "properties": {
+          "exercises": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Exercise"
+            },
+            "description": "In upstream order: do not re-sort client-side."
+          },
+          "nextCursor": {
+            "description": "Send back as `cursor` (same filter) for the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "exercises",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      },
       "ExerciseRequest": {
         "type": "object",
         "properties": {
@@ -3500,11 +3524,11 @@
     "/api/exercises": {
       "get": {
         "operationId": "listExercises",
-        "summary": "List the exercise catalog",
+        "summary": "One page of the exercise catalog",
         "tags": [
           "Exercises"
         ],
-        "description": "Roles: TRAINER, ADMIN. A trainer sees the starter set and their own exercises; an ADMIN the starter set only. In upstream order: do not re-sort client-side. An empty `muscleGroupId` or `q` means no filter.",
+        "description": "Roles: TRAINER, ADMIN. A trainer sees the starter set and their own exercises; an ADMIN the starter set only. In upstream order: do not re-sort client-side. An empty `muscleGroupId` or `q` means no filter. Always paged (30 by default, at most 50): follow `nextCursor` with the same filter for more.",
         "parameters": [
           {
             "schema": {
@@ -3526,6 +3550,27 @@
             "name": "q",
             "required": false,
             "description": "Case-insensitive name search, trimmed."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Page size; 30 when absent."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "`nextCursor` of the previous page. Opaque; a malformed one is a 400."
           }
         ],
         "security": [
@@ -3539,14 +3584,11 @@
         ],
         "responses": {
           "200": {
-            "description": "The exercises.",
+            "description": "One page of exercises.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Exercise"
-                  }
+                  "$ref": "#/components/schemas/ExercisePage"
                 }
               }
             }

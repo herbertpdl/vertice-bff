@@ -10,7 +10,8 @@ option java_multiple_files = true;
 service ExerciseService {
   // The 14 launch muscle groups in catalog order. Needs no caller identity.
   rpc ListMuscleGroups(ListMuscleGroupsRequest) returns (ListMuscleGroupsResponse);
-  // The caller's own exercises plus the shared starter set, optionally filtered and searched.
+  // One page of the caller's own exercises plus the shared starter set, optionally filtered and
+  // searched.
   rpc ListExercises(ListExercisesRequest) returns (ListExercisesResponse);
   rpc GetExercise(GetExerciseRequest) returns (ExerciseResponse);
   rpc CreateExercise(ExerciseRequest) returns (ExerciseResponse);
@@ -61,10 +62,18 @@ message ListExercisesRequest {
   int64 muscle_group_id = 1;
   // Case-insensitive substring of the name; empty = no filter; at most 100 characters.
   string search = 2;
+  // Exercises per page. 0 means the default (30); anything above the maximum (50) is lowered to
+  // it; a negative value is INVALID_ARGUMENT.
+  int32 page_size = 3;
+  // next_page_token from the previous page, sent with the same filter and search; empty for the
+  // first page. Opaque: pass it back as is. A malformed token is INVALID_ARGUMENT.
+  string page_token = 4;
 }
 
 message ListExercisesResponse {
   repeated ExerciseResponse exercises = 1;
+  // Pass as page_token to get the next page. Empty on the last page.
+  string next_page_token = 2;
 }
 
 message GetExerciseRequest {

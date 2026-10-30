@@ -45,6 +45,8 @@ Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Eve
 
 **`ADMIN` has no defined product yet** (no PRD; audit QUAL-BFF-001, plan item P1-02). Until one exists, an ADMIN keeps only what is generic: their own account and the exercise catalog reads. Every trainer- or client-scoped route answers an ADMIN with **403 `FORBIDDEN` `Requires role: …`** before any upstream call; there is no ADMIN bypass in the BFF's ownership checks. (vertice-api still lets ADMIN through on most RPCs; the BFF is just narrower.) Giving ADMIN a feature needs a short PRD first, then explicit routes.
 
+**`GET /exercises` is always paged** (spec `docs/specs/lazy-exercise-search/spec.md`): the body is `{ exercises, nextCursor }`, at most `limit` rows (1–50, 30 when absent). For more, send `nextCursor` back as `cursor` with the same `muscleGroupId`/`q`; it is `null` on the last page. The cursor is opaque (today an offset, so a row added or removed between two requests can shift the rest by one); a malformed one is a 400 `VALIDATION_ERROR` from vertice-api. The web and mobile pickers and catalog screens don't call it until the search has 3 or more letters or a muscle group is chosen; that rule is the clients', not the route's.
+
 Which roles each route admits is the `Access` column of the route reference below. It is generated from the route declarations, and `src/test/route-authorization.test.ts` pins it to what the routes actually enforce. Notes: `GET /exercises` also admits ADMIN, who sees the starter set; `GET /exercises/:id` is open to any role and vertice-api decides visibility; everything scoped to a trainer or a client is checked against the caller's own data on top of the role.
 
 <!-- BEGIN GENERATED ROUTE REFERENCE (npm run openapi) -->
@@ -98,7 +100,7 @@ The exercise catalog (shared starter set plus each trainer’s own) and muscle g
 
 | Method | Path | Access | `operationId` | Summary |
 |---|---|---|---|---|
-| GET | `/api/exercises` | TRAINER, ADMIN | `listExercises` | List the exercise catalog |
+| GET | `/api/exercises` | TRAINER, ADMIN | `listExercises` | One page of the exercise catalog |
 | POST | `/api/exercises` | TRAINER | `createExercise` | Create an exercise |
 | GET | `/api/exercises/{id}` | any role | `getExercise` | One exercise |
 | PATCH | `/api/exercises/{id}` | TRAINER | `updateExercise` | Replace an exercise |
