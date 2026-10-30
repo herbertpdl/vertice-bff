@@ -504,7 +504,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
 
   // ExerciseService
   ListMuscleGroups: () => ({ muscleGroups: [{ id: '1', name: 'Peito' }] }),
-  ListExercises: () => ({ exercises: [exerciseRes()] }),
+  ListExercises: () => ({ exercises: [exerciseRes()], nextPageToken: '' }),
   GetExercise: (r) => getVisibleExercise(r.id),
   CreateExercise: () => exerciseRes(),
   UpdateExercise: (r) => exerciseRes(getOwnedExercise(r.id, 'changed')),

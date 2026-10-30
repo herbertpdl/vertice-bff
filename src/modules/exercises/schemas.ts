@@ -33,6 +33,11 @@ export const exerciseListQuerySchema = z.object({
     (value) => (typeof value === 'string' ? emptyAsAbsent(value.trim()) : value),
     utf16String(100).min(1).optional(),
   ),
+  // Page size (vertice-api: 30 when absent, never more than 50). Above 50 is a 400 here rather
+  // than silently lowered, so a client never believes it got more than one page.
+  limit: z.preprocess(emptyAsAbsent, z.coerce.number().int().min(1).max(50).optional()),
+  // `nextCursor` from the previous page, sent with the same filter. Opaque: vertice-api checks it.
+  cursor: z.preprocess(emptyAsAbsent, z.string().max(64).optional()),
 })
 
 export type ExerciseListQuery = z.infer<typeof exerciseListQuerySchema>

@@ -38,6 +38,18 @@ describe('exercise routes', () => {
     expect(res.json().error.details.fieldErrors.muscleGroupId).toBeDefined()
   })
 
+  it.each(['0', '51', 'abc', '1.5'])('GET /api/exercises?limit=%s with a TRAINER token is 400 VALIDATION_ERROR', async (limit) => {
+    const res = await app.inject({ method: 'GET', url: `/api/exercises?limit=${limit}`, headers: bearer('TRAINER') })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error.details.fieldErrors.limit).toBeDefined()
+  })
+
+  it('GET /api/exercises with a cursor over 64 characters is 400 VALIDATION_ERROR', async () => {
+    const res = await app.inject({ method: 'GET', url: `/api/exercises?cursor=${'1'.repeat(65)}`, headers: bearer('TRAINER') })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error.details.fieldErrors.cursor).toBeDefined()
+  })
+
   it('GET /api/muscle-groups without a token is 401 UNAUTHORIZED', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/muscle-groups' })
     expect(res.statusCode).toBe(401)

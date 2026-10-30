@@ -1,3 +1,3 @@
 # vertice-api commit that protos/vertice/** is synced from. Bump, then run: npm run sync:protos
 # (merge the proto change in vertice-api first; use the full 40-char SHA of the merge commit on main)
-441e858b6c27d9da9016e07739f3292e76bf9fde
+da0d4615fe3c82394500c684bdf4bd9c4666612f

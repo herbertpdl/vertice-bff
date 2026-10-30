@@ -55,18 +55,35 @@ export async function listMuscleGroups(): Promise<MuscleGroup[]> {
   return res.muscleGroups.map(toMuscleGroup)
 }
 
+export interface ExercisePage {
+  exercises: Exercise[]
+  /** Pass back as `cursor` for the next page; `null` on the last one. */
+  nextCursor: string | null
+}
+
+export interface ExerciseListFilter {
+  muscleGroupId?: number
+  search?: string
+  limit?: number
+  cursor?: string
+}
+
 /**
- * Upstream scopes the list to the caller (TRAINER: starter set + own; ADMIN: starter set)
- * and owns the ordering and search semantics — the result is returned as-is, never
- * re-sorted or re-filtered here.
+ * One page, never the whole catalog. Upstream scopes the list to the caller (TRAINER: starter
+ * set + own; ADMIN: starter set) and owns the ordering, search semantics and page bounds — the
+ * page is returned as-is, never re-sorted or re-filtered here.
  */
-export async function listExercises(filter: { muscleGroupId?: number; search?: string } = {}): Promise<Exercise[]> {
-  const res = await grpcCall<{ muscleGroupId: number; search: string }, { exercises: ExerciseResponse[] }>(
-    exerciseClient,
-    'ListExercises',
-    { muscleGroupId: filter.muscleGroupId ?? 0, search: filter.search ?? '' },
-  )
-  return res.exercises.map(toExercise)
+export async function listExercises(filter: ExerciseListFilter = {}): Promise<ExercisePage> {
+  const res = await grpcCall<
+    { muscleGroupId: number; search: string; pageSize: number; pageToken: string },
+    { exercises: ExerciseResponse[]; nextPageToken: string }
+  >(exerciseClient, 'ListExercises', {
+    muscleGroupId: filter.muscleGroupId ?? 0,
+    search: filter.search ?? '',
+    pageSize: filter.limit ?? 0,
+    pageToken: filter.cursor ?? '',
+  })
+  return { exercises: res.exercises.map(toExercise), nextCursor: res.nextPageToken || null }
 }
 
 export async function getExercise(id: number): Promise<Exercise> {

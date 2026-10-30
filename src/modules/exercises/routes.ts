@@ -6,7 +6,7 @@ import * as exerciseService from './service.js'
 import { getExerciseProgress } from '../workout-sessions/service.js'
 import { assertIsTrainersClient } from '../clients/service.js'
 import { idParams, idQuery, routeDoc } from '../../openapi/docs.js'
-import { exerciseSchema, muscleGroupSchema, progressPointSchema } from '../../openapi/responses.js'
+import { exercisePageSchema, exerciseSchema, muscleGroupSchema, progressPointSchema } from '../../openapi/responses.js'
 
 // Exercise visibility (starter set vs. a trainer's private exercises), the starter-set
 // refusals and the in-use delete refusal are enforced by vertice-api from the forwarded
@@ -22,23 +22,31 @@ export default async function exerciseRoutes(app: FastifyInstance) {
       preHandler: app.requireRole('TRAINER', 'ADMIN'),
       schema: routeDoc({
         operationId: 'listExercises',
-        summary: 'List the exercise catalog',
+        summary: 'One page of the exercise catalog',
         description:
           'A trainer sees the starter set and their own exercises; an ADMIN the starter set only. ' +
-          'In upstream order: do not re-sort client-side. An empty `muscleGroupId` or `q` means no filter.',
+          'In upstream order: do not re-sort client-side. An empty `muscleGroupId` or `q` means no filter. ' +
+          'Always paged (30 by default, at most 50): follow `nextCursor` with the same filter for more.',
         tag: 'Exercises',
         roles: ['TRAINER', 'ADMIN'],
         query: z.object({
           muscleGroupId: idQuery('Exercises with this group as primary or secondary.'),
           q: z.string().max(100).optional().describe('Case-insensitive name search, trimmed.'),
+          limit: z.number().int().min(1).max(50).optional().describe('Page size; 30 when absent.'),
+          cursor: z.string().max(64).optional().describe('`nextCursor` of the previous page. Opaque; a malformed one is a 400.'),
         }),
-        ok: { status: 200, description: 'The exercises.', schema: z.array(exerciseSchema) },
-        errors: [403, 404],
+        ok: { status: 200, description: 'One page of exercises.', schema: exercisePageSchema },
+        errors: [400, 403, 404],
       }),
     },
     async (req) => {
       const query = exerciseListQuerySchema.parse(req.query)
-      return exerciseService.listExercises({ muscleGroupId: query.muscleGroupId, search: query.q })
+      return exerciseService.listExercises({
+        muscleGroupId: query.muscleGroupId,
+        search: query.q,
+        limit: query.limit,
+        cursor: query.cursor,
+      })
     },
   )
 
