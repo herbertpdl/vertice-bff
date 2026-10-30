@@ -287,6 +287,24 @@ const routes: RouteCase[] = [
   { route: 'GET /api/exercises', roles: ['TRAINER', 'ADMIN'], ok: { as: 'trainerA', url: '/api/exercises' } },
   { route: 'GET /api/exercises/:id', ok: { as: 'clientA', url: `/api/exercises/${ids.exercise}` } },
   {
+    route: 'GET /api/exercises/with-progress',
+    roles: ['TRAINER', 'CLIENT'],
+    ok: { as: 'trainerA', url: `/api/exercises/with-progress?clientId=${ids.clientA}` },
+    denied: [
+      { as: 'trainerA', url: `/api/exercises/with-progress?clientId=${ids.clientB}`, why: "query: another trainer's client" },
+      { as: 'trainerA', url: '/api/exercises/with-progress', why: 'query: clientId missing', status: 400 },
+    ],
+    scoped: [
+      {
+        as: 'clientA',
+        url: `/api/exercises/with-progress?clientId=${ids.clientB}`,
+        why: 'query: a CLIENT always lists their own history',
+        rpc: 'ListProgressExercises',
+        sends: { clientId: ids.clientA },
+      },
+    ],
+  },
+  {
     route: 'GET /api/exercises/:id/progress',
     roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'trainerA', url: `/api/exercises/${ids.exercise}/progress?clientId=${ids.clientA}` },

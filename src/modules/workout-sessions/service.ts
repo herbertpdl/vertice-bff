@@ -198,6 +198,25 @@ export async function getExerciseProgress(exerciseId: number, clientId: number):
   return res.points.map((p) => ({ weekStartDate: p.weekStartDate, weight: Number(p.weight) }))
 }
 
+export interface ProgressExercise {
+  id: number
+  name: string
+}
+
+/**
+ * The exercises `getExerciseProgress` has points for, most recently trained first (upstream's
+ * order and visibility: a TRAINER only sees exercises their catalog shows). Bounded by the
+ * client's history, not the catalog, so it is never paged.
+ */
+export async function listProgressExercises(clientId: number): Promise<ProgressExercise[]> {
+  const res = await grpcCall<{ clientId: number }, { exercises: { id: string; name: string }[] }>(
+    workoutSessionClient,
+    'ListProgressExercises',
+    { clientId },
+  )
+  return res.exercises.map((e) => ({ id: Number(e.id), name: e.name }))
+}
+
 /**
  * Single-call aggregate for the client's "do workout" screen: the full
  * workout structure (exercises + sets + video), an in-progress or freshly

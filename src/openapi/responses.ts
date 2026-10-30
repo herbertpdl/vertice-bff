@@ -261,6 +261,11 @@ export const exercisePageSchema = named(
   }),
 )
 
+export const progressExerciseSchema = named(
+  'ProgressExercise',
+  z.object({ id, name: z.string() }),
+)
+
 // ---- plans, workouts, sets ----------------------------------------------------------------------
 
 export const trainingPlanSchema = named(
@@ -481,6 +486,7 @@ export type ResponseSchemasMatchServices = [
   Assert<SameShape<Out<typeof muscleGroupSchema>, exerciseService.MuscleGroup>>,
   Assert<SameShape<Out<typeof exerciseSchema>, exerciseService.Exercise>>,
   Assert<SameShape<Out<typeof exercisePageSchema>, exerciseService.ExercisePage>>,
+  Assert<SameShape<Out<typeof progressExerciseSchema>, sessionService.ProgressExercise>>,
   Assert<SameShape<Out<typeof trainingPlanSchema>, planService.TrainingPlan>>,
   Assert<SameShape<Out<typeof workoutSchema>, workoutService.Workout>>,
   Assert<SameShape<Out<typeof exerciseSetSchema>, exerciseSetService.ExerciseSet>>,
