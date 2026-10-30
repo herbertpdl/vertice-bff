@@ -44,6 +44,9 @@ service WorkoutSessionService {
   rpc GetLastSetLogs(GetLastSetLogsRequest) returns (GetLastSetLogsResponse);
   // The client themself, their active trainer, ADMIN.
   rpc GetExerciseProgress(GetExerciseProgressRequest) returns (GetExerciseProgressResponse);
+  // The exercises GetExerciseProgress has points for (a weighted set in a completed session),
+  // most recently trained first. Same callers as GetExerciseProgress.
+  rpc ListProgressExercises(ListProgressExercisesRequest) returns (ListProgressExercisesResponse);
 }
 
 message WorkoutLogResponse {
@@ -159,4 +162,19 @@ message ProgressPoint {
 
 message GetExerciseProgressResponse {
   repeated ProgressPoint points = 1;
+}
+
+message ListProgressExercisesRequest {
+  int64 client_id = 1;
+}
+
+message ProgressExercise {
+  int64 id = 1;
+  string name = 2;
+}
+
+message ListProgressExercisesResponse {
+  // Bounded by what the client has trained, not by the catalog. A trainer (or ADMIN) sees only
+  // exercises visible to them in the catalog: the starter set and their own.
+  repeated ProgressExercise exercises = 1;
 }

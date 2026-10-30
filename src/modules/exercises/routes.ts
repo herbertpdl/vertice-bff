@@ -3,10 +3,16 @@ import { z } from 'zod'
 import { parseId, requireQueryId } from '../../lib/net.js'
 import { exerciseInputSchema, exerciseListQuerySchema, exerciseProgressQuerySchema } from './schemas.js'
 import * as exerciseService from './service.js'
-import { getExerciseProgress } from '../workout-sessions/service.js'
+import { getExerciseProgress, listProgressExercises } from '../workout-sessions/service.js'
 import { assertIsTrainersClient } from '../clients/service.js'
 import { idParams, idQuery, routeDoc } from '../../openapi/docs.js'
-import { exercisePageSchema, exerciseSchema, muscleGroupSchema, progressPointSchema } from '../../openapi/responses.js'
+import {
+  exercisePageSchema,
+  exerciseSchema,
+  muscleGroupSchema,
+  progressExerciseSchema,
+  progressPointSchema,
+} from '../../openapi/responses.js'
 
 // Exercise visibility (starter set vs. a trainer's private exercises), the starter-set
 // refusals and the in-use delete refusal are enforced by vertice-api from the forwarded
@@ -47,6 +53,36 @@ export default async function exerciseRoutes(app: FastifyInstance) {
         limit: query.limit,
         cursor: query.cursor,
       })
+    },
+  )
+
+  // Registered before `/:id`; find-my-way prefers the static segment anyway. Same callers and
+  // `clientId` rule as `/:id/progress`, whose options this lists.
+  app.get<{ Querystring: { clientId?: string } }>(
+    '/with-progress',
+    {
+      preHandler: app.requireRole('TRAINER', 'CLIENT'),
+      schema: routeDoc({
+        operationId: 'listProgressExercises',
+        summary: 'Exercises with progress for a client',
+        description:
+          'The exercises `GET /exercises/:id/progress` has points for (a weighted set in a completed session), ' +
+          'most recently trained first. A TRAINER only gets exercises their catalog shows them. ' +
+          'A CLIENT’s `clientId` is ignored (their own is used); a TRAINER must pass one of their clients. Not paged: ' +
+          'bounded by what the client has trained.',
+        tag: 'Exercises',
+        roles: ['TRAINER', 'CLIENT'],
+        query: z.object({ clientId: idQuery('Required for a TRAINER.') }),
+        ok: { status: 200, description: 'The exercises.', schema: z.array(progressExerciseSchema) },
+        errors: [403],
+      }),
+    },
+    async (req) => {
+      const user = req.user!
+      const query = exerciseProgressQuerySchema.parse(req.query)
+      const clientId = user.role === 'CLIENT' ? user.id : requireQueryId(query.clientId, 'clientId')
+      if (user.role === 'TRAINER') await assertIsTrainersClient(user.id, clientId)
+      return listProgressExercises(clientId)
     },
   )
 

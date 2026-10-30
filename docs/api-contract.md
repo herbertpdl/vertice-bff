@@ -102,6 +102,7 @@ The exercise catalog (shared starter set plus each trainer’s own) and muscle g
 |---|---|---|---|---|
 | GET | `/api/exercises` | TRAINER, ADMIN | `listExercises` | One page of the exercise catalog |
 | POST | `/api/exercises` | TRAINER | `createExercise` | Create an exercise |
+| GET | `/api/exercises/with-progress` | TRAINER, CLIENT | `listProgressExercises` | Exercises with progress for a client |
 | GET | `/api/exercises/{id}` | any role | `getExercise` | One exercise |
 | PATCH | `/api/exercises/{id}` | TRAINER | `updateExercise` | Replace an exercise |
 | DELETE | `/api/exercises/{id}` | TRAINER | `deleteExercise` | Delete an exercise |
@@ -394,6 +395,7 @@ There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is g
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or ADMIN` (CLIENT); 400 `VALIDATION_ERROR` for a non-numeric/0/negative/repeated `muscleGroupId` or `q` >100 chars (field `details`); 404 `NOT_FOUND` for an unknown `muscleGroupId`.
 - `GET /exercises/:id` (any role, upstream decides) → `Exercise`. TRAINER: starter or own; ADMIN: starter only; CLIENT: only an exercise used by a workout in one of their own plans.
   - Errors: 403 `FORBIDDEN` (not visible to you; vertice-api's refusal, fixed message); 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
+- `GET /exercises/with-progress?clientId=` (TRAINER, CLIENT) → `{id, name}[]`: the options for the progress graph, i.e. exercises with at least one weighted set in a completed session, most recently trained first. A TRAINER only gets exercises their catalog shows them (starter set and their own); not paged, since it is bounded by the client's history rather than the catalog. Same `clientId` rule as below.
 - `GET /exercises/:id/progress?clientId=` (TRAINER, CLIENT) → `{weekStartDate, weight}[]` (weight-over-time for a graph). **`weight` here is a JSON number**, the one exception to the decimals-are-strings rule below: it is a chart value, converted from the upstream decimal string (`Number(...)`), so it can lose precision. Everywhere else a decimal (`ExerciseSet.weight`, `SetLog.weight`) stays a string. CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or CLIENT` (ADMIN); 400 `VALIDATION_ERROR` `clientId is required` (TRAINER, absent) or field `details` on `clientId` (malformed); 403 `FORBIDDEN` `This client is not one of your clients` (TRAINER).
 - `POST /exercises` `{name, description?, videoUrl?, muscleGroupIds}` (TRAINER only) → `201` `Exercise` (`isStarter: false`, private to the caller).

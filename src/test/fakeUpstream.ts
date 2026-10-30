@@ -597,6 +597,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
   }),
   GetLastSetLogs: () => ({ setLogs: [] }),
   GetExerciseProgress: () => ({ points: [{ weekStartDate: today, weight: '20' }] }),
+  ListProgressExercises: () => ({ exercises: [{ id: String(exercises[0]!.id), name: 'Supino' }] }),
 
   // WorkoutFeedbackService
   SubmitWorkoutFeedback: (r) => {

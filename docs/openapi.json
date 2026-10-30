@@ -1373,6 +1373,24 @@
           "ADVANCED"
         ]
       },
+      "ProgressExercise": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "additionalProperties": false
+      },
       "ProgressPoint": {
         "type": "object",
         "properties": {
@@ -3667,6 +3685,83 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Exercise"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/exercises/with-progress": {
+      "get": {
+        "operationId": "listProgressExercises",
+        "summary": "Exercises with progress for a client",
+        "tags": [
+          "Exercises"
+        ],
+        "description": "Roles: TRAINER, CLIENT. The exercises `GET /exercises/:id/progress` has points for (a weighted set in a completed session), most recently trained first. A TRAINER only gets exercises their catalog shows them. A CLIENT’s `clientId` is ignored (their own is used); a TRAINER must pass one of their clients. Not paged: bounded by what the client has trained.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "clientId",
+            "required": false,
+            "description": "Required for a TRAINER."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The exercises.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProgressExercise"
+                  }
                 }
               }
             }
