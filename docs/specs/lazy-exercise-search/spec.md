@@ -25,4 +25,5 @@ moves in its own PR, pinned to this one; nothing is deployed yet.
 ## 2. Merge and deploy order
 
 vertice-api #78 → this PR (re-pin `protos/.api-ref` to the API merge SHA) → vertice-web-react and
-vertice-mobile (re-pin `.bff-ref`). Deploy the BFF together with, or after, the web build.
+vertice-mobile (re-pin `.bff-ref`). Ship the BFF in the same release as the web and mobile builds:
+neither an old client nor a new one reads the other body shape.
