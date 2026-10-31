@@ -261,7 +261,9 @@ docker build --platform linux/arm64 -f Dockerfile.prod -t vertice-bff .
 Deployed, set at least `JWT_SECRET` (the same value as vertice-api's), `VERTICE_API_GRPC_HOST` /
 `VERTICE_API_GRPC_PORT`, `CORS_ORIGIN` and `TRUST_PROXY`. `TRUST_PROXY` must list every proxy
 between a client and the BFF, or `req.ip` is a proxy's address and users share rate-limit buckets
-(five failed logins would lock everyone out): the VPC CIDR (load balancer, and vertice-web-react's
+(five failed logins would lock everyone out): `loopback` when the task uses ECS Service Connect
+(every request, the load balancer's included, then reaches the BFF from its Envoy sidecar over
+loopback), the VPC CIDR (load balancer, and vertice-web-react's
 server, which must call the BFF privately through Service Connect, not the public URL) plus, behind CloudFront, its origin-facing ranges (`CLOUDFRONT_ORIGIN_FACING` in
 `https://ip-ranges.amazonaws.com/ip-ranges.json`). Never `true` there: the load balancer appends to
 `X-Forwarded-For`, so a client could pick its own IP and skip the login limits. `GET /health` is the
