@@ -249,3 +249,17 @@ types) is not synced.
 A `Dockerfile` is provided for local development (installs dependencies, then runs
 `npm run dev:docker`). It is intended to be built via `vertice-local`'s `docker-compose.yml`,
 which supplies the environment variables needed to reach `vertice-api` and Postgres.
+
+`Dockerfile.prod` builds the deployed image: the compiled `dist/`, production dependencies only,
+`NODE_ENV=production` (JSON logs, and the `JWT_SECRET` / `VERIFY_PASSWORDS` guards apply), run as
+the `node` user on port 3000:
+
+```sh
+docker build -f Dockerfile.prod -t vertice-bff .
+```
+
+Deployed, set at least `JWT_SECRET` (the same value as vertice-api's), `VERTICE_API_GRPC_HOST` /
+`VERTICE_API_GRPC_PORT`, `CORS_ORIGIN` and `TRUST_PROXY` (see `.env.example`). `GET /health` is the
+liveness check; it does not call vertice-api. The image has no curl, so a container health check
+runs Node itself:
+`node -e "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"`.
