@@ -28,6 +28,12 @@ Sibling repos (as local checkouts, e.g. `../vertice-api`, `../vertice-web-react`
 
 Node 22 (`.nvmrc`, `engines.node` `>=22 <23`, `node:22-alpine` in the Dockerfile). CI (`.github/workflows/ci.yml`, job `build-and-test`) runs `npm ci`, `sync:protos --check`, `openapi --check`, typecheck, lint, test, `test:hostile-tz`, build and `npm audit --omit=dev --audit-level=high` on every PR and push to `main`; tests must stay runnable without vertice-api, Postgres or a `.env`.
 
+On pushes to `main` (and manual runs on `main`), the `deploy-gate` and `deploy` jobs at the end of
+`ci.yml` deploy to ECS once every CI job passed: GitHub OIDC role `vertice-bff-deploy`, `Dockerfile.prod`
+for arm64, task definition [`.aws/task-definition.json`](.aws/task-definition.json) (the deployed
+config; change it by PR, never in the console). See the README's "Continuous deployment" for
+the gate, rollback and cross-repo order. Don't rename the CI jobs the deploy `needs`.
+
 Single-file / single-test runs use standard Vitest filtering: `npx vitest run src/grpc/call.test.ts` or `npx vitest run -t "name"`.
 
 ## Architecture
