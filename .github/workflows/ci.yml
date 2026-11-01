@@ -50,36 +50,13 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
 
   # ---- Continuous deployment (see the README's "Continuous deployment") ----
-  # Only main, only after every CI job above passed on this same commit, only while the
-  # repository variable DEPLOY_ENABLED is 'true' (unset it to freeze deploys), and only the newest
-  # commit on main: CI runs once per commit, so an older commit whose CI finishes last must not
-  # overwrite a newer deploy.
-  deploy-gate:
+  # Only main, only after every CI job above passed on this same commit, and only while the
+  # repository variable DEPLOY_ENABLED is 'true' (unset it to freeze deploys).
+  deploy:
     needs: [build-and-test]
     if: >-
       vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      current: ${{ steps.head.outputs.current }}
-    steps:
-      - name: Is this commit still the head of main?
-        id: head
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
-          if [ "$head" = "$GITHUB_SHA" ]; then
-            echo "current=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "current=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::main moved on to ${head}; skipping the deploy of ${GITHUB_SHA} (the newer commit deploys itself)."
-          fi
-
-  deploy:
-    needs: deploy-gate
-    if: needs.deploy-gate.outputs.current == 'true'
     # Native arm64 runner (free on public repos): the Fargate tasks are Graviton/ARM64, and
     # building under QEMU emulation would be several times slower.
     runs-on: ubuntu-24.04-arm
@@ -97,28 +74,48 @@ jobs:
       ECS_CLUSTER: vertice
       ECS_SERVICE: vertice-bff
       CONTAINER_NAME: vertice-bff
+      GH_TOKEN: ${{ github.token }}
     steps:
+      # Only the newest commit on main deploys: CI runs once per commit, so an older commit whose
+      # CI finishes last, or a re-run of an old run, must not overwrite a newer deploy. Checked
+      # here (inside the concurrency slot, on every attempt) and again just before the rollout.
+      - name: Is this commit still the head of main?
+        id: head
+        run: |
+          head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main is now at ${head}; not deploying ${GITHUB_SHA} (the newer commit deploys itself)."
+          fi
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        if: steps.head.outputs.current == 'true'
         with:
           persist-credentials: false
 
       - name: Image tag (12-character commit SHA)
+        if: steps.head.outputs.current == 'true'
         id: tag
         run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials (OIDC)
+        if: steps.head.outputs.current == 'true'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: arn:aws:iam::096571798756:role/vertice-bff-deploy
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Log in to Amazon ECR
+        if: steps.head.outputs.current == 'true'
         id: ecr
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
-      # Tags are immutable in ECR, so a re-run (or a workflow_dispatch redeploy of the same
-      # commit) reuses the image already pushed instead of failing on the push.
+      # Tags are immutable in ECR, so a re-run (or a manual redeploy of the same head commit)
+      # reuses the image already pushed instead of failing on the push.
       - name: Check whether this commit's image is already in ECR
+        if: steps.head.outputs.current == 'true'
         id: existing
         env:
           TAG: ${{ steps.tag.outputs.tag }}
@@ -133,11 +130,11 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
-        if: steps.existing.outputs.exists != 'true'
+        if: steps.head.outputs.current == 'true' && steps.existing.outputs.exists != 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build and push Dockerfile.prod (linux/arm64)
-        if: steps.existing.outputs.exists != 'true'
+        if: steps.head.outputs.current == 'true' && steps.existing.outputs.exists != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -151,6 +148,7 @@ jobs:
           cache-to: type=gha,scope=deploy-arm64,mode=max
 
       - name: Render the task definition with the new image
+        if: steps.head.outputs.current == 'true'
         id: render
         uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
         with:
@@ -158,10 +156,24 @@ jobs:
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
 
+      # A newer commit may have merged during the build; then it deploys itself after this job.
+      - name: Is this commit still the head of main (before the rollout)?
+        if: steps.head.outputs.current == 'true'
+        id: recheck
+        run: |
+          head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main is now at ${head}; not deploying ${GITHUB_SHA} (the newer commit deploys itself)."
+          fi
+
       # Registers a new revision of the task family, points the service at it and waits until
       # the rollout completes. If the new tasks never get healthy, the service's deployment
       # circuit breaker rolls back to the previous revision and this step fails.
       - name: Deploy to ECS and wait for the rollout
+        if: steps.recheck.outputs.current == 'true'
         uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
         with:
           task-definition: ${{ steps.render.outputs.task-definition }}

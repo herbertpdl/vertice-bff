@@ -146,17 +146,18 @@ running `vertice-api` or Postgres. Run the same commands locally before opening 
 ## Continuous deployment
 
 Every push to `main` deploys to the `vertice` ECS cluster (us-east-2) once all of CI has passed on
-that commit: the `deploy-gate` and `deploy` jobs at the end of
+that commit: the `deploy` job at the end of
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Pull requests never deploy.
 
-1. `deploy-gate` skips the deploy unless the repository variable `DEPLOY_ENABLED` is `true`
-   (Settings → Secrets and variables → Actions → Variables; unset it to freeze deploys), and
-   unless the commit is still the head of `main`: CI runs once per commit, so an older commit whose
-   CI finishes last must not overwrite a newer deploy.
-2. `deploy` runs on a native arm64 runner and assumes the `vertice-bff-deploy` IAM role through GitHub
+1. The job runs only while the repository variable `DEPLOY_ENABLED` is `true` (Settings →
+   Secrets and variables → Actions → Variables; unset it to freeze deploys). It deploys only a
+   commit that is still the head of `main`, checked when the job starts and again just before
+   the rollout: CI runs once per commit, so an older commit whose CI finishes last, or a re-run of
+   an old run, must not overwrite a newer deploy. A superseded commit is skipped with a notice.
+2. It runs on a native arm64 runner and assumes the `vertice-bff-deploy` IAM role through GitHub
    OIDC (no AWS keys stored in GitHub; the role trusts only this repository's `main`). It builds
    `Dockerfile.prod` for `linux/arm64`, pushes it to ECR `vertice-bff` tagged with the first 12
-   characters of the commit SHA (tags are immutable; a re-run reuses the pushed image), registers
+   characters of the commit SHA (tags are immutable; a re-run of the head commit reuses the pushed image), registers
    [`.aws/task-definition.json`](.aws/task-definition.json) with that image as a new revision of the
    `vertice-bff` family, and updates the `vertice-bff` service.
 3. It then waits, up to 10 minutes, for the rollout to finish. If the new
@@ -168,7 +169,7 @@ cancelled mid-rollout). To redeploy the head of `main` without a new commit, run
 manually on `main` (Actions → CI → Run workflow).
 
 **The task definition is the file.** `.aws/task-definition.json` is the deployed configuration:
-CPU/memory, environment, the health check and the secret's ARN (a reference, never a value).
+CPU/memory, environment and the health check; a secret appears only as its ARN, never as a value.
 Change it in a pull request; the deploy registers it as is. A change made in the AWS console is
 overwritten by the next deploy.
 
