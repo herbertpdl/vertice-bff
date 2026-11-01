@@ -164,8 +164,8 @@ that commit: the `deploy` job at the end of
    task never becomes healthy, the service's deployment circuit breaker rolls back to the
    previous revision and the job fails.
 
-One deploy of the service runs at a time (concurrency group `deploy-vertice-bff`, never
-cancelled mid-rollout). To redeploy the head of `main` without a new commit, run the CI workflow
+One deploy of the service runs at a time (concurrency group `deploy-vertice-bff`): later ones
+wait in order (`queue: max`) and are never cancelled, so the head of `main` always gets its turn. To redeploy the head of `main` without a new commit, run the CI workflow
 manually on `main` (Actions → CI → Run workflow).
 
 **The task definition is the file.** `.aws/task-definition.json` is the deployed configuration:

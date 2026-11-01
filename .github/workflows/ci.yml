@@ -64,10 +64,13 @@ jobs:
     permissions:
       contents: read
       id-token: write # GitHub OIDC -> the vertice-bff-deploy IAM role; no stored AWS keys
-    # One deploy of this service at a time; a newer one queues instead of cancelling a rollout.
+    # One deploy of this service at a time, in order. `queue: max` keeps every pending deploy
+    # (the default keeps one and cancels the rest, which could cancel the newest commit's deploy
+    # while an older one later skips itself as superseded); superseded ones skip at the first step.
     concurrency:
       group: deploy-vertice-bff
       cancel-in-progress: false
+      queue: max
     env:
       AWS_REGION: us-east-2
       ECR_REPOSITORY: vertice-bff
