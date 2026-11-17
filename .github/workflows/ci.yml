@@ -33,10 +33,18 @@ jobs:
       - run: npm ci
       - name: Protos match the pinned vertice-api commit
         # vertice-api is private: VERTICE_API_READ_TOKEN is a fine-grained token with contents:read on
-        # vertice-api only. Fails when protos/vertice differs from protos/.api-ref.
+        # vertice-api only, stored twice (Actions secret and Dependabot secret, since Dependabot runs
+        # see only the latter); rotate both. Fork PRs get no secrets, so they skip with a warning.
+        # Fails when protos/vertice differs from protos/.api-ref.
         env:
           GITHUB_TOKEN: ${{ secrets.VERTICE_API_READ_TOKEN }}
-        run: npm run sync:protos -- --check
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork || false }}
+        run: |
+          if [ -z "$GITHUB_TOKEN" ] && [ "$IS_FORK" = "true" ]; then
+            echo "::warning::Fork PR: no token to read the private vertice-api; proto check skipped."
+            exit 0
+          fi
+          npm run sync:protos -- --check
       - name: docs/openapi.json and the route reference are up to date
         # Generated from the route schemas. Fails when a route or schema changed without `npm run openapi`.
         run: npm run openapi -- --check

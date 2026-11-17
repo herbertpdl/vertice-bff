@@ -142,6 +142,8 @@ version in `.nvmrc`: `npm ci`, `npm run sync:protos -- --check`, `npm run openap
 `npm run typecheck`, `npm run lint`, `npm test`, `npm run test:hostile-tz`, `npm run build` and
 `npm audit --omit=dev --audit-level=high`. The tests mock the upstream, so CI needs no
 running `vertice-api` or Postgres. Run the same commands locally before opening a PR.
+vertice-api is private, so the proto check reads it with the `VERTICE_API_READ_TOKEN` secret
+(contents:read on vertice-api only), set both as an Actions and a Dependabot secret.
 
 ## Continuous deployment
 
@@ -286,7 +288,9 @@ Workflow for a contract change:
 
 1. Change the proto in `vertice-api` and merge it.
 2. Put the merge commit's full SHA in `protos/.api-ref`.
-3. Run `npm run sync:protos` and commit both. (`-- --local` reads the sibling `../vertice-api` clone instead of GitHub.)
+3. Run `npm run sync:protos` and commit both. vertice-api is private, so run it as
+   `GITHUB_TOKEN=$(gh auth token) npm run sync:protos`, or use `-- --local` to read the sibling
+   `../vertice-api` clone instead of GitHub.
 
 `npm run sync:protos -- --check` changes nothing and exits 1 if the copy differs from the pin; CI runs it,
 so a proto edited by hand, or a pin bumped without syncing, fails the build. `protos/google/**` (well-known
