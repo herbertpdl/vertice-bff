@@ -31,7 +31,7 @@ type Tag = (typeof TAGS)[number]['name']
 const ERROR_DESCRIPTIONS = {
   400: 'A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.',
   401: 'Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).',
-  403: 'The role or the owner check refuses the caller (`FORBIDDEN`).',
+  403: 'The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.',
   404: 'Not found (`NOT_FOUND`).',
   409: 'Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).',
   413: 'The requested data is too large to return (`TOO_LARGE`).',
@@ -55,6 +55,8 @@ export interface RouteDoc {
   roles?: Role[]
   params?: z.ZodType
   query?: z.ZodType
+  /** Request headers the route reads (lower-case names), documented as header parameters. */
+  headers?: z.ZodType
   body?: z.ZodType
   /** The success response. `schema` is omitted for a 204. */
   ok: { status: 200 | 201 | 204; description: string; schema?: z.ZodType; contentType?: string }
@@ -105,6 +107,7 @@ export function routeDoc(doc: RouteDoc): FastifySchema {
     security: auth === 'public' ? [] : [{ bearerAuth: [] }],
     ...(doc.params ? { params: doc.params } : {}),
     ...(doc.query ? { querystring: doc.query } : {}),
+    ...(doc.headers ? { headers: doc.headers } : {}),
     ...(doc.body ? { body: doc.body } : {}),
     response,
   } as FastifySchema

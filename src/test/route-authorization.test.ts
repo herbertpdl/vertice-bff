@@ -64,6 +64,8 @@ interface Call {
   as: Actor
   url: string
   body?: unknown
+  /** Send a mobile session token instead of a web one (`POST /auth/session/renew` renews only those). */
+  mobile?: true
 }
 
 interface Denied extends Call {
@@ -116,6 +118,11 @@ const routes: RouteCase[] = [
       url: '/api/auth/register',
       body: { name: 'Novo', email: 'novo@vertice.test', password: 'secret-123', role: 'TRAINER', cpf: '52998224725', acceptedTermsVersion: 'v1' },
     },
+  },
+  {
+    route: 'POST /api/auth/session/renew',
+    roles: ['TRAINER', 'CLIENT'],
+    ok: { as: 'clientA', url: '/api/auth/session/renew', mobile: true },
   },
   { route: 'GET /api/auth/me', ok: { as: 'clientA', url: '/api/auth/me' } },
   {
@@ -932,7 +939,7 @@ describe('route authorization', () => {
     app.inject({
       method: method as Method,
       url: call.url,
-      headers: call.as ? bearer(call.as) : {},
+      headers: call.as ? bearer(call.as, { mobile: call.mobile }) : {},
       ...(call.body === undefined ? {} : { payload: call.body as object }),
     })
 

@@ -12,6 +12,11 @@ const ROLES: readonly Role[] = ['ADMIN', 'TRAINER', 'CLIENT']
 export interface AuthUser {
   id: number
   role: Role
+  /**
+   * Set only on a mobile session token (`session: "mobile"` claim, see `signToken`): the 90-day
+   * token the mobile app gets and may renew (`POST /auth/session/renew`). Absent on a web token.
+   */
+  session?: typeof MOBILE_SESSION
 }
 
 // Pinned on both sides so a token signed with any other algorithm (or `none`) is rejected,
@@ -33,13 +38,29 @@ export const SERVICE_TOKEN_TTL_SECONDS = 60
 const SERVICE_TOKEN_MIN_REMAINING_SECONDS = 15
 
 /**
- * User token claims: `sub` (the user id as a string, the standard subject, which vertice-api reads)
- * and `role`, plus `iss`/`aud`/`iat`/`exp`.
+ * The `session` claim's one value, and the only kind of token `POST /auth/session/renew` renews.
+ * vertice-api ignores the claim (it reads `sub` and `role`); it is the BFF's own marker. Changing
+ * its name or value is a cross-repo change all the same (CLAUDE.md, "Trust model").
  */
-export function signToken(user: AuthUser): string {
-  return jwt.sign({ role: user.role }, env.JWT_SECRET, {
+export const MOBILE_SESSION = 'mobile'
+/** A mobile session's lifetime: 90 days from its issue, restarted by every renewal (PRD R3, R4). */
+export const MOBILE_SESSION_TTL_SECONDS = 90 * 24 * 60 * 60
+
+/**
+ * User token claims: `sub` (the user id as a string, the standard subject, which vertice-api reads)
+ * and `role`, plus `iss`/`aud`/`iat`/`exp`. A mobile session (`user.session === "mobile"`) also
+ * carries `session: "mobile"` and expires after `MOBILE_SESSION_TTL_SECONDS`; any other token
+ * expires after `JWT_EXPIRES_IN` (8h) and has no `session` claim. `issuedAt` overrides `iat`
+ * (renewal backdates it, see `renewSession`).
+ */
+export function signToken(user: AuthUser, options: { issuedAt?: number } = {}): string {
+  const mobile = user.session === MOBILE_SESSION
+  const claims = mobile ? { role: user.role, session: MOBILE_SESSION } : { role: user.role }
+  // An explicit `iat` (seconds) also moves `exp`, which jsonwebtoken derives from the payload's `iat`.
+  const payload = options.issuedAt === undefined ? claims : { ...claims, iat: options.issuedAt }
+  return jwt.sign(payload, env.JWT_SECRET, {
     algorithm: ALGORITHM,
-    expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'],
+    expiresIn: mobile ? MOBILE_SESSION_TTL_SECONDS : (env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn']),
     issuer: TOKEN_ISSUER,
     audience: TOKEN_AUDIENCE,
     subject: String(user.id),
@@ -53,6 +74,9 @@ export function signToken(user: AuthUser): string {
  *
  * Tokens minted before `id` was dropped still carry it; they are accepted only when `id` equals
  * `sub` (the rule vertice-api applies), and stop existing once `JWT_EXPIRES_IN` has passed.
+ *
+ * A `session` claim, when present, must be `"mobile"`; the result then says so. A token without
+ * one is a web (8h) session, as every token issued before mobile sessions existed.
  */
 export function verifyToken(token: string): AuthUser {
   const payload = jwt.verify(token, env.JWT_SECRET, {
@@ -61,13 +85,23 @@ export function verifyToken(token: string): AuthUser {
     audience: TOKEN_AUDIENCE,
   })
   if (typeof payload === 'string') throw new jwt.JsonWebTokenError('jwt payload must be an object')
-  const { role, sub, exp } = payload
+  const { role, sub, exp, session } = payload
   if (typeof exp !== 'number') throw new jwt.JsonWebTokenError('jwt exp required')
   const id = typeof sub === 'string' && /^[1-9][0-9]*$/.test(sub) ? Number(sub) : NaN
   if (!Number.isSafeInteger(id)) throw new jwt.JsonWebTokenError('jwt subject invalid')
   if ('id' in payload && payload.id !== id) throw new jwt.JsonWebTokenError('jwt subject invalid')
   if (!ROLES.includes(role)) throw new jwt.JsonWebTokenError('jwt role invalid')
-  return { id, role }
+  if (session !== undefined && session !== MOBILE_SESSION) throw new jwt.JsonWebTokenError('jwt session invalid')
+  return session === MOBILE_SESSION ? { id, role, session } : { id, role }
+}
+
+/** When a token this BFF signed expires, as an ISO-8601 instant (its `exp`). */
+export function tokenExpiresAt(token: string): string {
+  const payload = jwt.decode(token)
+  if (!payload || typeof payload === 'string' || typeof payload.exp !== 'number') {
+    throw new Error('token has no exp')
+  }
+  return new Date(payload.exp * 1000).toISOString()
 }
 
 let cachedServiceToken: { token: string; issuedAtMs: number; expiresAtMs: number } | undefined

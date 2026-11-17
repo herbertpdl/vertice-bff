@@ -142,3 +142,33 @@ export const updateMeSchema = z.object({
 export const deleteAccountSchema = z.object({
   password: submittedPasswordSchema,
 }).meta({ id: 'DeleteAccountRequest' })
+
+/** The request header the mobile app sends to ask for a mobile session (PRD R1, R2, R5). */
+export const SESSION_CLIENT_HEADER = 'x-vertice-client'
+
+/**
+ * Documents `X-Vertice-Client` on `POST /auth/login`, `/auth/register` and `/auth/session/renew`
+ * (Fastify lower-cases header names). Only the OpenAPI document reads this schema; the routes read
+ * the header with `sessionClientOf`, which never refuses a request over it.
+ */
+export const sessionClientHeadersSchema = z.object({
+  [SESSION_CLIENT_HEADER]: z
+    .enum(['mobile'])
+    .optional()
+    .describe(
+      'Sent by the mobile app only. `mobile` on login and register issues a 90-day mobile session that ' +
+        '`POST /auth/session/renew` can renew; absent (or any other value) issues the 8h web session. ' +
+        'Renewal ignores it and decides from the token alone.',
+    ),
+})
+
+/**
+ * Which session a login or register issues. Only `X-Vertice-Client: mobile` (trimmed, any case)
+ * means mobile; no header, a repeated header or any other value is the web's 8h session, as before,
+ * so every client that doesn't send it (the web, apps installed before this, PRD R18) is unchanged.
+ * Never inferred from `User-Agent`.
+ */
+export function sessionClientOf(headers: Record<string, string | string[] | undefined>): 'mobile' | 'web' {
+  const value = headers[SESSION_CLIENT_HEADER]
+  return typeof value === 'string' && value.trim().toLowerCase() === 'mobile' ? 'mobile' : 'web'
+}

@@ -15,6 +15,20 @@ only the user id and role (scoped `iss: vertice-bff`, `aud: vertice-api`, with a
 name or email. Read those from the login/register response or `GET /auth/me`. A token issued
 before the scoping change, or by anything other than this BFF, gets a `401` (log in again).
 
+**Web and mobile sessions** (spec `docs/specs/mobile-persistent-session/spec.md`). A login or
+register with the request header **`X-Vertice-Client: mobile`** (sent by vertice-mobile only)
+issues a **mobile session**: a token that expires 90 days after it was issued and carries the extra
+claim `session: "mobile"`. Without the header (or with any other value) it is the **web session**,
+8 hours (`JWT_EXPIRES_IN`), no `session` claim, exactly as before. ADMIN always gets the web
+session. The client is never guessed from `User-Agent`. Every session response carries
+`expiresAt`, the token's expiry as an ISO-8601 instant. The mobile app keeps its session alive with
+`POST /auth/session/renew` (below): a fresh 90 days on each use, so a phone used at least once
+every 90 days is never logged out. What ends a session early is vertice-api's call on every
+request: a deleted account, a changed role and (with vertice-api's password-change check) a
+password change all make the next call `401 UNAUTHENTICATED`. "Sair" on a phone only deletes the
+token there; the token itself stays valid until it expires or the password changes (no per-device
+logout). Rotating `JWT_SECRET` ends every session, the 90-day ones included.
+
 All error responses have the shape:
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "...", "details": {} } }
@@ -63,6 +77,7 @@ Login, registration, passwords and the caller’s own account (`/auth/me`, LGPD 
 |---|---|---|---|---|
 | POST | `/api/auth/login` | public | `login` | Log in |
 | POST | `/api/auth/register` | public | `register` | Register a trainer |
+| POST | `/api/auth/session/renew` | TRAINER, CLIENT | `renewSession` | Renew a mobile session |
 | GET | `/api/auth/me` | any role | `getMe` | The caller’s own account |
 | PATCH | `/api/auth/me` | any role | `updateMe` | Correct the caller’s own profile |
 | DELETE | `/api/auth/me` | any role | `deleteMe` | Delete the caller’s own account |
@@ -281,6 +296,7 @@ Every request body and query string is parsed with Zod before any upstream call;
   - `POST /auth/login` (IP + email) and `POST /auth/password/setup` (IP) count **failed** attempts only: a response below 400 gives the attempt back, so the 6th failure in 15 minutes is a 429 and a gym full of clients on one IP can still log in.
   - `POST /auth/register` (IP + email) counts **every** attempt: a successful sign-up is what a spammer repeats.
   - `POST /auth/password` and `DELETE /auth/me` (IP + user, separate buckets) count failed attempts.
+  - `POST /auth/session/renew` (IP + user) counts **refused** renewals only (a web token, a session vertice-api no longer accepts): a successful renewal gives the attempt back, so phones behind one carrier NAT keep renewing. The 6th refusal in 15 minutes is a 429; the app keeps its current token and tries again later.
 - **Data export:** `GET /auth/me/export` has its own per-user bucket, default **3 per hour**, counting **every** export (`EXPORT_RATE_LIMIT_MAX`/`EXPORT_RATE_LIMIT_WINDOW_MS`); the 4th is `429 RATE_LIMITED` with `Retry-After`. It is keyed on the user, not the IP, so changing networks doesn't reset it.
   - A 5xx (upstream down) never counts.
 - Per-IP means the client's address (IPv6 by /64). vertice-web-react calls the BFF from its server, so it **must forward the browser's IP as `X-Forwarded-For`**, and the BFF must run with `TRUST_PROXY` set to the web server's address; otherwise every web user shares one bucket. `X-Forwarded-For` from any other peer is ignored. See `docs/specs/password-lifecycle/spec.md`, "Client IPs and the rate limits".
@@ -293,9 +309,10 @@ Every request body and query string is parsed with Zod before any upstream call;
 ## Auth — `/auth`
 Passwords follow vertice-api's policy everywhere one is set: **at least 8 characters, at most 72 UTF-8 bytes, not blank**. A violation is `400 VALIDATION_ERROR`, checked in the BFF before any upstream call. Emails are trimmed and lower-cased.
 
-- `POST /login` `{email, password}` → `{token, user: {id,name,email,role}}`. The password is checked by vertice-api (`VerifyCredentials`). A wrong password, an unknown email and an account with no password yet all get the **same** `401 {"error":{"code":"UNAUTHORIZED","message":"Invalid email or password"}}`.
+- `POST /login` `{email, password}` → `{token, expiresAt, user: {id,name,email,role}}`. Optional header `X-Vertice-Client: mobile`: a TRAINER or CLIENT gets a 90-day mobile session instead of the 8h web one (see "Web and mobile sessions" above); `expiresAt` is the token's expiry. The password is checked by vertice-api (`VerifyCredentials`). A wrong password, an unknown email and an account with no password yet all get the **same** `401 {"error":{"code":"UNAUTHORIZED","message":"Invalid email or password"}}`.
   - Rollout flag: with `VERIFY_PASSWORDS=false` (development/test only; the BFF refuses to start with it anywhere else) login only checks that the email exists, the old MVP behaviour. Default is `true`.
-- `POST /register` `{name, email, password, role: "TRAINER", cpf, cref?, acceptedTermsVersion}` → `201`, same shape as login. **Only `TRAINER`**: `role: "CLIENT"` is `400 VALIDATION_ERROR` (clients are created by their trainer, `POST /clients`). **`cpf` is required for a trainer** (vertice-api rejects an empty or invalid one; it is optional only for a CLIENT). `cref` is optional (trainer license number). **`acceptedTermsVersion`** (P1-04): the version of the Terms of Use / Privacy Policy the user accepted on the form, normally `terms` from `GET /legal/versions`. Format: 1 to 32 of `[A-Za-z0-9._-]` (vertice-api's); malformed is `400 VALIDATION_ERROR` before any upstream call. Any well-formed version is accepted, not only the current one. vertice-api stores it with its own timestamp. **Required**: missing is `400 VALIDATION_ERROR` before any upstream call, so no account is created without an acceptance on record. A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`, the same body for both.
+- `POST /register` `{name, email, password, role: "TRAINER", cpf, cref?, acceptedTermsVersion}` → `201`, same shape as login, and the same `X-Vertice-Client: mobile` header. **Only `TRAINER`**: `role: "CLIENT"` is `400 VALIDATION_ERROR` (clients are created by their trainer, `POST /clients`). **`cpf` is required for a trainer** (vertice-api rejects an empty or invalid one; it is optional only for a CLIENT). `cref` is optional (trainer license number). **`acceptedTermsVersion`** (P1-04): the version of the Terms of Use / Privacy Policy the user accepted on the form, normally `terms` from `GET /legal/versions`. Format: 1 to 32 of `[A-Za-z0-9._-]` (vertice-api's); malformed is `400 VALIDATION_ERROR` before any upstream call. Any well-formed version is accepted, not only the current one. vertice-api stores it with its own timestamp. **Required**: missing is `400 VALIDATION_ERROR` before any upstream call, so no account is created without an acceptance on record. A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`, the same body for both.
+- `POST /session/renew` (auth, TRAINER or CLIENT; no body, send no `Content-Type`) → `200` `{token, expiresAt, user}`, the login shape: a new mobile session token that expires 90 days from now. The caller's token must be a mobile session (`session: "mobile"`); a web token is **`403 SESSION_NOT_RENEWABLE`** `Only a mobile session can be renewed`, with or without `X-Vertice-Client` (the header is accepted and ignored here: renewal decides from the token alone). Before signing, the BFF calls vertice-api's `GetUser` on the caller's own id with the caller's token, so a session vertice-api no longer accepts (account deleted, role changed, password changed since the token was issued) is **`401 UNAUTHENTICATED`** `Session no longer valid` and gets no new token; clients log out on it. The old token is not revoked and stays valid until its own expiry. ADMIN is 403 by role. The mobile app should renew on use, at most about once a day; refusals are rate limited (see Rate limits). Neither token is ever logged.
 Every `/me` route is **self only by construction**: the user is the token's, and no id in the path, query or body is read. Any role, ADMIN included (it is the caller's own account).
 
 - `GET /me` (auth) → `Me` = `{id, name, email, cpf, cref, role, consent}`: the caller's own account. **`cpf` is masked** (`***.***.***-25`, `""` when none), with no reveal: the profile screen shows that a CPF is on file, and the user corrects it by typing the full new one in `PATCH /me`. The full value is in their export (`GET /me/export`). `cref` is `""` for anyone but a trainer who set one. `consent` is the caller's `Consent` (below), from vertice-api's self view.

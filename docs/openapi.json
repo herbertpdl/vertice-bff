@@ -21,12 +21,17 @@
           "token": {
             "type": "string"
           },
+          "expiresAt": {
+            "type": "string",
+            "description": "When `token` expires, an ISO-8601 instant: 8 hours out for a web session, 90 days for a mobile one (`X-Vertice-Client: mobile`). A mobile app renews before this with `POST /api/auth/session/renew`."
+          },
           "user": {
             "$ref": "#/components/schemas/SessionUser"
           }
         },
         "required": [
           "token",
+          "expiresAt",
           "user"
         ],
         "additionalProperties": false
@@ -773,7 +778,8 @@
           "INTERNAL_ERROR",
           "INVALID_CURRENT_PASSWORD",
           "INVALID_SETUP_TOKEN",
-          "ACTIVE_CLIENTS"
+          "ACTIVE_CLIENTS",
+          "SESSION_NOT_RENEWABLE"
         ]
       },
       "ErrorResponse": {
@@ -2402,7 +2408,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Public: no token needed. The password is checked by vertice-api. A wrong password, an unknown email and an account with no password yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited.",
+        "description": "Public: no token needed. The password is checked by vertice-api. A wrong password, an unknown email and an account with no password yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited. With `X-Vertice-Client: mobile` a TRAINER or CLIENT gets a 90-day mobile session, renewable with `POST /auth/session/renew`; without it (and for ADMIN) the 8h web session.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2413,10 +2419,24 @@
             }
           }
         },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "in": "header",
+            "name": "x-vertice-client",
+            "required": false,
+            "description": "Sent by the mobile app only. `mobile` on login and register issues a 90-day mobile session that `POST /auth/session/renew` can renew; absent (or any other value) issues the 8h web session. Renewal ignores it and decides from the token alone."
+          }
+        ],
         "security": [],
         "responses": {
           "200": {
-            "description": "The session token and the user.",
+            "description": "The session token, its expiry and the user.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2465,7 +2485,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Public: no token needed. Public sign-up is for trainers only (`role: \"TRAINER\"`); a client is created by their trainer (`POST /clients`). `acceptedTermsVersion` is required: no account is created without an acceptance on record. A taken email or CPF is 409 `CONFLICT`, the same body for both. Every attempt is rate limited.",
+        "description": "Public: no token needed. Public sign-up is for trainers only (`role: \"TRAINER\"`); a client is created by their trainer (`POST /clients`). `acceptedTermsVersion` is required: no account is created without an acceptance on record. A taken email or CPF is 409 `CONFLICT`, the same body for both. Every attempt is rate limited. With `X-Vertice-Client: mobile` the session is a 90-day mobile one, as on login.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2476,10 +2496,24 @@
             }
           }
         },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "in": "header",
+            "name": "x-vertice-client",
+            "required": false,
+            "description": "Sent by the mobile app only. `mobile` on login and register issues a 90-day mobile session that `POST /auth/session/renew` can renew; absent (or any other value) issues the 8h web session. Renewal ignores it and decides from the token alone."
+          }
+        ],
         "security": [],
         "responses": {
           "201": {
-            "description": "The session token and the user.",
+            "description": "The session token, its expiry and the user.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2500,6 +2534,81 @@
           },
           "409": {
             "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/session/renew": {
+      "post": {
+        "operationId": "renewSession",
+        "summary": "Renew a mobile session",
+        "tags": [
+          "Auth"
+        ],
+        "description": "Roles: TRAINER, CLIENT. Trades the caller’s mobile session token (from login or register with `X-Vertice-Client: mobile`) for a new one that expires 90 days from now; the old token stays valid until its own expiry. A web (8h) token is 403 `SESSION_NOT_RENEWABLE`, with or without the header: renewal decides from the token alone. vertice-api is asked first, so a token it no longer accepts (deleted user, changed role, password changed since the token was issued) is 401 `UNAUTHENTICATED` and gets no new token. Refusals are rate limited per IP and per user. No body.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "in": "header",
+            "name": "x-vertice-client",
+            "required": false,
+            "description": "Sent by the mobile app only. `mobile` on login and register issues a 90-day mobile session that `POST /auth/session/renew` can renew; absent (or any other value) issues the 8h web session. Renewal ignores it and decides from the token alone."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
+        ],
+        "responses": {
+          "200": {
+            "description": "The new session token, its expiry and the user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3009,7 +3118,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3077,7 +3186,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3170,7 +3279,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3260,7 +3369,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3343,7 +3452,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3425,7 +3534,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3507,7 +3616,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3632,7 +3741,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3710,7 +3819,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3787,7 +3896,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3856,7 +3965,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3946,7 +4055,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4019,7 +4128,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4126,7 +4235,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4243,7 +4352,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4311,7 +4420,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4394,7 +4503,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4484,7 +4593,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4557,7 +4666,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4653,7 +4762,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4743,7 +4852,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4829,7 +4938,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4902,7 +5011,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4992,7 +5101,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5065,7 +5174,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5158,7 +5267,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5250,7 +5359,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5336,7 +5445,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5426,7 +5535,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5516,7 +5625,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5618,7 +5727,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5691,7 +5800,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5787,7 +5896,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5877,7 +5986,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5969,7 +6078,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6042,7 +6151,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6144,7 +6253,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6246,7 +6355,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6364,7 +6473,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6456,7 +6565,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6558,7 +6667,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6643,7 +6752,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6738,7 +6847,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6830,7 +6939,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6893,7 +7002,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6943,7 +7052,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`).",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {

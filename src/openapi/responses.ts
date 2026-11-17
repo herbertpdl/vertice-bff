@@ -69,6 +69,7 @@ export const ERROR_CODES = [
   'INVALID_CURRENT_PASSWORD',
   'INVALID_SETUP_TOKEN',
   'ACTIVE_CLIENTS',
+  'SESSION_NOT_RENEWABLE',
 ] as const
 
 export const errorCodeSchema = named('ErrorCode', z.enum(ERROR_CODES))
@@ -97,7 +98,19 @@ const sessionUserSchema = named(
   z.object({ id, name: z.string(), email: z.string(), role: roleSchema }),
 )
 
-export const sessionSchema = named('AuthSession', z.object({ token: z.string(), user: sessionUserSchema }))
+export const sessionSchema = named(
+  'AuthSession',
+  z.object({
+    token: z.string(),
+    expiresAt: z
+      .string()
+      .describe(
+        'When `token` expires, an ISO-8601 instant: 8 hours out for a web session, 90 days for a mobile one ' +
+          '(`X-Vertice-Client: mobile`). A mobile app renews before this with `POST /api/auth/session/renew`.',
+      ),
+    user: sessionUserSchema,
+  }),
+)
 
 export const passwordSetupResultSchema = named(
   'PasswordSetupResult',
