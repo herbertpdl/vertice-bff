@@ -6,6 +6,8 @@ import {
   passwordSetupSchema,
   recordConsentSchema,
   registerSchema,
+  sessionClientHeadersSchema,
+  sessionClientOf,
   updateMeSchema,
 } from './schemas.js'
 import * as authService from './service.js'
@@ -34,6 +36,9 @@ export default async function authRoutes(app: FastifyInstance) {
   // The export is the heaviest read there is (everything about the user), so every one counts,
   // in its own slower window (`EXPORT_RATE_LIMIT_*`, 3 per hour by default).
   const exportLimit = app.attemptLimit('export', { keys: (req) => [`user:${req.user!.id}`], count: 'all', profile: 'export' })
+  // Renewal counts refusals only (a web token, a token vertice-api no longer accepts): successes are
+  // the app's normal use and must not lock out users who share a carrier's NAT (the network bucket).
+  const renewLimit = app.attemptLimit('session-renew', { keys: (req) => [ipKey(req), `user:${req.user!.id}`] })
 
   app.post(
     '/login',
@@ -44,17 +49,20 @@ export default async function authRoutes(app: FastifyInstance) {
         summary: 'Log in',
         description:
           'The password is checked by vertice-api. A wrong password, an unknown email and an account with no password ' +
-          'yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited.',
+          'yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited. ' +
+          'With `X-Vertice-Client: mobile` a TRAINER or CLIENT gets a 90-day mobile session, renewable with ' +
+          '`POST /auth/session/renew`; without it (and for ADMIN) the 8h web session.',
         tag: 'Auth',
         auth: 'public',
+        headers: sessionClientHeadersSchema,
         body: loginSchema,
-        ok: { status: 200, description: 'The session token and the user.', schema: sessionSchema },
+        ok: { status: 200, description: 'The session token, its expiry and the user.', schema: sessionSchema },
         errors: [401, 429],
       }),
     },
     async (req) => {
       const body = loginSchema.parse(req.body)
-      return authService.login(body.email, body.password)
+      return authService.login(body.email, body.password, sessionClientOf(req.headers))
     },
   )
 
@@ -68,19 +76,49 @@ export default async function authRoutes(app: FastifyInstance) {
         description:
           'Public sign-up is for trainers only (`role: "TRAINER"`); a client is created by their trainer (`POST /clients`). ' +
           '`acceptedTermsVersion` is required: no account is created without an acceptance on record. ' +
-          'A taken email or CPF is 409 `CONFLICT`, the same body for both. Every attempt is rate limited.',
+          'A taken email or CPF is 409 `CONFLICT`, the same body for both. Every attempt is rate limited. ' +
+          'With `X-Vertice-Client: mobile` the session is a 90-day mobile one, as on login.',
         tag: 'Auth',
         auth: 'public',
+        headers: sessionClientHeadersSchema,
         body: registerSchema,
-        ok: { status: 201, description: 'The session token and the user.', schema: sessionSchema },
+        ok: { status: 201, description: 'The session token, its expiry and the user.', schema: sessionSchema },
         errors: [409, 429],
       }),
     },
     async (req, reply) => {
       const body = registerSchema.parse(req.body)
+      const session = await authService.register(body, sessionClientOf(req.headers))
       reply.status(201)
-      return authService.register(body)
+      return session
     },
+  )
+
+  // Mobile persistent session (PRD R3, R4): a valid mobile token gets a fresh 90 days. Whether the
+  // token is renewable is its own `session` claim's call, never the request header's.
+  app.post(
+    '/session/renew',
+    {
+      preHandler: [app.authenticate, app.requireRole('TRAINER', 'CLIENT'), renewLimit.preHandler],
+      onResponse: renewLimit.onResponse,
+      schema: routeDoc({
+        operationId: 'renewSession',
+        summary: 'Renew a mobile session',
+        description:
+          'Trades the caller’s mobile session token (from login or register with `X-Vertice-Client: mobile`) for a ' +
+          'new one that expires 90 days from now; the old token stays valid until its own expiry. A web (8h) token ' +
+          'is 403 `SESSION_NOT_RENEWABLE`, with or without the header: renewal decides from the token alone. ' +
+          'vertice-api is asked first, so a token it no longer accepts (deleted user, changed role, password ' +
+          'changed since the token was issued) is 401 `UNAUTHENTICATED` and gets no new token. Refusals are rate ' +
+          'limited per IP and per user. No body.',
+        tag: 'Auth',
+        roles: ['TRAINER', 'CLIENT'],
+        headers: sessionClientHeadersSchema,
+        ok: { status: 200, description: 'The new session token, its expiry and the user.', schema: sessionSchema },
+        errors: [403, 429],
+      }),
+    },
+    async (req) => authService.renewSession(req.user!),
   )
 
   // The /me routes are self only by construction: the user id comes from the token, never the

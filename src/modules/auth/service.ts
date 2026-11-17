@@ -2,7 +2,7 @@ import * as userService from '../users/service.js'
 import { trainerClientClient } from '../../grpc/clients.js'
 import { grpcCall } from '../../grpc/call.js'
 import { env } from '../../config/env.js'
-import { signToken, type Role } from '../../lib/jwt.js'
+import { MOBILE_SESSION, signToken, tokenExpiresAt, type AuthUser, type Role } from '../../lib/jwt.js'
 import { HttpError, PreconditionFailedError, UnauthorizedError, ValidationError } from '../../lib/errors.js'
 import { maskCpf } from '../../lib/cpf.js'
 import { PASSWORD_MAX_BYTES } from './schemas.js'
@@ -17,12 +17,29 @@ export interface SessionUser {
 
 export interface Session {
   token: string
+  /** When `token` expires (its `exp`), an ISO-8601 instant: 8h out for the web, 90 days for mobile. */
+  expiresAt: string
   user: SessionUser
 }
 
-function session(user: userService.User): Session {
+/**
+ * Which app asks for the session: `mobile` when the request carries `X-Vertice-Client: mobile`
+ * (see `sessionClientOf` in routes.ts), `web` otherwise, as every client did before mobile sessions.
+ */
+export type SessionClient = 'mobile' | 'web'
+
+/**
+ * Only trainers and clients use the mobile app (PRD §2). ADMIN has no defined product (P1-02), so it
+ * never gets a long-lived token: with the header it still gets a web session.
+ */
+const MOBILE_ROLES: readonly Role[] = ['TRAINER', 'CLIENT']
+
+function session(user: userService.User, client: SessionClient): Session {
+  const mobile = client === 'mobile' && MOBILE_ROLES.includes(user.role)
+  const token = signToken({ id: user.id, role: user.role, ...(mobile ? { session: MOBILE_SESSION } : {}) })
   return {
-    token: signToken({ id: user.id, role: user.role }),
+    token,
+    expiresAt: tokenExpiresAt(token),
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
   }
 }
@@ -35,18 +52,18 @@ function session(user: userService.User): Session {
  * email-only login for the rollout window: it finds the user by scanning `ListUsers` and
  * accepts any non-empty password.
  */
-export async function login(email: string, password: string): Promise<Session> {
+export async function login(email: string, password: string, client: SessionClient = 'web'): Promise<Session> {
   if (!env.VERIFY_PASSWORDS) {
     const user = await userService.findUserByEmail(email)
     if (!user) throw new UnauthorizedError(userService.INVALID_CREDENTIALS_MESSAGE)
-    return session(user)
+    return session(user, client)
   }
   // No stored password can be longer (it is vertice-api's policy), and bcrypt would only read
   // the first 72 bytes anyway, so this can only be a wrong password.
   if (Buffer.byteLength(password, 'utf8') > PASSWORD_MAX_BYTES) {
     throw new UnauthorizedError(userService.INVALID_CREDENTIALS_MESSAGE)
   }
-  return session(await userService.verifyCredentials(email, password))
+  return session(await userService.verifyCredentials(email, password), client)
 }
 
 export async function register(input: {
@@ -57,9 +74,32 @@ export async function register(input: {
   cpf?: string
   cref?: string
   acceptedTermsVersion: string
-}): Promise<Session> {
+}, client: SessionClient = 'web'): Promise<Session> {
   // No pre-check by email: vertice-api's unique email index refuses a duplicate (ALREADY_EXISTS → 409).
-  return session(await userService.createUser(input))
+  return session(await userService.createUser(input), client)
+}
+
+/** The 403 of `POST /auth/session/renew` for a token that is not a mobile session. */
+export const NOT_RENEWABLE_MESSAGE = 'Only a mobile session can be renewed'
+
+/**
+ * Trades a valid mobile session token for a fresh 90-day one (PRD R3, R4: 90 days since the last
+ * use). The caller is the verified token's (`caller`); whether it is renewable is decided from its
+ * `session` claim only, never from a request header, so a web token is refused (403
+ * `SESSION_NOT_RENEWABLE`) whatever the request says.
+ *
+ * Before signing, vertice-api must still accept the token: `GetUser` on the caller's own id, sent
+ * with that very token. Its `CallerIdentityResolver` refuses a deleted user, a changed role and
+ * (once vertice-api ships it) a token issued before the last password change, as
+ * `UNAUTHENTICATED`, which `grpcCall` turns into the 401 `UNAUTHENTICATED` clients log out on. So a
+ * revoked token is never renewed on the strength of the BFF's own signature check.
+ */
+export async function renewSession(caller: AuthUser): Promise<Session> {
+  if (caller.session !== MOBILE_SESSION) throw new HttpError(403, NOT_RENEWABLE_MESSAGE, 'SESSION_NOT_RENEWABLE')
+  const user = userService.toUser(await userService.getSelf(caller.id))
+  // vertice-api already refuses a mismatch; checked again so nothing but the caller is ever signed.
+  if (user.id !== caller.id || user.role !== caller.role) throw new HttpError(401, 'Session no longer valid', 'UNAUTHENTICATED')
+  return session(user, 'mobile')
 }
 
 /**

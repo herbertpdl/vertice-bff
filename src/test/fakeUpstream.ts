@@ -4,6 +4,7 @@ import { env } from '../config/env.js'
 import { mapGrpcError, withCallerIdentity, type GrpcCallOptions } from '../grpc/call.js'
 import { todayInBusinessZone } from '../lib/dates.js'
 import {
+  MOBILE_SESSION,
   signToken,
   TOKEN_AUDIENCE,
   TOKEN_ISSUER,
@@ -141,9 +142,11 @@ export function userOf(actor: Actor) {
   return users.find((u) => u.id === ids[actor])!
 }
 
-export function bearer(actor: Actor) {
+/** A web (8h) token for `actor`, or with `{ mobile: true }` a 90-day mobile session token. */
+export function bearer(actor: Actor, options: { mobile?: boolean } = {}) {
   const u = userOf(actor)
-  return { authorization: `Bearer ${signToken({ id: u.id, role: u.role })}` }
+  const token = signToken({ id: u.id, role: u.role, ...(options.mobile ? { session: MOBILE_SESSION } : {}) })
+  return { authorization: `Bearer ${token}` }
 }
 
 export const emailOf = (id: number) => `user${id}@vertice.test`

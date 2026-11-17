@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
-import { serviceToken, signToken, verifyToken, type AuthUser } from './jwt.js'
+import { MOBILE_SESSION_TTL_SECONDS, serviceToken, signToken, tokenExpiresAt, verifyToken, type AuthUser } from './jwt.js'
 
 const user: AuthUser = { id: 1, role: 'ADMIN' }
 const scope = { issuer: 'vertice-bff', audience: 'vertice-api' }
@@ -83,6 +83,38 @@ describe('signToken / verifyToken', () => {
 
   it('never accepts the service token as a user', () => {
     expect(() => verifyToken(serviceToken())).toThrow(/subject invalid/)
+  })
+})
+
+describe('mobile session tokens', () => {
+  const mobile: AuthUser = { id: 20, role: 'CLIENT', session: 'mobile' }
+
+  it('carry session: "mobile", last 90 days, and round-trip through verifyToken', () => {
+    const token = signToken(mobile)
+    const claims = jwt.decode(token) as jwt.JwtPayload
+    expect(Object.keys(claims).sort()).toEqual(['aud', 'exp', 'iat', 'iss', 'role', 'session', 'sub'])
+    expect(claims).toMatchObject({ sub: '20', role: 'CLIENT', session: 'mobile', iss: 'vertice-bff', aud: 'vertice-api' })
+    expect(claims.exp! - claims.iat!).toBe(MOBILE_SESSION_TTL_SECONDS)
+    expect(MOBILE_SESSION_TTL_SECONDS).toBe(90 * 24 * 60 * 60)
+    expect(verifyToken(token)).toEqual(mobile)
+  })
+
+  it('leave web tokens as they were: 8h, no session claim, none in the verified user', () => {
+    const token = signToken({ id: 20, role: 'CLIENT' })
+    const claims = jwt.decode(token) as jwt.JwtPayload
+    expect(claims.exp! - claims.iat!).toBe(8 * 60 * 60)
+    expect(verifyToken(token)).toStrictEqual({ id: 20, role: 'CLIENT' })
+  })
+
+  it.each([['web'], [true], ['']])('reject a session claim other than "mobile" (%s)', (session) => {
+    const token = jwt.sign({ sub: '20', role: 'CLIENT', session }, env.JWT_SECRET, { algorithm: 'HS256', expiresIn: 60, ...scope })
+    expect(() => verifyToken(token)).toThrow(/session invalid/)
+  })
+
+  it('tokenExpiresAt is the exp as an ISO-8601 instant', () => {
+    const token = signToken(mobile)
+    const { exp } = jwt.decode(token) as jwt.JwtPayload
+    expect(tokenExpiresAt(token)).toBe(new Date(exp! * 1000).toISOString())
   })
 })
 

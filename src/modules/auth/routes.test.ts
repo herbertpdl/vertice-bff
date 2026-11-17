@@ -1,10 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import { Writable } from 'node:stream'
 import { status } from '@grpc/grpc-js'
 import jwt from 'jsonwebtoken'
+import pino from 'pino'
 import { buildApp } from '../../app.js'
 import { env } from '../../config/env.js'
 import { grpcCall, mapGrpcError } from '../../grpc/call.js'
+import { MOBILE_SESSION_TTL_SECONDS, signToken, TOKEN_AUDIENCE, TOKEN_ISSUER } from '../../lib/jwt.js'
 import {
   addFakeUsers,
   bearer,
@@ -587,6 +590,183 @@ describe('auth routes', () => {
   })
 })
 
+describe('mobile persistent session', () => {
+  let app: FastifyInstance
+  const logLines: string[] = []
+  const NOW_S = () => Math.floor(Date.now() / 1000)
+  const EIGHT_HOURS = 8 * 60 * 60
+  const MOBILE = { 'x-vertice-client': 'mobile' }
+
+  beforeAll(async () => {
+    const sink = new Writable({
+      write(chunk, _encoding, done) {
+        logLines.push(String(chunk))
+        done()
+      },
+    })
+    app = await buildApp({
+      rateLimits: { globalMax: 1_000_000, authMax: 1_000_000 },
+      loggerInstance: pino({ level: 'trace' }, sink),
+    })
+    await app.ready()
+  })
+  afterAll(() => app.close())
+  beforeEach(() => {
+    logLines.length = 0
+  })
+
+  const login = (email: string, headers: Record<string, string> = {}) =>
+    app.inject({ method: 'POST', url: '/api/auth/login', payload: { email, password: FAKE_PASSWORD }, headers })
+  const renew = (headers: Record<string, string>) =>
+    app.inject({ method: 'POST', url: '/api/auth/session/renew', headers })
+  const claimsOf = (token: string) => jwt.decode(token) as jwt.JwtPayload
+
+  /** The token is web (8h, no `session` claim) or mobile (90 days, `session: "mobile"`), and `expiresAt` is its exp. */
+  const expectSession = (body: { token: string; expiresAt: string }, kind: 'web' | 'mobile') => {
+    const claims = claimsOf(body.token)
+    if (kind === 'mobile') {
+      expect(claims.session).toBe('mobile')
+      expect(claims.exp! - claims.iat!).toBe(MOBILE_SESSION_TTL_SECONDS)
+    } else {
+      expect(claims).not.toHaveProperty('session')
+      expect(claims.exp! - claims.iat!).toBe(EIGHT_HOURS)
+    }
+    expect(Math.abs(claims.iat! - NOW_S())).toBeLessThanOrEqual(2)
+    expect(body.expiresAt).toBe(new Date(claims.exp! * 1000).toISOString())
+  }
+
+  describe('login and register', () => {
+    it('issue the 8h web session without the header, with its expiry', async () => {
+      const res = await login(emailOf(ids.clientA))
+      expect(res.statusCode, res.body).toBe(200)
+      expect(Object.keys(res.json()).sort()).toEqual(['expiresAt', 'token', 'user'])
+      expectSession(res.json(), 'web')
+    })
+
+    it('issue a 90-day mobile session with X-Vertice-Client: mobile, to a client and a trainer', async () => {
+      for (const id of [ids.clientA, ids.trainerA]) {
+        const res = await login(emailOf(id), MOBILE)
+        expect(res.statusCode, res.body).toBe(200)
+        expectSession(res.json(), 'mobile')
+        expect(claimsOf(res.json().token)).toMatchObject({ sub: String(id), iss: TOKEN_ISSUER, aud: TOKEN_AUDIENCE })
+      }
+    })
+
+    it('read the header trimmed and in any case, and anything else as the web', async () => {
+      expectSession((await login(emailOf(ids.clientA), { 'x-vertice-client': ' Mobile ' })).json(), 'mobile')
+      for (const value of ['web', 'ios', 'mobile-app', '']) {
+        expectSession((await login(emailOf(ids.clientA), { 'x-vertice-client': value })).json(), 'web')
+      }
+    })
+
+    it('never infer the mobile app from User-Agent', async () => {
+      const res = await login(emailOf(ids.clientA), { 'user-agent': 'Vertice/1.1.0 CFNetwork/1568 Darwin/24.0 Expo' })
+      expectSession(res.json(), 'web')
+    })
+
+    it('give ADMIN the web session even with the header', async () => {
+      const res = await login(emailOf(ids.admin), MOBILE)
+      expect(res.statusCode, res.body).toBe(200)
+      expectSession(res.json(), 'web')
+    })
+
+    it('register: 90 days with the header, 8h without', async () => {
+      const body = { name: 'Nova', email: 'nova@vertice.test', password: 'secret-123', role: 'TRAINER', cpf: '52998224725', acceptedTermsVersion: 'v1' }
+      const mobile = await app.inject({ method: 'POST', url: '/api/auth/register', payload: body, headers: MOBILE })
+      expect(mobile.statusCode, mobile.body).toBe(201)
+      expectSession(mobile.json(), 'mobile')
+      const web = await app.inject({ method: 'POST', url: '/api/auth/register', payload: body })
+      expect(web.statusCode, web.body).toBe(201)
+      expectSession(web.json(), 'web')
+    })
+  })
+
+  describe('POST /auth/session/renew', () => {
+    it('trades a valid mobile token for a fresh 90-day one, after asking vertice-api with that token', async () => {
+      // Issued 30 days ago: the new one must run 90 days from now, not from the old issue.
+      const iat = NOW_S() - 30 * 24 * 60 * 60
+      const old = jwt.sign({ role: 'CLIENT', session: 'mobile', iat }, env.JWT_SECRET, {
+        algorithm: 'HS256',
+        expiresIn: MOBILE_SESSION_TTL_SECONDS,
+        issuer: TOKEN_ISSUER,
+        audience: TOKEN_AUDIENCE,
+        subject: String(ids.clientA),
+      })
+      resetUpstreamCallers()
+      const res = await renew({ authorization: `Bearer ${old}` })
+      expect(res.statusCode, res.body).toBe(200)
+      expectSession(res.json(), 'mobile')
+      expect(claimsOf(res.json().token).exp).toBeGreaterThan(claimsOf(old).exp!)
+      expect(res.json().user).toEqual({ id: ids.clientA, name: 'Client A', email: emailOf(ids.clientA), role: 'CLIENT' })
+      expect(upstreamCallers).toEqual([{ method: 'GetUser', caller: { id: ids.clientA, role: 'CLIENT' } }])
+      expect(upstreamRequest('GetUser')).toEqual({ id: ids.clientA })
+    })
+
+    it("renews a trainer's mobile token too", async () => {
+      const res = await renew(bearer('trainerA', { mobile: true }))
+      expect(res.statusCode, res.body).toBe(200)
+      expectSession(res.json(), 'mobile')
+      expect(res.json().user).toMatchObject({ id: ids.trainerA, role: 'TRAINER' })
+    })
+
+    it.each([
+      ['without the header', {}],
+      ['with X-Vertice-Client: mobile', MOBILE],
+    ])('refuses a web token %s with 403 SESSION_NOT_RENEWABLE, asking nothing upstream', async (_, headers) => {
+      const res = await renew({ ...bearer('clientA'), ...headers })
+      expect(res.statusCode).toBe(403)
+      expect(res.json()).toEqual({
+        error: { code: 'SESSION_NOT_RENEWABLE', message: 'Only a mobile session can be renewed' },
+      })
+      expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+
+    it('answers 401 UNAUTHENTICATED with no token when vertice-api no longer accepts the session', async () => {
+      // e.g. the password changed after the token was issued (vertice-api's "sessions valid after").
+      grpcCallMock.mockRejectedValueOnce(mapGrpcError({ code: status.UNAUTHENTICATED, details: 'Session no longer valid' }))
+      const res = await renew(bearer('clientA', { mobile: true }))
+      expect(res.statusCode).toBe(401)
+      expect(res.json()).toEqual({ error: { code: 'UNAUTHENTICATED', message: 'Session no longer valid' } })
+    })
+
+    it.each([
+      ['deleted', { id: 999, role: 'CLIENT' as const }],
+      ['re-roled', { id: ids.trainerA, role: 'CLIENT' as const }],
+    ])('answers 401 for a %s user, from the fake upstream’s identity check', async (_, user) => {
+      const token = signToken({ ...user, session: 'mobile' })
+      const res = await renew({ authorization: `Bearer ${token}` })
+      expect(res.statusCode).toBe(401)
+      expect(res.json().error.code).toBe('UNAUTHENTICATED')
+      expect(res.body).not.toContain('token')
+    })
+
+    it('refuses an expired mobile token with 401 before any upstream call', async () => {
+      const iat = NOW_S() - MOBILE_SESSION_TTL_SECONDS - 60
+      const expired = jwt.sign({ role: 'CLIENT', session: 'mobile', iat }, env.JWT_SECRET, {
+        algorithm: 'HS256',
+        expiresIn: MOBILE_SESSION_TTL_SECONDS,
+        issuer: TOKEN_ISSUER,
+        audience: TOKEN_AUDIENCE,
+        subject: String(ids.clientA),
+      })
+      const res = await renew({ authorization: `Bearer ${expired}` })
+      expect(res.statusCode).toBe(401)
+      expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+
+    it('never logs a token, the old one or the new one', async () => {
+      const { authorization } = bearer('clientA', { mobile: true })
+      const res = await renew({ authorization })
+      expect(res.statusCode, res.body).toBe(200)
+      await login(emailOf(ids.clientA), MOBILE)
+      expect(logLines.length).toBeGreaterThan(0)
+      const logs = logLines.join('\n')
+      expect(logs).not.toContain(authorization.slice('Bearer '.length))
+      expect(logs).not.toContain(res.json().token)
+    })
+  })
+})
+
 describe('auth rate limits', () => {
   let app: FastifyInstance
 
@@ -752,6 +932,24 @@ describe('auth rate limits', () => {
     for (let i = 1; i <= 5; i++) expect((await remove('wrong')).statusCode).toBe(400)
     expect((await remove(FAKE_PASSWORD)).statusCode).toBe(429)
     expect(upstreamMethods()).not.toContain('DeleteAccount')
+  })
+
+  it('answers the 6th refused renewal for one user with 429, even from other IPs and with a mobile token', async () => {
+    const renew = (headers: Record<string, string>, remoteAddress = '203.0.113.1') =>
+      app.inject({ method: 'POST', url: '/api/auth/session/renew', headers, remoteAddress })
+    for (let i = 1; i <= 5; i++) expect((await renew(bearer('clientA'), `203.0.113.${i}`)).statusCode).toBe(403)
+    const res = await renew(bearer('clientA', { mobile: true }), '198.51.100.7')
+    expect(res.statusCode).toBe(429)
+    expect(res.json().error.code).toBe('RATE_LIMITED')
+    expect(Number(res.headers['retry-after'])).toBeGreaterThan(0)
+    // Another user is unaffected.
+    expect((await renew(bearer('trainerA', { mobile: true }), '198.51.100.7')).statusCode).toBe(200)
+  })
+
+  it('does not count successful renewals (a carrier NAT full of phones keeps renewing)', async () => {
+    const renew = () =>
+      app.inject({ method: 'POST', url: '/api/auth/session/renew', headers: bearer('clientA', { mobile: true }), remoteAddress: '203.0.113.1' })
+    for (let i = 0; i < 10; i++) expect((await renew()).statusCode).toBe(200)
   })
 
   it('has a loose global bucket over every route', async () => {
