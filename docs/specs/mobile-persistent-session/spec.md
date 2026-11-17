@@ -42,8 +42,10 @@ this repo's assessment for the same slug (B1–B6), ticket VRT-6
   and vertice-api's VRT-5 adds "sessions valid after" (last password change) against `iat`, so a
   token voided by a password change (R9–R11) is refused too. Every refusal is `UNAUTHENTICATED` →
   `401 UNAUTHENTICATED` "Session no longer valid", no token. The BFF also checks the answered id and
-  role equal the token's. The new token's `iat` is the renewal time, after vertice-api accepted
-  the old token.
+  role equal the token's. The new token's `iat` is backdated to one second before the upstream
+  check started (its 90 days count from there): vertice-api voids tokens with `iat` before the
+  password-change mark, truncated to the second, so a change committed just after the check, in
+  the signing second, still voids the renewed token instead of leaving one that outlives it.
 - **"Sair" doesn't revoke (B4).** Accepted with the PRD: the phone deletes its token; the token stays
   valid until it expires or the password changes. A renewal does not revoke the old token either.
 - **Rate limit:** bucket `session-renew`, keys IP + user (plus the automatic network bucket),

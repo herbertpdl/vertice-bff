@@ -111,6 +111,13 @@ describe('mobile session tokens', () => {
     expect(() => verifyToken(token)).toThrow(/session invalid/)
   })
 
+  it('take an explicit iat, and count the 90 days from it', () => {
+    const issuedAt = Math.floor(Date.now() / 1000) - 1
+    const claims = jwt.decode(signToken(mobile, { issuedAt })) as jwt.JwtPayload
+    expect(claims.iat).toBe(issuedAt)
+    expect(claims.exp).toBe(issuedAt + MOBILE_SESSION_TTL_SECONDS)
+  })
+
   it('tokenExpiresAt is the exp as an ISO-8601 instant', () => {
     const token = signToken(mobile)
     const { exp } = jwt.decode(token) as jwt.JwtPayload

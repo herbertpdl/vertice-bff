@@ -50,11 +50,15 @@ export const MOBILE_SESSION_TTL_SECONDS = 90 * 24 * 60 * 60
  * User token claims: `sub` (the user id as a string, the standard subject, which vertice-api reads)
  * and `role`, plus `iss`/`aud`/`iat`/`exp`. A mobile session (`user.session === "mobile"`) also
  * carries `session: "mobile"` and expires after `MOBILE_SESSION_TTL_SECONDS`; any other token
- * expires after `JWT_EXPIRES_IN` (8h) and has no `session` claim.
+ * expires after `JWT_EXPIRES_IN` (8h) and has no `session` claim. `issuedAt` overrides `iat`
+ * (renewal backdates it, see `renewSession`).
  */
-export function signToken(user: AuthUser): string {
+export function signToken(user: AuthUser, options: { issuedAt?: number } = {}): string {
   const mobile = user.session === MOBILE_SESSION
-  return jwt.sign(mobile ? { role: user.role, session: MOBILE_SESSION } : { role: user.role }, env.JWT_SECRET, {
+  const claims = mobile ? { role: user.role, session: MOBILE_SESSION } : { role: user.role }
+  // An explicit `iat` (seconds) also moves `exp`, which jsonwebtoken derives from the payload's `iat`.
+  const payload = options.issuedAt === undefined ? claims : { ...claims, iat: options.issuedAt }
+  return jwt.sign(payload, env.JWT_SECRET, {
     algorithm: ALGORITHM,
     expiresIn: mobile ? MOBILE_SESSION_TTL_SECONDS : (env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn']),
     issuer: TOKEN_ISSUER,

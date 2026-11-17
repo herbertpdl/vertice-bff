@@ -34,9 +34,9 @@ export type SessionClient = 'mobile' | 'web'
  */
 const MOBILE_ROLES: readonly Role[] = ['TRAINER', 'CLIENT']
 
-function session(user: userService.User, client: SessionClient): Session {
+function session(user: userService.User, client: SessionClient, issuedAt?: number): Session {
   const mobile = client === 'mobile' && MOBILE_ROLES.includes(user.role)
-  const token = signToken({ id: user.id, role: user.role, ...(mobile ? { session: MOBILE_SESSION } : {}) })
+  const token = signToken({ id: user.id, role: user.role, ...(mobile ? { session: MOBILE_SESSION } : {}) }, { issuedAt })
   return {
     token,
     expiresAt: tokenExpiresAt(token),
@@ -96,10 +96,15 @@ export const NOT_RENEWABLE_MESSAGE = 'Only a mobile session can be renewed'
  */
 export async function renewSession(caller: AuthUser): Promise<Session> {
   if (caller.session !== MOBILE_SESSION) throw new HttpError(403, NOT_RENEWABLE_MESSAGE, 'SESSION_NOT_RENEWABLE')
+  // The new token's `iat` is one second before the upstream check started. vertice-api voids
+  // tokens issued before a password change's mark (truncated to the second); a change committed
+  // just after the check, in the same second as the signing, would otherwise leave this token with
+  // `iat` equal to the mark, outliving the change and every later renewal.
+  const issuedAt = Math.floor(Date.now() / 1000) - 1
   const user = userService.toUser(await userService.getSelf(caller.id))
   // vertice-api already refuses a mismatch; checked again so nothing but the caller is ever signed.
   if (user.id !== caller.id || user.role !== caller.role) throw new HttpError(401, 'Session no longer valid', 'UNAUTHENTICATED')
-  return session(user, 'mobile')
+  return session(user, 'mobile', issuedAt)
 }
 
 /**

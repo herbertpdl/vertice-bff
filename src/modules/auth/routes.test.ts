@@ -622,7 +622,7 @@ describe('mobile persistent session', () => {
   const claimsOf = (token: string) => jwt.decode(token) as jwt.JwtPayload
 
   /** The token is web (8h, no `session` claim) or mobile (90 days, `session: "mobile"`), and `expiresAt` is its exp. */
-  const expectSession = (body: { token: string; expiresAt: string }, kind: 'web' | 'mobile') => {
+  const expectSession = (body: { token: string; expiresAt: string }, kind: 'web' | 'mobile', maxSkew = 2) => {
     const claims = claimsOf(body.token)
     if (kind === 'mobile') {
       expect(claims.session).toBe('mobile')
@@ -631,7 +631,7 @@ describe('mobile persistent session', () => {
       expect(claims).not.toHaveProperty('session')
       expect(claims.exp! - claims.iat!).toBe(EIGHT_HOURS)
     }
-    expect(Math.abs(claims.iat! - NOW_S())).toBeLessThanOrEqual(2)
+    expect(Math.abs(claims.iat! - NOW_S())).toBeLessThanOrEqual(maxSkew)
     expect(body.expiresAt).toBe(new Date(claims.exp! * 1000).toISOString())
   }
 
@@ -700,6 +700,18 @@ describe('mobile persistent session', () => {
       expect(res.json().user).toEqual({ id: ids.clientA, name: 'Client A', email: emailOf(ids.clientA), role: 'CLIENT' })
       expect(upstreamCallers).toEqual([{ method: 'GetUser', caller: { id: ids.clientA, role: 'CLIENT' } }])
       expect(upstreamRequest('GetUser')).toEqual({ id: ids.clientA })
+    })
+
+    it('backdates the new iat to before the upstream check, so a password change in the same second voids it', async () => {
+      let checkStartedAt = 0
+      grpcCallMock.mockImplementationOnce(async (...args) => {
+        checkStartedAt = Math.floor(Date.now() / 1000)
+        return fakeGrpcCall(...args)
+      })
+      const res = await renew(bearer('clientA', { mobile: true }))
+      expect(res.statusCode, res.body).toBe(200)
+      expectSession(res.json(), 'mobile', 3)
+      expect(claimsOf(res.json().token).iat).toBeLessThan(checkStartedAt)
     })
 
     it("renews a trainer's mobile token too", async () => {
