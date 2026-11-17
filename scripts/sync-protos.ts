@@ -9,7 +9,8 @@
  *
  * Bumping the pin: merge the proto change in vertice-api, put the merge commit's full SHA in
  * `protos/.api-ref`, run `npm run sync:protos`, commit both. CI runs `--check`.
- * vertice-api is public, so the remote mode needs no token (set GITHUB_TOKEN to lift rate limits).
+ * vertice-api is private, so the remote mode needs GITHUB_TOKEN with contents:read on it (CI passes
+ * the VERTICE_API_READ_TOKEN secret; locally, `GITHUB_TOKEN=$(gh auth token)`).
  */
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -66,12 +67,20 @@ async function fetchSource(sha: string, local: string | null, scratch: string): 
   }
   const headers: Record<string, string> = { 'User-Agent': 'vertice-bff-sync-protos' }
   if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`
-  const res = await fetch(`https://codeload.github.com/${REPO}/tar.gz/${sha}`, { headers })
-  if (!res.ok) fail(`could not fetch ${REPO}@${sha}: HTTP ${res.status}`)
+  // The REST tarball endpoint (not codeload) is the one that honours a token on a private repo.
+  // It redirects to a short-lived signed URL; fetch follows it.
+  const res = await fetch(`https://api.github.com/repos/${REPO}/tarball/${sha}`, { headers })
+  if (!res.ok) {
+    const hint = process.env.GITHUB_TOKEN ? '' : ' (vertice-api is private: set GITHUB_TOKEN)'
+    fail(`could not fetch ${REPO}@${sha}: HTTP ${res.status}${hint}`)
+  }
   const archive = path.join(scratch, 'src.tar.gz')
   writeFileSync(archive, Buffer.from(await res.arrayBuffer()))
-  execFileSync('tar', ['-xzf', archive, '-C', scratch])
-  return path.join(scratch, `vertice-api-${sha}`, SRC_DIR)
+  const extracted = path.join(scratch, 'src')
+  mkdirSync(extracted)
+  // The archive's single top-level folder is named <owner>-<repo>-<short sha>; strip it.
+  execFileSync('tar', ['-xzf', archive, '-C', extracted, '--strip-components', '1'])
+  return path.join(extracted, SRC_DIR)
 }
 
 async function main(): Promise<void> {
