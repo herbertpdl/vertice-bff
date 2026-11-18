@@ -8,10 +8,10 @@ option java_multiple_files = true;
 service WorkoutFeedbackService {
   // Authorization (P1-01, matrix in vertice-api CLAUDE.md): needs a user token.
 
-  // The log's client or ADMIN; anyone else, or a missing log, is PERMISSION_DENIED. Only on a
+  // The log's client; anyone else, or a missing log, is PERMISSION_DENIED. Only on a
   // completed session (FAILED_PRECONDITION otherwise).
   rpc SubmitWorkoutFeedback(SubmitWorkoutFeedbackRequest) returns (WorkoutFeedbackResponse);
-  // TRAINER with their own trainer_id (anything else is PERMISSION_DENIED), or ADMIN.
+  // TRAINER with their own trainer_id (anything else is PERMISSION_DENIED).
   rpc ListWorkoutFeedback(ListWorkoutFeedbackRequest) returns (ListWorkoutFeedbackResponse);
 }
 

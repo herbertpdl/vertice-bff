@@ -51,7 +51,8 @@ export default async function authRoutes(app: FastifyInstance) {
           'The password is checked by vertice-api. A wrong password, an unknown email and an account with no password ' +
           'yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited. ' +
           'With `X-Vertice-Client: mobile` a TRAINER or CLIENT gets a 90-day mobile session, renewable with ' +
-          '`POST /auth/session/renew`; without it (and for ADMIN) the 8h web session.',
+          '`POST /auth/session/renew`; without it (and for ADMIN) the 8h web session. An admin signs in at ' +
+          '`POST /admin/auth/login` instead: the token this route signs an ADMIN is refused everywhere.',
         tag: 'Auth',
         auth: 'public',
         headers: sessionClientHeadersSchema,
@@ -122,7 +123,9 @@ export default async function authRoutes(app: FastifyInstance) {
   )
 
   // The /me routes are self only by construction: the user id comes from the token, never the
-  // request. Any role, ADMIN included, like the password change: it is the caller's own account.
+  // request. Reading the account, consent and the password change admit every role, ADMIN
+  // included; correcting, deleting and exporting it are TRAINER and CLIENT only (admin-panel R16b,
+  // E41: an admin's account is managed by ops, and vertice-api refuses these to ADMIN too).
   app.get(
     '/me',
     {
@@ -141,7 +144,7 @@ export default async function authRoutes(app: FastifyInstance) {
   app.patch(
     '/me',
     {
-      preHandler: app.authenticate,
+      preHandler: [app.authenticate, app.requireRole('TRAINER', 'CLIENT')],
       schema: routeDoc({
         operationId: 'updateMe',
         summary: 'Correct the caller’s own profile',
@@ -150,9 +153,10 @@ export default async function authRoutes(app: FastifyInstance) {
           '`cpf`: a string sets it (the mask `GET /auth/me` returns is refused), `null` removes it (a trainer’s CPF is required). ' +
           '`cref` is a trainer’s only. No email verification yet.',
         tag: 'Auth',
+        roles: ['TRAINER', 'CLIENT'],
         body: updateMeSchema,
         ok: { status: 200, description: 'The updated account.', schema: meSchema },
-        errors: [409],
+        errors: [403, 409],
       }),
     },
     async (req) => {
@@ -168,7 +172,7 @@ export default async function authRoutes(app: FastifyInstance) {
   app.delete(
     '/me',
     {
-      preHandler: [app.authenticate, deleteLimit.preHandler],
+      preHandler: [app.authenticate, app.requireRole('TRAINER', 'CLIENT'), deleteLimit.preHandler],
       onResponse: deleteLimit.onResponse,
       schema: routeDoc({
         operationId: 'deleteMe',
@@ -177,9 +181,10 @@ export default async function authRoutes(app: FastifyInstance) {
           'LGPD art. 18 VI. Re-checks `password` first (a wrong one is 400 `INVALID_CURRENT_PASSWORD`, not a 401). ' +
           'A trainer with active clients gets 409 `ACTIVE_CLIENTS`. Every token of the account stops working afterwards.',
         tag: 'Auth',
+        roles: ['TRAINER', 'CLIENT'],
         body: deleteAccountSchema,
         ok: { status: 204, description: 'Deleted; no body.' },
-        errors: [409, 429],
+        errors: [403, 409, 429],
       }),
     },
     async (req, reply) => {
@@ -216,7 +221,7 @@ export default async function authRoutes(app: FastifyInstance) {
   app.get(
     '/me/export',
     {
-      preHandler: [app.authenticate, exportLimit.preHandler],
+      preHandler: [app.authenticate, app.requireRole('TRAINER', 'CLIENT'), exportLimit.preHandler],
       onResponse: exportLimit.onResponse,
       schema: routeDoc({
         operationId: 'exportMyData',
@@ -226,8 +231,9 @@ export default async function authRoutes(app: FastifyInstance) {
           '(`Content-Disposition: attachment; filename="vertice-dados-YYYY-MM-DD.json"`). ' +
           'Over the export bounds it is 413 `TOO_LARGE` rather than a truncated file. 3 per hour per user.',
         tag: 'Auth',
+        roles: ['TRAINER', 'CLIENT'],
         ok: { status: 200, description: 'The export document.', schema: dataExportSchema },
-        errors: [413, 429],
+        errors: [403, 413, 429],
       }),
     },
     async (req, reply) => {

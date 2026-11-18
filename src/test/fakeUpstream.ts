@@ -4,7 +4,10 @@ import { env } from '../config/env.js'
 import { mapGrpcError, withCallerIdentity, type GrpcCallOptions } from '../grpc/call.js'
 import { todayInBusinessZone } from '../lib/dates.js'
 import {
+  ADMIN_SESSION_MAX_SECONDS,
+  ADMIN_SESSION_TTL_SECONDS,
   MOBILE_SESSION,
+  signAdminToken,
   signToken,
   TOKEN_AUDIENCE,
   TOKEN_ISSUER,
@@ -142,11 +145,35 @@ export function userOf(actor: Actor) {
   return users.find((u) => u.id === ids[actor])!
 }
 
-/** A web (8h) token for `actor`, or with `{ mobile: true }` a 90-day mobile session token. */
+/**
+ * A web (8h) token for `actor`, or with `{ mobile: true }` a 90-day mobile session token. The admin
+ * gets an admin session token (`signAdminToken`, signed in a second ago), the only ADMIN token
+ * `verifyToken` and vertice-api accept.
+ */
 export function bearer(actor: Actor, options: { mobile?: boolean } = {}) {
   const u = userOf(actor)
+  if (u.role === 'ADMIN') return { authorization: `Bearer ${adminSessionToken(u.id)}` }
   const token = signToken({ id: u.id, role: u.role, ...(options.mobile ? { session: MOBILE_SESSION } : {}) })
   return { authorization: `Bearer ${token}` }
+}
+
+/** A valid admin session token for `id`, signed in `ageSeconds` ago (default 1). */
+export function adminSessionToken(id: number = ids.admin, ageSeconds = 1): string {
+  const authTime = Math.floor(Date.now() / 1000) - ageSeconds
+  return signAdminToken({ id, authTime, issuedAt: authTime })
+}
+
+/**
+ * An ADMIN token signed by hand with these claims (scope, `sub` and HS256 as the BFF's), for the
+ * tokens `signAdminToken` refuses to make: no `amr`, no `auth_time`, past 12h, too long.
+ */
+export function craftedAdminToken(claims: Record<string, unknown>, id: number = ids.admin): string {
+  const now = Math.floor(Date.now() / 1000)
+  return jwt.sign(
+    { role: 'ADMIN', amr: ['pwd', 'otp'], auth_time: now - 1, iat: now - 1, exp: now - 1 + ADMIN_SESSION_TTL_SECONDS, ...claims },
+    env.JWT_SECRET,
+    { algorithm: 'HS256', issuer: TOKEN_ISSUER, audience: TOKEN_AUDIENCE, subject: String(id) },
+  )
 }
 
 export const emailOf = (id: number) => `user${id}@vertice.test`
@@ -275,8 +302,21 @@ const exerciseRes = (e: (typeof exercises)[number] = exercises[0]!) => ({
  * ops scripts' `service:ops` only on what `issue-setup-tokens` needs. Both carry `role: SERVICE`.
  */
 export const API_SERVICE_SUBJECT_RPCS: Readonly<Record<string, readonly string[]>> = {
-  'service:bff': ['VerifyCredentials', 'CreateUser', 'RedeemPasswordSetupToken'],
-  'service:ops': ['ListUsers', 'CreatePasswordSetupToken'],
+  'service:bff': [
+    'VerifyCredentials',
+    'CreateUser',
+    'RedeemPasswordSetupToken',
+    'GetSecondFactorState',
+    'StartSecondFactorEnrollment',
+    'VerifySecondFactor',
+  ],
+  'service:ops': [
+    'ListUsers',
+    'CreatePasswordSetupToken',
+    'CreateAdmin',
+    'IssueAdminSetupToken',
+    'ResetAdminSecondFactor',
+  ],
 }
 
 /**
@@ -342,7 +382,63 @@ function userCaller(claims: jwt.JwtPayload): AuthUser {
   if (!['ADMIN', 'TRAINER', 'CLIENT'].includes(role)) upstreamError(status.UNAUTHENTICATED, 'Unrecognized caller identity')
   const stored = users.find((u) => u.id === id)
   if (stored?.role !== role) upstreamError(status.UNAUTHENTICATED, 'Session no longer valid')
+  if (role === 'ADMIN' && !acceptsAdminToken(claims)) upstreamError(status.UNAUTHENTICATED, 'Session no longer valid')
   return { id, role }
+}
+
+/**
+ * vertice-api's D6 checks on an ADMIN token, written out independently of the BFF's `verifyToken`:
+ * `amr` contains "otp", `auth_time` present and not after `iat`, now at most 12h after `auth_time`,
+ * `exp - iat` at most 30 minutes. So a BFF that signs a bad admin token fails here too.
+ */
+function acceptsAdminToken(claims: jwt.JwtPayload): boolean {
+  const { amr, auth_time: authTime, iat, exp } = claims
+  if (!Array.isArray(amr) || !amr.includes('otp')) return false
+  if (typeof authTime !== 'number' || typeof iat !== 'number' || typeof exp !== 'number') return false
+  if (authTime > iat) return false
+  if (Date.now() / 1000 > authTime + ADMIN_SESSION_MAX_SECONDS) return false
+  return exp - iat <= ADMIN_SESSION_TTL_SECONDS
+}
+
+/**
+ * Each admin's second factor, as vertice-api's `admin_second_factors` holds it. The fixture admin
+ * starts with a pending (unconfirmed) secret: the state reads NOT_ENROLLED, enrolment can restart,
+ * and a right code confirms it. Codes in `FAKE_TOTP_CODES` are right, each accepted once (the API's
+ * replay protection); five wrong ones in a row lock it. `resetFakeSecondFactors()` in `beforeEach`.
+ */
+export const FAKE_TOTP_CODES = ['123456', '234567', '345678', '456789'] as const
+export const FAKE_LOCK_SECONDS = 900
+type SecondFactor = { secret: 'none' | 'pending' | 'enrolled'; used: Set<string>; failures: number; locked: boolean }
+const initialSecondFactors = (): Map<number, SecondFactor> =>
+  new Map([[ids.admin, { secret: 'pending', used: new Set(), failures: 0, locked: false }]])
+let secondFactors = initialSecondFactors()
+export const resetFakeSecondFactors = () => {
+  secondFactors = initialSecondFactors()
+}
+/** Puts an admin's second factor in a state (`locked` sets the 15-minute lock). */
+export function setFakeSecondFactor(id: number, state: SecondFactor['secret'] | 'locked') {
+  const factor = secondFactors.get(id) ?? { secret: 'none', used: new Set(), failures: 0, locked: false }
+  if (state === 'locked') factor.locked = true
+  else factor.secret = state
+  secondFactors.set(id, factor)
+}
+
+/** Mirrors `AdminAuthService`'s guard: service:bff only, for a non-deleted ADMIN. */
+function secondFactorOf(userId: unknown): SecondFactor {
+  if (currentCaller !== 'service:bff') upstreamError(status.PERMISSION_DENIED, 'AdminAuthService is service:bff only')
+  const user = users.find((u) => u.id === Number(userId))
+  if (user?.role !== 'ADMIN') upstreamError(status.PERMISSION_DENIED, 'Not an admin')
+  let factor = secondFactors.get(user.id)
+  if (!factor) secondFactors.set(user.id, (factor = { secret: 'none', used: new Set(), failures: 0, locked: false }))
+  return factor
+}
+
+/** Mirrors `AdminOpsService`'s guard: service:ops only; a missing or non-admin user is NOT_FOUND. */
+function opsAdmin(userId: unknown) {
+  if (currentCaller !== 'service:ops') upstreamError(status.PERMISSION_DENIED, 'AdminOpsService is service:ops only')
+  const user = users.find((u) => u.id === Number(userId))
+  if (user?.role !== 'ADMIN') upstreamError(status.NOT_FOUND, `User with id ${Number(userId)} not found`)
+  return user
 }
 
 /** Mirrors vertice-api's `ExerciseService.getExercise` visibility rule. */
@@ -479,12 +575,58 @@ const handlers: Record<string, (req: Req) => unknown> = {
     }
   },
   SetUserPassword: () => ({}),
+  // Mirrors D10: a role other than `required_role` fails exactly like a wrong password.
   VerifyCredentials: (r) => {
     const user = users.find((u) => emailOf(u.id) === String(r.email).trim().toLowerCase())
-    if (!user || withoutPassword.has(user.id) || r.password !== FAKE_PASSWORD) {
+    const requiredRole = r.requiredRole && r.requiredRole !== 'ROLE_UNSPECIFIED' ? r.requiredRole : undefined
+    if (!user || withoutPassword.has(user.id) || r.password !== FAKE_PASSWORD || (requiredRole && requiredRole !== user.role)) {
       upstreamError(status.UNAUTHENTICATED, 'Invalid email or password')
     }
     return userRes(user, 'contact')
+  },
+
+  // AdminAuthService (vertice-api D5, D8)
+  GetSecondFactorState: (r) => ({
+    state: secondFactorOf(r.userId).secret === 'enrolled' ? 'SECOND_FACTOR_STATE_ENROLLED' : 'SECOND_FACTOR_STATE_NOT_ENROLLED',
+  }),
+  StartSecondFactorEnrollment: (r) => {
+    const factor = secondFactorOf(r.userId)
+    if (factor.secret === 'enrolled') upstreamError(status.FAILED_PRECONDITION, 'Second factor already enrolled')
+    factor.secret = 'pending'
+    return {
+      provisioningUri: `otpauth://totp/Vertice%20Admin:${encodeURIComponent(emailOf(Number(r.userId)))}?secret=FAKESECRET&issuer=Vertice%20Admin&algorithm=SHA1&digits=6&period=30`,
+    }
+  },
+  VerifySecondFactor: (r) => {
+    const factor = secondFactorOf(r.userId)
+    const code = String(r.code)
+    if (!/^[0-9]{6}$/.test(code)) upstreamError(status.INVALID_ARGUMENT, 'code: must be 6 digits')
+    if (factor.locked) {
+      upstreamError(status.RESOURCE_EXHAUSTED, `Too many second-factor attempts; retry after ${FAKE_LOCK_SECONDS} seconds`)
+    }
+    if (factor.secret === 'none') upstreamError(status.FAILED_PRECONDITION, 'Second factor not enrolled')
+    if (!(FAKE_TOTP_CODES as readonly string[]).includes(code) || factor.used.has(code)) {
+      factor.failures += 1
+      if (factor.failures >= 5) Object.assign(factor, { failures: 0, locked: true })
+      upstreamError(status.UNAUTHENTICATED, 'Invalid second-factor code')
+    }
+    factor.used.add(code)
+    factor.failures = 0
+    const enrolledNow = factor.secret === 'pending'
+    factor.secret = 'enrolled'
+    return { enrolledNow }
+  },
+
+  // AdminOpsService (vertice-api D9)
+  CreateAdmin: (r) => {
+    if (currentCaller !== 'service:ops') upstreamError(status.PERMISSION_DENIED, 'AdminOpsService is service:ops only')
+    if (users.some((u) => emailOf(u.id) === String(r.email))) upstreamError(status.ALREADY_EXISTS, 'Email already in use')
+    return { userId: '98', setupToken: setupTokenFor(98), expiresAt: '2099-01-01T00:00:00Z' }
+  },
+  IssueAdminSetupToken: (r) => ({ setupToken: setupTokenFor(opsAdmin(r.userId).id), expiresAt: '2099-01-01T00:00:00Z' }),
+  ResetAdminSecondFactor: (r) => {
+    secondFactors.delete(opsAdmin(r.userId).id)
+    return {}
   },
   // Any id: the user `CreateClientForTrainer` just created (id 99) isn't in the fixtures.
   CreatePasswordSetupToken: (r) => ({
@@ -654,7 +796,8 @@ const handlers: Record<string, (req: Req) => unknown> = {
 
 /** RPCs that change upstream state. A refused request must never reach one. */
 export const isWriteRpc = (method: string) =>
-  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard)/.test(method)
+  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard|Start|Verify|Issue|Reset)/.test(method) &&
+  method !== 'VerifyCredentials'
 
 /**
  * Drop-in implementation for the mocked `grpcCall`; unknown methods, and calls without a valid

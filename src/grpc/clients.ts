@@ -26,3 +26,10 @@ export const trainerClientClient = new grpcProto.vertice.trainerclient.v1.Traine
   grpcTarget,
   credentials,
 )
+/** `service:bff` only, from `modules/admin-auth/service.ts` (admin sign-in's second factor). */
+export const adminAuthClient = new grpcProto.vertice.admin.v1.AdminAuthService(grpcTarget, credentials)
+/**
+ * `service:ops` only: imported by the ops scripts (`src/ops/`), never by the server (admin-panel
+ * spec B6; pinned by a source scan in `route-authorization.test.ts`).
+ */
+export const adminOpsClient = new grpcProto.vertice.admin.v1.AdminOpsService(grpcTarget, credentials)

@@ -3,6 +3,7 @@ import { FEEDBACK_RATINGS } from '../modules/feedback/schemas.js'
 import { dayOfWeekSchema } from '../modules/workouts/schemas.js'
 import { setStrategySchema } from '../modules/exercise-sets/schemas.js'
 import { planLevelSchema } from '../modules/training-plans/schemas.js'
+import type * as adminAuthService from '../modules/admin-auth/service.js'
 import type * as authService from '../modules/auth/service.js'
 import type * as clientService from '../modules/clients/service.js'
 import type * as dashboardService from '../modules/dashboard/service.js'
@@ -70,6 +71,8 @@ export const ERROR_CODES = [
   'INVALID_SETUP_TOKEN',
   'ACTIVE_CLIENTS',
   'SESSION_NOT_RENEWABLE',
+  'CHALLENGE_INVALID',
+  'INVALID_SECOND_FACTOR_CODE',
 ] as const
 
 export const errorCodeSchema = named('ErrorCode', z.enum(ERROR_CODES))
@@ -108,6 +111,49 @@ export const sessionSchema = named(
         'When `token` expires, an ISO-8601 instant: 8 hours out for a web session, 90 days for a mobile one ' +
           '(`X-Vertice-Client: mobile`). A mobile app renews before this with `POST /api/auth/session/renew`.',
       ),
+    user: sessionUserSchema,
+  }),
+)
+
+// ---- admin sign-in ------------------------------------------------------------------------------
+
+export const adminChallengeSchema = named(
+  'AdminChallenge',
+  z.object({
+    challenge: z
+      .string()
+      .describe(
+        'Opaque. Send it in the body of `POST /api/admin/auth/enroll` and `/verify` only, never as a bearer ' +
+          '(it is a 401 there). Reusable until it expires.',
+      ),
+    challengeExpiresAt: instant.describe('When `challenge` expires: 5 minutes after the password step.'),
+    secondFactor: z
+      .enum(['ENROLLED', 'NOT_ENROLLED'])
+      .describe('`NOT_ENROLLED`: enroll, then verify. `ENROLLED`: go straight to the code step.'),
+  }),
+)
+
+export const adminEnrollmentSchema = named(
+  'AdminEnrollment',
+  z.object({
+    provisioningUri: z
+      .string()
+      .describe(
+        'The `otpauth://totp/...` URI with the new secret. Render it as a QR code in-process (never through a ' +
+          'third-party service), never log or store it. Each enroll call replaces it with a new secret.',
+      ),
+  }),
+)
+
+export const adminSessionSchema = named(
+  'AdminSession',
+  z.object({
+    token: z.string().describe('The admin bearer token. Send it only from the admin host.'),
+    expiresAt: instant.describe(
+      'When `token` expires: 30 minutes after it was issued, never after `sessionEndsAt`. Renew before this ' +
+        'with `POST /api/admin/auth/renew`.',
+    ),
+    sessionEndsAt: instant.describe('The sign-in’s hard cap, 12 hours after the code step. Renewal never moves it.'),
     user: sessionUserSchema,
   }),
 )
@@ -487,6 +533,9 @@ type Resolved<F extends (...args: never[]) => Promise<unknown>> = Awaited<Return
 export type ResponseSchemasMatchServices = [
   Assert<SameShape<Out<typeof roleSchema>, userService.Role>>,
   Assert<SameShape<Out<typeof sessionSchema>, authService.Session>>,
+  Assert<SameShape<Out<typeof adminChallengeSchema>, adminAuthService.AdminChallenge>>,
+  Assert<SameShape<Out<typeof adminEnrollmentSchema>, adminAuthService.AdminEnrollment>>,
+  Assert<SameShape<Out<typeof adminSessionSchema>, adminAuthService.AdminSession>>,
   Assert<SameShape<Out<typeof passwordSetupResultSchema>, userService.RedeemedSetup>>,
   Assert<SameShape<Out<typeof consentSchema>, userService.Consent>>,
   Assert<SameShape<Out<typeof meSchema>, userService.Me>>,

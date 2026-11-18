@@ -1,15 +1,33 @@
 import * as grpc from '@grpc/grpc-js'
 import { DEV_NODE_ENVS, env } from '../config/env.js'
-import { ConflictError, ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
+import {
+  ConflictError,
+  ForbiddenError,
+  HttpError,
+  NotFoundError,
+  PreconditionFailedError,
+  UpstreamExhaustedError,
+  ValidationError,
+} from '../lib/errors.js'
 import { serviceToken } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
 
 /**
  * The only RPCs the BFF's runtime service token (`serviceToken()`) may be sent on: the public
- * auth routes, where no user is behind the call (login, register, password setup). vertice-api
- * allows `service:bff` on exactly these.
+ * auth routes, where no user is behind the call (login, register, password setup), and the admin
+ * sign-in's second-factor RPCs (`AdminAuthService`, admin-panel spec B5), which the admin calls
+ * holding only a challenge token. vertice-api allows `service:bff` on exactly these. Only
+ * `modules/admin-auth/service.ts` may send the three admin ones, after a valid challenge (pinned by
+ * a source scan in `route-authorization.test.ts`).
  */
-export const SERVICE_TOKEN_RPCS: ReadonlySet<string> = new Set(['VerifyCredentials', 'CreateUser', 'RedeemPasswordSetupToken'])
+export const SERVICE_TOKEN_RPCS: ReadonlySet<string> = new Set([
+  'VerifyCredentials',
+  'CreateUser',
+  'RedeemPasswordSetupToken',
+  'GetSecondFactorState',
+  'StartSecondFactorEnrollment',
+  'VerifySecondFactor',
+])
 
 export interface GrpcCallOptions {
   /** Extra metadata. An `authorization` already in it is sent as is (the ops script's own token). */
@@ -147,12 +165,27 @@ export function mapGrpcError(error: Pick<grpc.ServiceError, 'code' | 'details'>)
     // rather than truncate) or grpc-js's own 4 MiB receive limit. Retrying won't help, so it is
     // not a 5xx. Logged as a warning (not in EXPECTED_STATUSES): an account that reaches the
     // bounds means paging the export is due.
+    // The retry seconds of a lock or send limit ("...; retry after N seconds") go on the error,
+    // never in the body; only a route that maps this to a 429 uses them.
     case grpc.status.RESOURCE_EXHAUSTED:
-      return new HttpError(413, UPSTREAM_MESSAGES.resourceExhausted, 'TOO_LARGE')
+      return new UpstreamExhaustedError(UPSTREAM_MESSAGES.resourceExhausted, retryAfterSecondsOf(error.details))
     // UNKNOWN, INTERNAL and anything else: whatever upstream said stays in the log.
     default:
       return new HttpError(502, UPSTREAM_MESSAGES.upstreamError, 'UPSTREAM_ERROR')
   }
+}
+
+/** The longest wait a `Retry-After` taken from upstream text may ask for (one day). */
+export const MAX_RETRY_AFTER_SECONDS = 86_400
+
+/**
+ * The N of vertice-api's fixed "retry after N seconds" (RESOURCE_EXHAUSTED on a lock or a send
+ * limit), clamped to 1..86400; undefined when the text has none.
+ */
+export function retryAfterSecondsOf(details: string | undefined): number | undefined {
+  const match = /retry after (\d{1,12}) seconds?/i.exec(details ?? '')
+  if (!match) return undefined
+  return Math.min(Math.max(Number(match[1]), 1), MAX_RETRY_AFTER_SECONDS)
 }
 
 const EMAIL_PATTERN = /[^\s@:;,()<>[\]"'=]+@[^\s@:;,()<>[\]"'=]+/g

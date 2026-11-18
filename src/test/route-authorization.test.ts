@@ -5,10 +5,16 @@ import { env } from '../config/env.js'
 import { grpcCall, MissingCallerIdentityError, SERVICE_TOKEN_RPCS } from '../grpc/call.js'
 import { Metadata } from '@grpc/grpc-js'
 import type { z } from 'zod'
-import { serviceToken, signToken, type Role } from '../lib/jwt.js'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { ADMIN_SESSION_MAX_SECONDS, serviceToken, signAdminChallenge, signAdminToken, signToken, type Role } from '../lib/jwt.js'
 import {
   API_SERVICE_SUBJECT_RPCS,
   bearer,
+  craftedAdminToken,
+  FAKE_TOTP_CODES,
+  resetFakeSecondFactors,
   emailOf,
   FAKE_PASSWORD,
   fakeGrpcCall,
@@ -90,6 +96,11 @@ interface RouteCase {
   /** Roles the route admits; omitted means any authenticated user. */
   roles?: Role[]
   ok: Call | Omit<Call, 'as'>
+  /**
+   * A public sign-in step that, after its service-token calls, checks the session it just signed
+   * upstream (`GetUser` with the new token): those calls carry this actor's identity.
+   */
+  signsIn?: Actor
   denied?: Denied[]
   scoped?: Scoped[]
 }
@@ -125,6 +136,25 @@ const routes: RouteCase[] = [
     ok: { as: 'clientA', url: '/api/auth/session/renew', mobile: true },
   },
   { route: 'GET /api/auth/me', ok: { as: 'clientA', url: '/api/auth/me' } },
+
+  // admin sign-in (admin-panel spec §2.1): the challenge travels in the body only
+  {
+    route: 'POST /api/admin/auth/login',
+    public: true,
+    ok: { url: '/api/admin/auth/login', body: { email: emailOf(ids.admin), password: FAKE_PASSWORD } },
+  },
+  {
+    route: 'POST /api/admin/auth/enroll',
+    public: true,
+    ok: { url: '/api/admin/auth/enroll', body: { challenge: signAdminChallenge(ids.admin) } },
+  },
+  {
+    route: 'POST /api/admin/auth/verify',
+    public: true,
+    signsIn: 'admin',
+    ok: { url: '/api/admin/auth/verify', body: { challenge: signAdminChallenge(ids.admin), code: FAKE_TOTP_CODES[0] } },
+  },
+  { route: 'POST /api/admin/auth/renew', roles: ['ADMIN'], ok: { as: 'admin', url: '/api/admin/auth/renew' } },
   {
     // Self only: the client's own trainer, from the token.
     route: 'GET /api/auth/me/trainer',
@@ -141,8 +171,9 @@ const routes: RouteCase[] = [
     ],
   },
   {
-    // Self only: the user id comes from the token; a body id or role goes nowhere.
+    // Self only: the user id comes from the token; a body id or role goes nowhere. Not ADMIN (R16b).
     route: 'PATCH /api/auth/me',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: '/api/auth/me', body: { name: 'Novo Nome' } },
     scoped: [
       {
@@ -157,6 +188,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'DELETE /api/auth/me',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: '/api/auth/me', body: { password: FAKE_PASSWORD } },
     scoped: [
       {
@@ -171,6 +203,7 @@ const routes: RouteCase[] = [
   },
   {
     route: 'GET /api/auth/me/export',
+    roles: ['TRAINER', 'CLIENT'],
     ok: { as: 'clientA', url: '/api/auth/me/export' },
     scoped: [
       {
@@ -933,6 +966,7 @@ describe('route authorization', () => {
     grpcCallMock.mockImplementation(fakeGrpcCall)
     resetUpstreamCallers()
     resetFakeConsents()
+    resetFakeSecondFactors()
   })
 
   const send = (method: string, call: Partial<Call> & { url: string }) =>
@@ -1016,40 +1050,123 @@ describe('route authorization', () => {
 
   it.each([
     ['deleted', { id: 999, role: 'CLIENT' as const }],
-    ['demoted', { id: ids.trainerA, role: 'ADMIN' as const }],
+    ['re-roled', { id: ids.trainerA, role: 'ADMIN' as const }],
   ])('answers 401 with a fixed body when vertice-api no longer accepts a %s user', async (_, user) => {
+    const now = Math.floor(Date.now() / 1000)
+    const token = user.role === 'ADMIN' ? signAdminToken({ id: user.id, authTime: now, issuedAt: now }) : signToken(user)
     const res = await app.inject({
       method: 'GET',
       url: '/api/auth/me',
-      headers: { authorization: `Bearer ${signToken(user)}` },
+      headers: { authorization: `Bearer ${token}` },
     })
     expect(res.statusCode, res.body).toBe(401)
     expect(res.json().error).toMatchObject({ code: 'UNAUTHENTICATED', message: 'Session no longer valid' })
   })
 
-  it("pins the BFF's service-token RPCs to the API contract: exactly the three public auth RPCs", () => {
-    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual(['CreateUser', 'RedeemPasswordSetupToken', 'VerifyCredentials'])
+  it("pins the BFF's service-token RPCs to the API contract: the public auth RPCs and AdminAuthService", () => {
+    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual([
+      'CreateUser',
+      'GetSecondFactorState',
+      'RedeemPasswordSetupToken',
+      'StartSecondFactorEnrollment',
+      'VerifyCredentials',
+      'VerifySecondFactor',
+    ])
     expect([...SERVICE_TOKEN_RPCS].sort()).toEqual([...API_SERVICE_SUBJECT_RPCS['service:bff']!].sort())
   })
 
-  // ADMIN has no defined product yet (P1-02, QUAL-BFF-001): it keeps its own account and the
-  // generic catalog reads, and everything trainer- or client-scoped is a 403 by role. A future
-  // ADMIN feature needs a PRD first; extending this list without one is the regression to catch.
-  const ADMIN_ROUTES = [
+  // Role separation (admin-panel spec B7). Outside /api/admin, ADMIN keeps only its own account's
+  // read, consent and password change, and the catalog reads the admin screens use (VRT-31 drops
+  // the two exercise reads). Under /api/admin, only the sign-in steps are public and everything
+  // else is ADMIN only. Widening any of these lists needs the PRD to say so.
+  const ADMIN_SELF_ROUTES = [
     'GET /api/auth/me',
-    'PATCH /api/auth/me',
-    'DELETE /api/auth/me',
-    'GET /api/auth/me/export',
     'POST /api/auth/me/consent',
     'POST /api/auth/password',
     'GET /api/exercises',
     'GET /api/exercises/:id',
     'GET /api/muscle-groups',
   ]
+  const PUBLIC_ADMIN_AUTH_ROUTES = ['POST /api/admin/auth/login', 'POST /api/admin/auth/enroll', 'POST /api/admin/auth/verify']
+  const underAdmin = (r: RouteCase) => r.route.split(' ')[1]!.startsWith('/api/admin/')
+  const admitsAdmin = (r: RouteCase) => !r.public && (!r.roles || r.roles.includes('ADMIN'))
 
-  it('admits ADMIN on the generic routes only', () => {
-    const admitted = routes.filter((r) => !r.public && (!r.roles || r.roles.includes('ADMIN'))).map((r) => r.route)
-    expect(admitted.sort()).toEqual([...ADMIN_ROUTES].sort())
+  it('admits ADMIN outside /api/admin on its own account and the catalog reads only', () => {
+    const admitted = routes.filter((r) => !underAdmin(r) && admitsAdmin(r)).map((r) => r.route)
+    expect(admitted.sort()).toEqual([...ADMIN_SELF_ROUTES].sort())
+  })
+
+  it('keeps every /api/admin route ADMIN-only, except the public sign-in steps', () => {
+    const admin = routes.filter(underAdmin)
+    expect(admin.filter((r) => r.public).map((r) => r.route).sort()).toEqual([...PUBLIC_ADMIN_AUTH_ROUTES].sort())
+    for (const r of admin.filter((r) => !r.public)) expect(r.roles, r.route).toEqual(['ADMIN'])
+  })
+
+  // The source of every non-test file under src/, keyed by its path relative to src/.
+  const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const sources = (() => {
+    const files = new Map<string, string>()
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = path.join(dir, name)
+        if (statSync(full).isDirectory()) {
+          if (name !== 'test') walk(full)
+        } else if (name.endsWith('.ts') && !name.endsWith('.test.ts')) {
+          files.set(path.relative(srcRoot, full).split(path.sep).join('/'), readFileSync(full, 'utf8'))
+        }
+      }
+    }
+    walk(srcRoot)
+    return files
+  })()
+  const filesMentioning = (pattern: RegExp) => [...sources].filter(([, source]) => pattern.test(source)).map(([file]) => file).sort()
+
+  it('sends the AdminAuthService RPCs (with the service token) from modules/admin-auth/service.ts only', () => {
+    // grpc/call.ts lists them in SERVICE_TOKEN_RPCS; nothing else may name them, so no other call site can exist.
+    expect(filesMentioning(/\b(GetSecondFactorState|StartSecondFactorEnrollment|VerifySecondFactor)\b/)).toEqual([
+      'grpc/call.ts',
+      'modules/admin-auth/service.ts',
+    ])
+    expect(filesMentioning(/\badminAuthClient\b/)).toEqual(['grpc/clients.ts', 'modules/admin-auth/service.ts'])
+  })
+
+  it('uses adminOpsClient under src/ops only: the server never calls AdminOpsService', () => {
+    expect(filesMentioning(/\badminOpsClient\b/).filter((file) => !file.startsWith('ops/'))).toEqual(['grpc/clients.ts'])
+  })
+
+  // A challenge is not a session, on any route (B2); and an ADMIN token without the second-factor
+  // claims, past its 12h, or longer than 30 minutes is refused by the BFF itself (B3), before upstream.
+  const challengeBearer = () => ({ authorization: `Bearer ${signAdminChallenge(ids.admin)}` })
+  const now = () => Math.floor(Date.now() / 1000)
+  const badAdminTokens: [string, () => string][] = [
+    ['the plain 8h ADMIN token /auth/login signs', () => signToken({ id: ids.admin, role: 'ADMIN' })],
+    ['an ADMIN token without amr', () => craftedAdminToken({ amr: undefined })],
+    ['an ADMIN token whose amr lacks "otp"', () => craftedAdminToken({ amr: ['pwd'] })],
+    ['an ADMIN token without auth_time', () => craftedAdminToken({ auth_time: undefined })],
+    [
+      'an ADMIN token whose auth_time is 12h + 1s ago',
+      () => craftedAdminToken({ auth_time: now() - ADMIN_SESSION_MAX_SECONDS - 1, iat: now() - 60, exp: now() + 60 }),
+    ],
+    ['an ADMIN token with exp - iat of 31 minutes', () => craftedAdminToken({ exp: now() - 1 + 31 * 60 })],
+  ]
+
+  describe.each(routes.filter((r) => !r.public))('$route with a token that is not a session', (rc) => {
+    const method = rc.route.split(' ')[0]!
+    const tokens: [string, () => string][] = [
+      ['the admin challenge', () => challengeBearer().authorization.slice('Bearer '.length)],
+      ...(admitsAdmin(rc) ? badAdminTokens : []),
+    ]
+    it.each(tokens)('is 401 with %s, and never calls upstream', async (_, token) => {
+      const res = await app.inject({
+        method: method as Method,
+        url: rc.ok.url,
+        headers: { authorization: `Bearer ${token()}` },
+        ...(rc.ok.body === undefined ? {} : { payload: rc.ok.body as object }),
+      })
+      expect(res.statusCode, res.body).toBe(401)
+      expect(res.json().error.code).toBe('UNAUTHORIZED')
+      expect(grpcCallMock).not.toHaveBeenCalled()
+    })
   })
 
   // Every /api response is no-store unless its route sets `config.cacheControl` (security-headers
@@ -1099,7 +1216,14 @@ describe('route authorization', () => {
         const res = await send(method, { ...rc.ok, as: undefined })
         expect(res.statusCode, res.body).toBeLessThan(300)
         expectDocumentedResponse(rc.route, res)
-        expect(upstreamCallers.map((c) => c.caller).filter((c) => c !== 'service:bff')).toEqual([])
+        const others = upstreamCallers.map((c) => c.caller).filter((c) => c !== 'service:bff')
+        if (rc.signsIn) {
+          const { id, role } = userOf(rc.signsIn)
+          expect(others.length).toBeGreaterThan(0)
+          for (const caller of others) expect(caller).toEqual({ id, role })
+        } else {
+          expect(others).toEqual([])
+        }
       })
     } else {
       it('is 401 without a token and never calls upstream', async () => {

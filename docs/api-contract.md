@@ -4,11 +4,14 @@ Base URL (dev): `http://localhost:3000/api`
 
 **Machine-readable contract:** [`openapi.json`](./openapi.json) (OpenAPI 3.1), generated from the route schemas by `npm run openapi` and checked in CI. It has every route with its `operationId`, parameters, request and response schemas, error responses and security scheme (bearer), and is what vertice-web-react and vertice-mobile generate their TypeScript types from (`openapi-typescript`). This document is the prose around it; where the two disagree about a field, the spec is right. The route reference below is generated from it.
 
-All endpoints except `/auth/login`, `/auth/register`, `/auth/password/setup` and `/legal/versions` require:
+All endpoints except `/auth/login`, `/auth/register`, `/auth/password/setup`, `/legal/versions` and the admin sign-in steps (`/admin/auth/login`, `/admin/auth/enroll`, `/admin/auth/verify`) require:
 `Authorization: Bearer <token>`
 
 `/auth/login` serves every role, the same for the web and the mobile app: each app decides whom it
 lets in (the web admits trainers only and refuses any other role before it creates its session).
+An ADMIN signs in at `/admin/auth/login` instead (password, then an authenticator code; see "Admin
+sign-in" below): the token `/auth/login` still signs an ADMIN is refused by every route, by the
+BFF and by vertice-api, until VRT-28 turns that answer into a 403.
 
 The token is the one `/auth/login` or `/auth/register` returned. Treat it as opaque: it carries
 only the user id and role (scoped `iss: vertice-bff`, `aud: vertice-api`, with an expiry), not the
@@ -33,7 +36,7 @@ All error responses have the shape:
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "...", "details": {} } }
 ```
-Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `TOO_LARGE` (413), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503).
+Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `CHALLENGE_INVALID` (401, admin sign-in only), `INVALID_SECOND_FACTOR_CODE` (400, admin sign-in only), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `TOO_LARGE` (413), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503).
 
 **Key on `code`, not on `message`.** Messages are English and meant for logs and debugging. When vertice-api refuses a call, the BFF relays vertice-api's own text only for `INVALID_ARGUMENT`, as a 400 `VALIDATION_ERROR` whose `message` is the field error (`name: must not be blank`). Every other upstream refusal gets a fixed message, and the upstream text goes to the BFF's log only, with emails and CPFs redacted:
 
@@ -46,7 +49,7 @@ Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), 
 | `ALREADY_EXISTS` | 409 | `CONFLICT` | `Email or CPF already in use` (the same for both, so it never says which one is taken) |
 | `UNAUTHENTICATED` | 401 | `UNAUTHENTICATED` | `Session no longer valid` |
 | `UNAVAILABLE` | 503 | `UPSTREAM_UNAVAILABLE` | `vertice-api is unavailable` |
-| `RESOURCE_EXHAUSTED` | 413 | `TOO_LARGE` | `The requested data is too large to return` (today only `GET /auth/me/export` over vertice-api's export bounds) |
+| `RESOURCE_EXHAUSTED` | 413 | `TOO_LARGE` | `The requested data is too large to return` (`GET /auth/me/export` over vertice-api's export bounds). `POST /admin/auth/verify` answers its second-factor lock as `429 RATE_LIMITED` instead, with `Retry-After` set to the seconds vertice-api names (never in the body) |
 | anything else (`UNKNOWN`, `INTERNAL`, ...) | 502 | `UPSTREAM_ERROR` | `Upstream error` |
 
 `details` is only set on the BFF's own validation errors (Zod field errors and the like), never from upstream. For a Zod failure it is Zod's flattened form, `{ "formErrors": string[], "fieldErrors": { "<field>": string[] } }`; the field names are the contract, the English text of each message is not (Zod 4 words them differently from Zod 3, e.g. `Invalid input: expected string, received undefined` instead of `Required`). The BFF's own refusals (`Requires role: TRAINER`, `This client is not one of your clients`, ...) keep their specific messages.
@@ -57,11 +60,11 @@ Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), 
 
 Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Every id a route accepts (path, query or body) is checked against the caller: a `CLIENT` only reaches their own plans, workouts and workout logs; a `TRAINER` only their own plans and their own clients (`TrainerClientService.IsTrainersClient`). Another user's id is **403 `FORBIDDEN`**. A `CLIENT`'s `clientId` query parameter is ignored and replaced with their own id. `src/test/route-authorization.test.ts` pins this per route.
 
-**`ADMIN` has no defined product yet** (no PRD; audit QUAL-BFF-001, plan item P1-02). Until one exists, an ADMIN keeps only what is generic: their own account and the exercise catalog reads. Every trainer- or client-scoped route answers an ADMIN with **403 `FORBIDDEN` `Requires role: …`** before any upstream call; there is no ADMIN bypass in the BFF's ownership checks. (vertice-api still lets ADMIN through on most RPCs; the BFF is just narrower.) Giving ADMIN a feature needs a short PRD first, then explicit routes.
+**`ADMIN` is the admin panel's role** ([vertice-api admin-panel PRD](https://github.com/herbertpdl/vertice-api/blob/main/docs/prds/admin-panel/prd.md), [BFF spec](./specs/admin-panel/spec.md)). The separation is structural: every route under `/admin` (except the three public sign-in steps) is ADMIN only, by hooks on the `/admin` plugin itself, so a TRAINER or CLIENT token is **403 `FORBIDDEN`** there before any upstream call. Outside `/admin` an ADMIN keeps only `GET /auth/me`, `POST /auth/me/consent`, `POST /auth/password`, `GET /muscle-groups` and, until VRT-31, `GET /exercises` and `GET /exercises/:id` (which vertice-api already refuses to ADMIN, so they answer 403 from upstream). Every other route, `PATCH /auth/me`, `DELETE /auth/me` and `GET /auth/me/export` included (R16b: an admin's account is ops-managed), answers an ADMIN with **403 `FORBIDDEN` `Requires role: …`** before any upstream call; there is no ADMIN bypass in the BFF's ownership checks. `route-authorization.test.ts` pins all three lists. An ADMIN token is only ever the admin session token from `/admin/auth/verify` or `/admin/auth/renew`; any other token with `role: ADMIN` is a 401.
 
 **`GET /exercises` is always paged** (spec `docs/specs/lazy-exercise-search/spec.md`): the body is `{ exercises, nextCursor }`, at most `limit` rows (1–50, 30 when absent). For more, send `nextCursor` back as `cursor` with the same `muscleGroupId`/`q`; it is `null` on the last page. The cursor is opaque (today an offset, so a row added or removed between two requests can shift the rest by one); a malformed one is a 400 `VALIDATION_ERROR` from vertice-api. The web and mobile pickers and catalog screens don't call it until the search has 3 or more letters or a muscle group is chosen; that rule is the clients', not the route's.
 
-Which roles each route admits is the `Access` column of the route reference below. It is generated from the route declarations, and `src/test/route-authorization.test.ts` pins it to what the routes actually enforce. Notes: `GET /exercises` also admits ADMIN, who sees the starter set; `GET /exercises/:id` is open to any role and vertice-api decides visibility; everything scoped to a trainer or a client is checked against the caller's own data on top of the role.
+Which roles each route admits is the `Access` column of the route reference below. It is generated from the route declarations, and `src/test/route-authorization.test.ts` pins it to what the routes actually enforce. Notes: `GET /exercises` still admits ADMIN by role until VRT-31, but vertice-api refuses it (403); `GET /exercises/:id` is open to any role and vertice-api decides visibility; everything scoped to a trainer or a client is checked against the caller's own data on top of the role.
 
 <!-- BEGIN GENERATED ROUTE REFERENCE (npm run openapi) -->
 <!-- Generated from the routes by `npm run openapi`; CI fails when it is stale. Do not edit by hand. -->
@@ -79,13 +82,24 @@ Login, registration, passwords and the caller’s own account (`/auth/me`, LGPD 
 | POST | `/api/auth/register` | public | `register` | Register a trainer |
 | POST | `/api/auth/session/renew` | TRAINER, CLIENT | `renewSession` | Renew a mobile session |
 | GET | `/api/auth/me` | any role | `getMe` | The caller’s own account |
-| PATCH | `/api/auth/me` | any role | `updateMe` | Correct the caller’s own profile |
-| DELETE | `/api/auth/me` | any role | `deleteMe` | Delete the caller’s own account |
+| PATCH | `/api/auth/me` | TRAINER, CLIENT | `updateMe` | Correct the caller’s own profile |
+| DELETE | `/api/auth/me` | TRAINER, CLIENT | `deleteMe` | Delete the caller’s own account |
 | GET | `/api/auth/me/trainer` | CLIENT | `getMyTrainer` | The client’s trainer and the contacts they share |
-| GET | `/api/auth/me/export` | any role | `exportMyData` | Download the caller’s data |
+| GET | `/api/auth/me/export` | TRAINER, CLIENT | `exportMyData` | Download the caller’s data |
 | POST | `/api/auth/me/consent` | any role | `recordConsent` | Record the caller’s consent to a legal text |
 | POST | `/api/auth/password` | any role | `changePassword` | Change the caller’s password |
 | POST | `/api/auth/password/setup` | public | `setupPassword` | Choose a password with a first-access token |
+
+### Admin auth
+
+Admin sign-in for the admin panel: password, then the authenticator code, then a 30-minute token renewed up to 12 hours.
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| POST | `/api/admin/auth/login` | public | `adminLogin` | Admin sign-in: the password step |
+| POST | `/api/admin/auth/enroll` | public | `adminEnroll` | Admin sign-in: start authenticator enrolment |
+| POST | `/api/admin/auth/verify` | public | `adminVerify` | Admin sign-in: the code step |
+| POST | `/api/admin/auth/renew` | ADMIN | `adminRenew` | Renew the admin session |
 
 ### Legal
 
@@ -296,6 +310,7 @@ Every request body and query string is parsed with Zod before any upstream call;
   - `POST /auth/login` (IP + email) and `POST /auth/password/setup` (IP) count **failed** attempts only: a response below 400 gives the attempt back, so the 6th failure in 15 minutes is a 429 and a gym full of clients on one IP can still log in.
   - `POST /auth/register` (IP + email) counts **every** attempt: a successful sign-up is what a spammer repeats.
   - `POST /auth/password` and `DELETE /auth/me` (IP + user, separate buckets) count failed attempts.
+  - Admin sign-in, each its own bucket: `POST /admin/auth/login` (IP + email) counts **failures** only, and a trainer's or client's correct password is a failure there; `POST /admin/auth/enroll` (IP + the challenge's admin) counts **every** call, since each mints a new secret; `POST /admin/auth/verify` (IP + the challenge's admin) counts **failures**; `POST /admin/auth/renew` (IP + user) counts refusals. A challenge that doesn't verify keys on the IP alone. vertice-api's own lock (5 wrong codes → 15 minutes, across BFF tasks) is the authoritative code limit; while it holds, verify is `429 RATE_LIMITED` with its `Retry-After`.
   - `POST /auth/session/renew` (IP + user) counts **refused** renewals only (a web token, a session vertice-api no longer accepts): a successful renewal gives the attempt back, so phones behind one carrier NAT keep renewing. The 6th refusal in 15 minutes is a 429; the app keeps its current token and tries again later.
 - **Data export:** `GET /auth/me/export` has its own per-user bucket, default **3 per hour**, counting **every** export (`EXPORT_RATE_LIMIT_MAX`/`EXPORT_RATE_LIMIT_WINDOW_MS`); the 4th is `429 RATE_LIMITED` with `Retry-After`. It is keyed on the user, not the IP, so changing networks doesn't reset it.
   - A 5xx (upstream down) never counts.
@@ -313,7 +328,7 @@ Passwords follow vertice-api's policy everywhere one is set: **at least 8 charac
   - Rollout flag: with `VERIFY_PASSWORDS=false` (development/test only; the BFF refuses to start with it anywhere else) login only checks that the email exists, the old MVP behaviour. Default is `true`.
 - `POST /register` `{name, email, password, role: "TRAINER", cpf, cref?, acceptedTermsVersion}` → `201`, same shape as login, and the same `X-Vertice-Client: mobile` header. **Only `TRAINER`**: `role: "CLIENT"` is `400 VALIDATION_ERROR` (clients are created by their trainer, `POST /clients`). **`cpf` is required for a trainer** (vertice-api rejects an empty or invalid one; it is optional only for a CLIENT). `cref` is optional (trainer license number). **`acceptedTermsVersion`** (P1-04): the version of the Terms of Use / Privacy Policy the user accepted on the form, normally `terms` from `GET /legal/versions`. Format: 1 to 32 of `[A-Za-z0-9._-]` (vertice-api's); malformed is `400 VALIDATION_ERROR` before any upstream call. Any well-formed version is accepted, not only the current one. vertice-api stores it with its own timestamp. **Required**: missing is `400 VALIDATION_ERROR` before any upstream call, so no account is created without an acceptance on record. A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`, the same body for both.
 - `POST /session/renew` (auth, TRAINER or CLIENT; no body, send no `Content-Type`) → `200` `{token, expiresAt, user}`, the login shape: a new mobile session token that expires 90 days from now. The caller's token must be a mobile session (`session: "mobile"`); a web token is **`403 SESSION_NOT_RENEWABLE`** `Only a mobile session can be renewed`, with or without `X-Vertice-Client` (the header is accepted and ignored here: renewal decides from the token alone). Before signing, the BFF calls vertice-api's `GetUser` on the caller's own id with the caller's token, so a session vertice-api no longer accepts (account deleted, role changed, password changed since the token was issued) is **`401 UNAUTHENTICATED`** `Session no longer valid` and gets no new token; clients log out on it. The old token is not revoked and stays valid until its own expiry. ADMIN is 403 by role. The mobile app should renew on use, at most about once a day; refusals are rate limited (see Rate limits). Neither token is ever logged.
-Every `/me` route is **self only by construction**: the user is the token's, and no id in the path, query or body is read. Any role, ADMIN included (it is the caller's own account).
+Every `/me` route is **self only by construction**: the user is the token's, and no id in the path, query or body is read. `GET /me` and `POST /me/consent` admit any role, ADMIN included (it is the caller's own account); `PATCH /me`, `DELETE /me` and `GET /me/export` are TRAINER and CLIENT only (ADMIN 403 by role, admin-panel R16b/E41).
 
 - `GET /me` (auth) → `Me` = `{id, name, email, cpf, cref, role, consent}`: the caller's own account. **`cpf` is masked** (`***.***.***-25`, `""` when none), with no reveal: the profile screen shows that a CPF is on file, and the user corrects it by typing the full new one in `PATCH /me`. The full value is in their export (`GET /me/export`). `cref` is `""` for anyone but a trainer who set one. `consent` is the caller's `Consent` (below), from vertice-api's self view.
 - `PATCH /me` (auth) `{name?, email?, cpf?, cref?}` → `200` `Me`. The caller corrects their own profile (LGPD art. 18 III) through `UpdateUser` with their own token. Every field is optional and **an omitted field keeps the stored value** (vertice-api's `UpdateUser` replaces every field, so the BFF reads the self view and sends the rest back). The **role can't change**: a `role` in the body is ignored and the stored role is sent.
@@ -339,6 +354,31 @@ Consent = {
 The web compares `termsVersion` / `healthDataVersion` with `GET /legal/versions`: null or different means "show the text and ask" (first access, or the text changed). Users created before P1-04, and every trainer-created client, start with all four null.
 - `POST /password` (auth, any role) `{currentPassword, newPassword}` → `204`. Changes the caller's own password after re-checking the current one. A wrong `currentPassword` is **`400 INVALID_CURRENT_PASSWORD`**, not a 401: the session is still valid, so clients must not log out on it.
 - `POST /password/setup` (public) `{token, newPassword}` → `200` `{role, email}`. First access: the client chooses a password with the setup token from `POST /clients` (or `POST /clients/:id/setup-token`), then logs in normally. The answer says whose first access it was, so the web can send a CLIENT to the mobile app with the email filled in: the one public route that returns personal data, and only after the token was used (vertice-api's `RedeemPasswordSetupToken`; no lookup of an unused token exists). No session is created. An unknown, expired (72h) or already used token is **`400 INVALID_SETUP_TOKEN`** (vertice-api's `UNAUTHENTICATED`, mapped so clients don't read it as a logout). The token is single-use, and issuing a new one invalidates the previous one.
+
+## Admin sign-in — `/admin/auth`
+Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.1 (B1–B4, B8, B11, B14). Three public steps, then a stateless, sliding admin session. The BFF sets no cookie: every token travels in JSON bodies, and the web keeps them in its own host-only cookies on the admin host.
+
+1. `POST /admin/auth/login` (public) `{email, password}` (the `/auth/login` body) → `200 AdminChallenge` `{challenge, challengeExpiresAt, secondFactor: "ENROLLED" | "NOT_ENROLLED"}`. The password is checked by `VerifyCredentials` with `required_role: ADMIN`, so a wrong password, an unknown email, an account with no password **and a trainer's or client's correct password** all get the same `401 UNAUTHORIZED` `Invalid email or password`. No user fields: they come with the session. The **challenge** lasts 5 minutes and is not a session: it is accepted only in the body of enroll and verify, and is a `401` as a bearer on every route (its audience is `vertice-bff:admin-challenge`). It can be reused until it expires.
+2. `POST /admin/auth/enroll` (public, only when `secondFactor` is `NOT_ENROLLED`) `{challenge}` → `200 AdminEnrollment` `{provisioningUri}`: the `otpauth://totp/...` URI, which contains the secret. Render it as a QR code in-process (never through a third-party service), never log or store it. Each call starts enrolment again with a new secret (a lost QR is "call enroll again"). Enrolment completes at verify, with a code from that secret. An admin already enrolled is `409 PRECONDITION_FAILED` (go to the code step).
+3. `POST /admin/auth/verify` (public) `{challenge, code}` (`code`: exactly six ASCII digits, else `400 VALIDATION_ERROR` before any upstream call) → `200 AdminSession` `{token, expiresAt, sessionEndsAt, user: {id, name, email, role: "ADMIN"}}`. vertice-api checks the code (`VerifySecondFactor`: the current 30-second step and its neighbours, each step once). Only then does the BFF sign the admin token and check it upstream (`GetUser` with it).
+4. `POST /admin/auth/renew` (ADMIN, no body) → `200 AdminSession` with a new token. Before signing, `GetUser` with the current token, so vertice-api re-checks the account; the old token stays valid until its own `exp`. `sessionEndsAt` never moves.
+
+**The admin token:** `role: "ADMIN"`, `amr: ["pwd", "otp"]`, `auth_time` (the code step's instant), `exp` = at most 30 minutes after `iat` and never after `auth_time + 12h` (`sessionEndsAt`). Renew on the admin's own interactions, throttled, never on a timer; past `expiresAt` or `sessionEndsAt`, or on any 401 (`UNAUTHORIZED` or `UNAUTHENTICATED`), sign out to the admin login. A suspended, reset or re-roled admin, or one whose password changed, is `401 UNAUTHENTICATED` on the next call or renewal.
+
+| Step | Situation | Answer |
+|---|---|---|
+| login, enroll, verify, renew | BFF bucket exhausted | `429 RATE_LIMITED`, `Retry-After` |
+| enroll, verify | Challenge missing, malformed, expired, or its user is no longer an admin | `401 CHALLENGE_INVALID`: start again from the password |
+| enroll | Already enrolled | `409 PRECONDITION_FAILED`: go to the code step |
+| verify | Wrong, reused or out-of-window code | `400 INVALID_SECOND_FACTOR_CODE`: same challenge, try again (not a 401, which means "session over") |
+| verify | No authenticator on record (reset since the password step) | `409 PRECONDITION_FAILED`: start again |
+| verify | Locked after 5 wrong codes (15 minutes) | `429 RATE_LIMITED`, `Retry-After` = vertice-api's seconds |
+| verify | vertice-api refuses the new token (suspended or reset meanwhile) | `401 CHALLENGE_INVALID` |
+| renew, every ADMIN route | Token expired, past 12h, without the second-factor claims; or the admin suspended, re-roled, reset, password changed | `401 UNAUTHORIZED` (BFF) / `401 UNAUTHENTICATED` (vertice-api): sign in again |
+
+**Logging.** Each request to login, enroll and verify writes one INFO line, `{"audit":"admin.signin","step":"password"|"enroll"|"code","outcome":"success"|"failure"|"error","reason":…,"userId":…,"msg":"Admin sign-in"}` (spec §4; VRT-19's CloudWatch alarm filters on `audit` and `outcome`, so the names and values are a contract). `reason` is on failures only (`invalid_credentials`, `invalid_request`, `invalid_challenge`, `invalid_code`, `locked`, `not_enrolled`, `already_enrolled`, `rate_limited`; `suspended` from VRT-28); `userId` appears once known (a matched admin password or a valid challenge), so a non-admin's correct password looks like any wrong one. Never an email, password, code, challenge, token or URI.
+
+**Ops** (no route): `npm run ops:create-admin`, `ops:issue-admin-setup-token`, `ops:reset-admin-2fa` (README "Operations"). The setup link is the www "Definir senha" page; `POST /auth/password/setup` answers `{role: "ADMIN", email}`, so the web can send the admin on to the admin host.
 
 ## Legal — `/legal`
 - `GET /versions` (public) → `{terms, healthData}`: the current version of the Terms of Use / Privacy Policy and of the health-data consent notice (env `TERMS_VERSION`, `HEALTH_DATA_CONSENT_VERSION`, default `2026-10-draft`; the texts are drafts pending legal review). The web shows the matching texts, sends `terms` as `acceptedTermsVersion` on register and the versions to `POST /auth/me/consent`, and compares them with `GET /auth/me`'s `consent` to tell whether a stored consent is outdated. No upstream call. Cacheable: `Cache-Control: public, max-age=300` (errors stay `no-store`). A version changes only on a BFF deploy that bumps the env var.
@@ -395,7 +435,7 @@ The detail page renders whatever `cpf` string it gets (now the mask). The web PR
 5. **Caching**: set `Cache-Control: no-store` and `Vary: Cookie` on the web's own `/api/bff` and `/api/auth` route responses (plan step 3), whatever `relayBffResponse` copies from the BFF. The proxy already forwards the query string, so `?reveal=cpf` reaches the BFF.
 
 ## Exercises (catalog) — `/exercises`, `/muscle-groups`
-The catalog is the shared **starter set** (`isStarter: true`, read-only for everyone) plus each trainer's own exercises. **Trainer-created exercises are private; the starter set is shared.** A trainer sees the starter set and their own exercises only; an ADMIN sees the starter set only. Visibility, ordering and search are decided by vertice-api from the caller's identity — the BFF has no exercise-ownership check of its own and returns lists in upstream order.
+The catalog is the shared **starter set** (`isStarter: true`, read-only for everyone) plus each trainer's own exercises. **Trainer-created exercises are private; the starter set is shared.** A trainer sees the starter set and their own exercises only; vertice-api refuses the catalog reads to ADMIN (the admin panel gets its own listing in VRT-31). Visibility, ordering and search are decided by vertice-api from the caller's identity — the BFF has no exercise-ownership check of its own and returns lists in upstream order.
 
 ```ts
 MuscleGroup = { id: number, name: string }
@@ -410,7 +450,7 @@ There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is g
   - `muscleGroupId` — optional positive integer; exercises with that group as primary or secondary. Empty (`?muscleGroupId=`) = no filter.
   - `q` — optional name search (case-insensitive substring), trimmed, ≤100 chars. Empty = no filter.
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or ADMIN` (CLIENT); 400 `VALIDATION_ERROR` for a non-numeric/0/negative/repeated `muscleGroupId` or `q` >100 chars (field `details`); 404 `NOT_FOUND` for an unknown `muscleGroupId`.
-- `GET /exercises/:id` (any role, upstream decides) → `Exercise`. TRAINER: starter or own; ADMIN: starter only; CLIENT: only an exercise used by a workout in one of their own plans.
+- `GET /exercises/:id` (any role, upstream decides) → `Exercise`. TRAINER: starter or own; ADMIN: refused by vertice-api (403) since its admin-panel VRT-20, dropped here in VRT-31; CLIENT: only an exercise used by a workout in one of their own plans.
   - Errors: 403 `FORBIDDEN` (not visible to you; vertice-api's refusal, fixed message); 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
 - `GET /exercises/with-progress?clientId=` (TRAINER, CLIENT) → `{id, name}[]`: the options for the progress graph, i.e. exercises with at least one weighted set in a completed session, most recently trained first. A TRAINER only gets exercises their catalog shows them (starter set and their own); not paged, since it is bounded by the client's history rather than the catalog. Same `clientId` rule as below.
 - `GET /exercises/:id/progress?clientId=` (TRAINER, CLIENT) → `{weekStartDate, weight}[]` (weight-over-time for a graph). **`weight` here is a JSON number**, the one exception to the decimals-are-strings rule below: it is a chart value, converted from the upstream decimal string (`Number(...)`), so it can lose precision. Everywhere else a decimal (`ExerciseSet.weight`, `SetLog.weight`) stays a string. CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.

@@ -9,40 +9,40 @@ import "google/protobuf/empty.proto";
 
 service WorkoutSessionService {
   // Authorization (P1-01, matrix in vertice-api CLAUDE.md): needs a user token. A log belongs to
-  // its client, who alone (with ADMIN) writes into it; the plan's trainer reads its plans' logs.
-  // A client_id in a request must be a CLIENT caller's own. To anyone but ADMIN a missing id and
-  // someone else's id are the same PERMISSION_DENIED.
+  // its client, who alone writes into it; the plan's trainer reads its plans' logs. ADMIN is
+  // refused. A client_id in a request must be a CLIENT caller's own. A missing id and someone
+  // else's id are the same PERMISSION_DENIED.
 
-  // The workout's plan's client (as themself), ADMIN; the plan's trainer reads logs but never
+  // The workout's plan's client (as themself); the plan's trainer reads logs but never
   // starts one for their client (PERMISSION_DENIED). Resumes the week's session in progress, else
   // returns the week's completed one, else starts one (only in the current business week:
   // FAILED_PRECONDITION for an earlier one). Sessions left in progress from earlier weeks are
   // rolled over first (finished when they have a set, deleted when not).
   rpc GetOrStartWorkoutLog(GetOrStartWorkoutLogRequest) returns (WorkoutLogResponse);
-  // The workout's plan's client (as themself), ADMIN. Starts a redo next to the week's completed
+  // The workout's plan's client (as themself). Starts a redo next to the week's completed
   // session (or resumes the one in progress); finishing it supersedes the completed one. Current
   // business week only (FAILED_PRECONDITION for an earlier one).
   rpc RestartWorkoutLog(RestartWorkoutLogRequest) returns (WorkoutLogResponse);
-  // The log's client or ADMIN. Deletes a session in progress and its set logs;
+  // The log's client. Deletes a session in progress and its set logs;
   // FAILED_PRECONDITION once it is completed.
   rpc DiscardWorkoutLog(DiscardWorkoutLogRequest) returns (google.protobuf.Empty);
-  // The log's client or ADMIN. Unticks a set: deletes its set log (none is fine);
+  // The log's client. Unticks a set: deletes its set log (none is fine);
   // FAILED_PRECONDITION once the session is completed.
   rpc DeleteSetLog(DeleteSetLogRequest) returns (google.protobuf.Empty);
-  // One session's set logs: its client, the plan's trainer, ADMIN.
+  // One session's set logs: its client, the plan's trainer.
   rpc ListSetLogs(ListSetLogsRequest) returns (ListSetLogsResponse);
-  // One log by id: its client, the plan's trainer, ADMIN.
+  // One log by id: its client, the plan's trainer.
   rpc GetWorkoutLog(GetWorkoutLogRequest) returns (WorkoutLogResponse);
-  // The log's client or ADMIN.
+  // The log's client.
   rpc RecordSetLog(RecordSetLogRequest) returns (SetLogResponse);
-  // The log's client or ADMIN. Idempotent: a finished session comes back unchanged, which may be
+  // The log's client. Idempotent: a finished session comes back unchanged, which may be
   // one the weekly rollover finished (completion_kind AUTO): the client then skips feedback.
   rpc CompleteWorkoutLog(CompleteWorkoutLogRequest) returns (WorkoutLogResponse);
-  // The plan's trainer or client, ADMIN.
+  // The plan's trainer or client.
   rpc ListWorkoutLogs(ListWorkoutLogsRequest) returns (ListWorkoutLogsResponse);
-  // The workout's plan's trainer or client, ADMIN.
+  // The workout's plan's trainer or client.
   rpc GetLastSetLogs(GetLastSetLogsRequest) returns (GetLastSetLogsResponse);
-  // The client themself, their active trainer, ADMIN.
+  // The client themself or their active trainer.
   rpc GetExerciseProgress(GetExerciseProgressRequest) returns (GetExerciseProgressResponse);
   // The exercises GetExerciseProgress has points for (a weighted set in a completed session),
   // most recently trained first. Same callers as GetExerciseProgress.
@@ -174,7 +174,7 @@ message ProgressExercise {
 }
 
 message ListProgressExercisesResponse {
-  // Bounded by what the client has trained, not by the catalog. A trainer (or ADMIN) sees only
+  // Bounded by what the client has trained, not by the catalog. A trainer sees only
   // exercises visible to them in the catalog: the starter set and their own.
   repeated ProgressExercise exercises = 1;
 }

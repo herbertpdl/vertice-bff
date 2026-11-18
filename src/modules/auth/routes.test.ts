@@ -485,9 +485,11 @@ describe('auth routes', () => {
       expect(res.body).not.toContain(String(ids.trainerA))
     })
 
-    it('lets ADMIN delete their own account', async () => {
+    it('refuses ADMIN by role (R16b, E41), before any upstream call', async () => {
       const res = await remove({ password: FAKE_PASSWORD }, 'admin')
-      expect(res.statusCode, res.body).toBe(204)
+      expect(res.statusCode, res.body).toBe(403)
+      expect(res.json().error.code).toBe('FORBIDDEN')
+      expect(grpcCallMock).not.toHaveBeenCalled()
     })
   })
 

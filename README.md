@@ -134,6 +134,9 @@ A basic health check is available at `GET /health`.
 | `npm run sync:protos [-- --check]` | Copy `protos/vertice/**` from the pinned vertice-api commit (see [gRPC contract](#grpc-contract)) |
 | `npm run openapi [-- --check]` | Write `docs/openapi.json` and the route reference in `docs/api-contract.md` from the route schemas; `--check` fails when either is stale (see [OpenAPI](#openapi)) |
 | `npm run ops:issue-setup-tokens [-- --dry-run]` | Issue a password setup link to every CLIENT (see [Operations](#operations)) |
+| `npm run ops:create-admin -- --name <name> --email <email>` | Create an admin and print their setup link (see [Admin accounts](#admin-accounts)) |
+| `npm run ops:issue-admin-setup-token -- --user-id <id>` | A new setup link for an admin (forgotten password) |
+| `npm run ops:reset-admin-2fa -- --user-id <id>` | Reset a lost authenticator and end the admin's sessions |
 
 ## CI
 
@@ -227,6 +230,29 @@ npm run -s ops:issue-setup-tokens > setup-links.csv
   signed with `JWT_SECRET`, minted per call inside the script process only. vertice-api allows it
   on `ListUsers` and `CreatePasswordSetupToken` and nothing else; the running BFF's
   `service:bff` token is not allowed on either.
+
+### Admin accounts
+
+Admins are created and recovered by the platform team only (admin-panel spec B6, vertice-api D9):
+no route can create an admin or reset a second factor. The scripts call vertice-api's
+`AdminOpsService` as `service:ops`, like `ops:issue-setup-tokens`, read the same `.env`, refuse
+unknown arguments, and print to stdout only (progress and errors on stderr; nothing is logged):
+
+```sh
+# A new admin with no password; prints userId=…, setupLink=…, expiresAt=…
+npm run -s ops:create-admin -- --name "Ana Souza" --email ana@vertice.fit
+# Forgotten password: a new link (the admin's unused ones stop working)
+npm run -s ops:issue-admin-setup-token -- --user-id 42
+# Lost authenticator: deletes it and ends every session; they enrol again at the next sign-in
+npm run -s ops:reset-admin-2fa -- --user-id 42
+```
+
+- `setupLink` is `https://www.vertice.fit/definir-senha?token=…`, single use, 72h. **It is a
+  credential**: hand it to the admin out of band. After choosing the password there, the admin
+  signs in at the admin host (password, then enrols an authenticator app from a QR code).
+- Against a non-admin id, `issue-admin-setup-token` and `reset-admin-2fa` fail with NOT_FOUND;
+  `create-admin` fails on an e-mail already in use. Suspending and reactivating admins
+  (`ops:suspend-admin`, `ops:reactivate-admin`) arrive with VRT-28.
 
 ### Admin sign-in alarms (CloudWatch)
 

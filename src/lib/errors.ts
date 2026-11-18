@@ -50,9 +50,30 @@ export class PreconditionFailedError extends HttpError {
   }
 }
 
-/** A rate limit was hit; the caller should wait `Retry-After` seconds. */
+/**
+ * A rate limit was hit; the caller should wait `Retry-After` seconds. With `retryAfterSeconds` the
+ * error handler writes that header itself (an upstream lock, e.g. the admin second factor's);
+ * without it, whoever throws sets the header (the BFF's own buckets, `plugins/rate-limit.ts`).
+ */
 export class TooManyRequestsError extends HttpError {
-  constructor(message = 'Too many attempts, try again later') {
+  constructor(
+    message = 'Too many attempts, try again later',
+    public readonly retryAfterSeconds?: number,
+  ) {
     super(429, message, 'RATE_LIMITED')
+  }
+}
+
+/**
+ * vertice-api's RESOURCE_EXHAUSTED, globally a 413 `TOO_LARGE` (the export bounds). When the
+ * upstream text says "retry after N seconds" (a lock or a send limit), N rides along here, never
+ * in the body, so a route that means "wait" can turn it into a 429 with `Retry-After`.
+ */
+export class UpstreamExhaustedError extends HttpError {
+  constructor(
+    message: string,
+    public readonly retryAfterSeconds?: number,
+  ) {
+    super(413, message, 'TOO_LARGE')
   }
 }

@@ -10,9 +10,10 @@ option java_multiple_files = true;
 service ExerciseService {
   // The 14 launch muscle groups in catalog order. Needs no caller identity.
   rpc ListMuscleGroups(ListMuscleGroupsRequest) returns (ListMuscleGroupsResponse);
-  // One page of the caller's own exercises plus the shared starter set, optionally filtered and
-  // searched.
+  // TRAINER only: one page of the caller's own exercises plus the shared starter set, optionally
+  // filtered and searched.
   rpc ListExercises(ListExercisesRequest) returns (ListExercisesResponse);
+  // A TRAINER for a starter or their own exercise; a CLIENT for one in their own workouts.
   rpc GetExercise(GetExerciseRequest) returns (ExerciseResponse);
   rpc CreateExercise(ExerciseRequest) returns (ExerciseResponse);
   rpc UpdateExercise(UpdateExerciseRequest) returns (ExerciseResponse);

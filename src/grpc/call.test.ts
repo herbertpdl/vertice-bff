@@ -10,6 +10,7 @@ import {
   type GrpcCallOptions,
 } from './call.js'
 import { env } from '../config/env.js'
+import { UpstreamExhaustedError } from '../lib/errors.js'
 import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
 import { serviceToken } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
@@ -72,8 +73,33 @@ describe('grpcCall', () => {
     }
   })
 
-  it('allows the service token on exactly the three public auth RPCs', () => {
-    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual(['CreateUser', 'RedeemPasswordSetupToken', 'VerifyCredentials'])
+  it('allows the service token on exactly the public auth RPCs and the admin second-factor ones', () => {
+    expect([...SERVICE_TOKEN_RPCS].sort()).toEqual([
+      'CreateUser',
+      'GetSecondFactorState',
+      'RedeemPasswordSetupToken',
+      'StartSecondFactorEnrollment',
+      'VerifyCredentials',
+      'VerifySecondFactor',
+    ])
+  })
+
+  it.each([
+    ['Too many second-factor attempts; retry after 42 seconds', 42],
+    ['Password-reset email limit reached; retry after 1 second', 1],
+    ['retry after 0 seconds', 1],
+    ['retry after 999999 seconds', 86_400],
+  ])('puts the retry seconds of RESOURCE_EXHAUSTED %j on the error, never in the message', (details, seconds) => {
+    const error = mapGrpcError({ code: grpc.status.RESOURCE_EXHAUSTED, details })
+    expect(error).toBeInstanceOf(UpstreamExhaustedError)
+    expect(error).toMatchObject({ statusCode: 413, code: 'TOO_LARGE', retryAfterSeconds: seconds })
+    expect(error.message).toBe(UPSTREAM_MESSAGES.resourceExhausted)
+  })
+
+  it('leaves the retry seconds unset when RESOURCE_EXHAUSTED names none (the export bounds)', () => {
+    const error = mapGrpcError({ code: grpc.status.RESOURCE_EXHAUSTED, details: 'Export exceeds vertice.export.max-logs' })
+    expect(error).toMatchObject({ statusCode: 413, code: 'TOO_LARGE' })
+    expect((error as UpstreamExhaustedError).retryAfterSeconds).toBeUndefined()
   })
 
   describe('anonymous', () => {

@@ -18,7 +18,10 @@
     "test:hostile-tz": "TZ=Pacific/Kiritimati vitest run",
     "sync:protos": "tsx scripts/sync-protos.ts",
     "openapi": "tsx scripts/generate-openapi.ts",
-    "ops:issue-setup-tokens": "tsx scripts/issue-setup-tokens.ts"
+    "ops:issue-setup-tokens": "tsx scripts/issue-setup-tokens.ts",
+    "ops:create-admin": "tsx scripts/create-admin.ts",
+    "ops:issue-admin-setup-token": "tsx scripts/issue-admin-setup-token.ts",
+    "ops:reset-admin-2fa": "tsx scripts/reset-admin-2fa.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

@@ -1,15 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../../app.js'
-import { signToken, type Role } from '../../lib/jwt.js'
+import { signAdminToken, signToken, type Role } from '../../lib/jwt.js'
 
 // Every case here stops before any gRPC call (role gate, missing token, Zod), so no
 // upstream is needed. Anything that reaches vertice-api is verified end to end in
 // docs/specs/exercise-starter-catalog/verification.md.
 describe('exercise routes', () => {
   let app: FastifyInstance
+  const now = () => Math.floor(Date.now() / 1000)
   const bearer = (role: Role) => ({
-    authorization: `Bearer ${signToken({ id: 1, role })}`,
+    authorization: `Bearer ${role === 'ADMIN' ? signAdminToken({ id: 1, authTime: now(), issuedAt: now() }) : signToken({ id: 1, role })}`,
   })
 
   beforeAll(async () => {

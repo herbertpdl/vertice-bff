@@ -11,8 +11,8 @@ import { trainingPlanDetailSchema, trainingPlanSchema } from '../../openapi/resp
 
 export default async function trainingPlanRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
-  // A plan is always one trainer's and one client's. ADMIN has no defined product yet (P1-02),
-  // so it gets a 403 here instead of the cross-tenant bypass it used to have.
+  // A plan is always one trainer's and one client's. ADMIN gets a 403 here: the admin panel never
+  // reads plan contents (admin-panel PRD R36), and vertice-api refuses ADMIN on the plan tree too.
   app.addHook('preHandler', app.requireRole('TRAINER', 'CLIENT'))
 
   app.get<{ Querystring: { clientId?: string } }>(
