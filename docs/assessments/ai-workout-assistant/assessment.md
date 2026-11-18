@@ -336,6 +336,9 @@ Nothing found. Checked:
     stream ends with an `error` event `AI_SUPERSEDED`.
   - A 409 would break R16 and R22. After "Parar" or "Tentar novamente", the next message can
     reach the BFF before the old connection's close does.
+  - **Slot ownership:** store a per-request handle (its `AbortController`) as the map value, and
+    release the slot only while the stored handle is still this request's own. Otherwise the
+    superseded request's cleanup would free the newer request's slot.
   - Because it's in memory per task, it only bounds each BFF task, not the whole service. Note
     that in the spec.
 
@@ -352,7 +355,7 @@ Nothing found. Checked:
 ### 9. Testing
 
 What to test is listed in §6. This would be the first streaming test in the repo. Routes are
-already tested against a faked `grpcCall` (`src/modules/*/routes.test.ts` in eight modules, and
+already tested against a faked `grpcCall` (`src/modules/*/routes.test.ts` in seven modules, and
 `src/test/route-authorization.test.ts` with `fakeUpstream.ts`). The new module follows that
 approach, plus a stub `vertice-ai` served over HTTP.
 
@@ -401,7 +404,8 @@ tool that calls back into the BFF, or (c) resolve names. The recommendation is (
 - A client abort cancels the upstream request.
 
 **Concurrency:** a second message from the same trainer aborts the first, the first's upstream
-sees the cancel, and the first stream ends with `AI_SUPERSEDED`. The slot frees on done, error
+sees the cancel, and the first stream ends with `AI_SUPERSEDED`. Messages 1, 2 and 3 in a row: message 2's upstream
+sees a cancel when message 3 arrives, and at most one upstream call is open at any time. The slot frees on done, error
 and abort.
 
 **Config:**
