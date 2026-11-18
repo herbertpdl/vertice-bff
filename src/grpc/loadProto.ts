@@ -18,6 +18,7 @@ const PROTO_FILES = [
   'vertice/trainerclient/v1/trainer_client.proto',
   'vertice/admin/v1/admin_auth.proto',
   'vertice/admin/v1/admin_ops.proto',
+  'vertice/admin/v1/admin.proto',
 ].map((file) => path.join(PROTOS_ROOT, file))
 
 const packageDefinition = protoLoader.loadSync(PROTO_FILES, {

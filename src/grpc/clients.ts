@@ -33,3 +33,5 @@ export const adminAuthClient = new grpcProto.vertice.admin.v1.AdminAuthService(g
  * spec B6; pinned by a source scan in `route-authorization.test.ts`).
  */
 export const adminOpsClient = new grpcProto.vertice.admin.v1.AdminOpsService(grpcTarget, credentials)
+/** The admin panel's reads (`modules/admin/service.ts`), always with the caller's admin token. */
+export const adminClient = new grpcProto.vertice.admin.v1.AdminService(grpcTarget, credentials)

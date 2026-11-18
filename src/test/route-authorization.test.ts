@@ -20,6 +20,7 @@ import {
   fakeGrpcCall,
   ids,
   isWriteRpc,
+  resetFakeAdminActions,
   resetFakeConsents,
   resetUpstreamCallers,
   setupTokenFor,
@@ -155,6 +156,37 @@ const routes: RouteCase[] = [
     ok: { url: '/api/admin/auth/verify', body: { challenge: signAdminChallenge(ids.admin), code: FAKE_TOTP_CODES[0] } },
   },
   { route: 'POST /api/admin/auth/renew', roles: ['ADMIN'], ok: { as: 'admin', url: '/api/admin/auth/renew' } },
+
+  // admin panel reads (admin-panel spec §2.2): ADMIN only by the /admin plugin's hooks
+  { route: 'GET /api/admin/dashboard', roles: ['ADMIN'], ok: { as: 'admin', url: '/api/admin/dashboard' } },
+  {
+    route: 'GET /api/admin/users',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: '/api/admin/users?role=CLIENT&limit=10' },
+    denied: [
+      { as: 'admin', url: '/api/admin/users?role=ADMIN', why: 'query: ADMIN is not a directory role (R16)', status: 400 },
+      { as: 'admin', url: '/api/admin/users?limit=11', why: 'query: limit outside 10/25/50', status: 400 },
+    ],
+  },
+  {
+    route: 'GET /api/admin/users/:id',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/users/${ids.clientA}` },
+    denied: [
+      { as: 'admin', url: `/api/admin/users/${ids.admin}`, why: 'path: an admin (the caller) is not a profile', status: 404 },
+      { as: 'admin', url: '/api/admin/users/9999', why: 'path: a missing user, same answer', status: 404 },
+    ],
+  },
+  {
+    route: 'GET /api/admin/actions',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/actions?adminId=${ids.admin}&action=VIEW_USER_PROFILE&limit=50` },
+    denied: [
+      { as: 'admin', url: '/api/admin/actions?action=ADMIN_ACTION_SUSPEND_USER', why: 'query: the prefixed enum name', status: 400 },
+      { as: 'admin', url: '/api/admin/actions?targetUserId=-1', why: 'query: a negative id', status: 400 },
+    ],
+  },
+  { route: 'GET /api/admin/actions/admins', roles: ['ADMIN'], ok: { as: 'admin', url: '/api/admin/actions/admins' } },
   {
     // Self only: the client's own trainer, from the token.
     route: 'GET /api/auth/me/trainer',
@@ -967,6 +999,7 @@ describe('route authorization', () => {
     resetUpstreamCallers()
     resetFakeConsents()
     resetFakeSecondFactors()
+    resetFakeAdminActions()
   })
 
   const send = (method: string, call: Partial<Call> & { url: string }) =>

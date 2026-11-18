@@ -18,6 +18,11 @@ export const TAGS = [
     description:
       'Admin sign-in for the admin panel: password, then the authenticator code, then a 30-minute token renewed up to 12 hours.',
   },
+  {
+    name: 'Admin',
+    description:
+      'The admin panel’s reads: dashboard, user directory and profiles, action history (ADMIN only, with the admin session token).',
+  },
   { name: 'Legal', description: 'Versions of the legal texts, for the consent flow.' },
   { name: 'Clients', description: 'A trainer’s roster of clients (TRAINER only).' },
   { name: 'Exercises', description: 'The exercise catalog (shared starter set plus each trainer’s own) and muscle groups.' },

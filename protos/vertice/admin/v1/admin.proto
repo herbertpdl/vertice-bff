@@ -1,0 +1,254 @@
+syntax = "proto3";
+
+package vertice.admin.v1;
+
+import "vertice/user/v1/user.proto";
+
+option java_package = "com.vertice.api.generated.grpc.admin.v1";
+option java_multiple_files = true;
+
+// The admin panel's reads and account actions (admin-panel spec D18, D19, D26, D27). ADMIN only,
+// with the second-factor claim (D6): any other user is PERMISSION_DENIED, a service token
+// PERMISSION_DENIED, no token UNAUTHENTICATED. Admins are invisible here (R16): lists and counts
+// hold trainers and clients only, and a target user that doesn't exist, is deleted or is an admin
+// (the caller included) is NOT_FOUND "User with id <id> not found".
+//
+// Lists take page_size 10, 25 or 50 (0 means 25) and the opaque next_page_token of the previous
+// page; any other page_size or a malformed page_token is INVALID_ARGUMENT.
+service AdminService {
+  // Totals, activity, completed workouts and weekly sign-ups (R17-R21, R27). Windows are business
+  // dates in America/Sao_Paulo: "7 days" is today and the 6 days before, "30 days" today and the 29
+  // before. Not recorded in the history.
+  rpc GetDashboard(GetDashboardRequest) returns (GetDashboardResponse);
+  // Trainers and clients, filtered and searched (R28-R32). Not recorded in the history.
+  rpc ListDirectoryUsers(ListDirectoryUsersRequest) returns (ListDirectoryUsersResponse);
+  // A trainer's or client's profile summary (R33-R37): never logs, weights, feedback, progress or
+  // plan contents. Writes a VIEW_USER_PROFILE history entry in the same transaction (R67).
+  rpc GetUserProfile(GetUserProfileRequest) returns (GetUserProfileResponse);
+  // The whole action history, newest first, filtered by admin, action and affected user (R71).
+  rpc ListActions(ListActionsRequest) returns (ListActionsResponse);
+  // Admins that appear as the author of at least one entry, for the history's admin filter (R71),
+  // ordered by name.
+  rpc ListActionAdmins(ListActionAdminsRequest) returns (ListActionAdminsResponse);
+}
+
+enum DirectoryRole {
+  // Trainers and clients.
+  DIRECTORY_ROLE_UNSPECIFIED = 0;
+  DIRECTORY_ROLE_TRAINER = 1;
+  DIRECTORY_ROLE_CLIENT = 2;
+}
+
+enum DirectoryStatus {
+  // Active and suspended.
+  DIRECTORY_STATUS_UNSPECIFIED = 0;
+  DIRECTORY_STATUS_ACTIVE = 1;
+  DIRECTORY_STATUS_SUSPENDED = 2;
+}
+
+// A user as the panel names them: id, name and role. The name is "Usuário removido" for a deleted
+// account (R72, E39).
+message UserRef {
+  int64 id = 1;
+  string name = 2;
+  vertice.user.v1.Role role = 3;
+}
+
+message GetDashboardRequest {}
+
+message GetDashboardResponse {
+  // Non-deleted trainers and clients, suspended ones included (R17, R27).
+  int64 trainers = 1;
+  int64 clients = 2;
+  // Trainers and clients whose last activity (a sign-in or any call) falls in the window (R18, R19).
+  int64 active_trainers_7d = 3;
+  int64 active_clients_7d = 4;
+  int64 active_trainers_30d = 5;
+  int64 active_clients_30d = 6;
+  // Workout logs completed in the window (R20).
+  int64 completed_workouts_7d = 7;
+  int64 completed_workouts_30d = 8;
+  // Exactly 12 entries, oldest first, the last one the current (partial) week (R21).
+  repeated WeeklySignups weekly_signups = 9;
+}
+
+// Accounts created in one Monday-start week in America/Sao_Paulo; deleted accounts included, so a
+// past week doesn't shrink. For a client, created is the day their trainer added them.
+message WeeklySignups {
+  // yyyy-MM-dd, a Monday.
+  string week_start = 1;
+  int64 trainers = 2;
+  int64 clients = 3;
+}
+
+message ListDirectoryUsersRequest {
+  // UNSPECIFIED = trainers and clients.
+  DirectoryRole role = 1;
+  // UNSPECIFIED = both.
+  DirectoryStatus status = 2;
+  // Case-insensitive substring of the name or e-mail, at most 100 characters (else
+  // INVALID_ARGUMENT); surrounding spaces are ignored and empty means no search.
+  string search = 3;
+  // 10, 25 or 50; 0 = 25.
+  int32 page_size = 4;
+  // next_page_token of the previous page; empty for the first page.
+  string page_token = 5;
+}
+
+message ListDirectoryUsersResponse {
+  // Ordered by lower(name), then id.
+  repeated DirectoryUser users = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+}
+
+message DirectoryUser {
+  int64 id = 1;
+  string name = 2;
+  string email = 3;
+  vertice.user.v1.Role role = 4;
+  bool suspended = 5;
+  // Instant, ISO-8601 UTC.
+  string created_at = 6;
+  // yyyy-MM-dd business date; empty if never active.
+  string last_active_on = 7;
+  // Clients only (R31); unset when the client has no current trainer.
+  UserRef current_trainer = 8;
+  // Trainers only (R32): clients with an active relationship.
+  int32 current_client_count = 9;
+}
+
+message GetUserProfileRequest {
+  int64 user_id = 1;
+}
+
+message GetUserProfileResponse {
+  oneof profile {
+    TrainerProfile trainer = 1;
+    ClientProfile client = 2;
+  }
+}
+
+message ProfileBasics {
+  int64 id = 1;
+  string name = 2;
+  // Account data: always shown (D18).
+  string email = 3;
+  // ***.***.***-NN (the last two digits), empty when the user has none; never the full CPF (D18).
+  string cpf_masked = 4;
+  bool suspended = 5;
+  // Instant; empty when active.
+  string suspended_at = 6;
+  // Instant: the sign-up date (for a client, the day their trainer added them).
+  string created_at = 7;
+  // yyyy-MM-dd business date; empty if never active.
+  string last_active_on = 8;
+}
+
+// One trainer-client relationship, seen from the profile's side: user is the other party. A pair
+// that reconnected appears once per relationship. Deleted accounts are left out.
+message RelationshipRef {
+  UserRef user = 1;
+  // Instant.
+  string started_at = 2;
+  // Instant; empty for a current relationship.
+  string ended_at = 3;
+  // Whether the other party is suspended.
+  bool suspended = 4;
+}
+
+// R35, R36.
+message TrainerProfile {
+  ProfileBasics basics = 1;
+  string cref = 2;
+  // WhatsApp (digits) and Instagram (handle, no "@") only when the matching show_* flag is true,
+  // else empty (D18).
+  string whatsapp = 3;
+  string instagram = 4;
+  bool show_email = 5;
+  bool show_whatsapp = 6;
+  bool show_instagram = 7;
+  // Ordered by started_at, then id.
+  repeated RelationshipRef current_clients = 8;
+  // Ordered by ended_at, newest first.
+  repeated RelationshipRef former_clients = 9;
+  // Plans the trainer wrote, workouts in them, private exercises they own.
+  int32 plan_count = 10;
+  int32 workout_count = 11;
+  int32 private_exercise_count = 12;
+}
+
+// R33, R34.
+message ClientProfile {
+  ProfileBasics basics = 1;
+  // Unset when the client has no current trainer (E15).
+  RelationshipRef current_trainer = 2;
+  // Ended relationships, newest first.
+  repeated RelationshipRef past_trainers = 3;
+  // Plans written for the client, and their completed workout logs.
+  int32 plan_count = 4;
+  int32 completed_workout_count = 5;
+  // Pending / last sent / last send failed, as the trainer sees it; send_result is never set here.
+  vertice.user.v1.FirstAccessStatus first_access = 6;
+}
+
+enum AdminAction {
+  ADMIN_ACTION_UNSPECIFIED = 0;
+  ADMIN_ACTION_VIEW_USER_PROFILE = 1;
+  ADMIN_ACTION_SUSPEND_USER = 2;
+  ADMIN_ACTION_REACTIVATE_USER = 3;
+  ADMIN_ACTION_SEND_FIRST_ACCESS_EMAIL = 4;
+  ADMIN_ACTION_SEND_PASSWORD_RESET_EMAIL = 5;
+  ADMIN_ACTION_END_RELATIONSHIP = 6;
+  ADMIN_ACTION_CHANGE_OWN_PASSWORD = 7;
+  ADMIN_ACTION_CREATE_STARTER_EXERCISE = 8;
+  ADMIN_ACTION_UPDATE_STARTER_EXERCISE = 9;
+  ADMIN_ACTION_DELETE_STARTER_EXERCISE = 10;
+  ADMIN_ACTION_PROMOTE_EXERCISE = 11;
+  ADMIN_ACTION_CREATE_MUSCLE_GROUP = 12;
+  ADMIN_ACTION_RENAME_MUSCLE_GROUP = 13;
+}
+
+message ListActionsRequest {
+  // 0 = any admin; else entries by that author only. Negative is INVALID_ARGUMENT.
+  int64 admin_id = 1;
+  // UNSPECIFIED = any action.
+  AdminAction action = 2;
+  // 0 = any; else entries about that user (deleted accounts included). Negative is INVALID_ARGUMENT.
+  int64 target_user_id = 3;
+  // 10, 25 or 50; 0 = 25.
+  int32 page_size = 4;
+  string page_token = 5;
+}
+
+message ListActionsResponse {
+  // Newest first.
+  repeated ActionEntry entries = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+}
+
+message ActionEntry {
+  int64 id = 1;
+  UserRef admin = 2;
+  AdminAction action = 3;
+  // The affected trainer or client; unset for actions without one (own password, catalog writes).
+  UserRef target_user = 4;
+  // The trainer in an ended relationship, a promoted exercise's owner; unset otherwise.
+  UserRef related_user = 5;
+  // Catalog actions only; 0 otherwise.
+  int64 target_exercise_id = 6;
+  int64 target_muscle_group_id = 7;
+  // Starter exercise / muscle group name at the time of the action; empty otherwise.
+  string subject_label = 8;
+  // Suspend / reactivate only; empty when the target account is deleted (D16).
+  string reason = 9;
+  // Instant.
+  string created_at = 10;
+}
+
+message ListActionAdminsRequest {}
+
+message ListActionAdminsResponse {
+  repeated UserRef admins = 1;
+}

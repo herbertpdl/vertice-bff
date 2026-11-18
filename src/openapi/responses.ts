@@ -4,6 +4,8 @@ import { dayOfWeekSchema } from '../modules/workouts/schemas.js'
 import { setStrategySchema } from '../modules/exercise-sets/schemas.js'
 import { planLevelSchema } from '../modules/training-plans/schemas.js'
 import type * as adminAuthService from '../modules/admin-auth/service.js'
+import type * as adminService from '../modules/admin/service.js'
+import { ADMIN_ACTIONS } from '../modules/admin/schemas.js'
 import type * as authService from '../modules/auth/service.js'
 import type * as clientService from '../modules/clients/service.js'
 import type * as dashboardService from '../modules/dashboard/service.js'
@@ -156,6 +158,160 @@ export const adminSessionSchema = named(
     sessionEndsAt: instant.describe('The sign-in’s hard cap, 12 hours after the code step. Renewal never moves it.'),
     user: sessionUserSchema,
   }),
+)
+
+// ---- admin panel reads (admin-panel spec §2.2) ---------------------------------------------------
+
+const count = z.number().int().min(0)
+const nextCursor = z
+  .string()
+  .nullable()
+  .describe('Send back as `cursor` (same filters) for the next page; `null` on the last page.')
+
+export const adminUserRefSchema = named(
+  'AdminUserRef',
+  z.object({
+    id,
+    name: z.string().describe('“Usuário removido” for a deleted account.'),
+    role: roleSchema,
+  }),
+)
+
+export const adminDashboardSchema = named(
+  'AdminDashboard',
+  z.object({
+    totals: z
+      .object({ trainers: count, clients: count })
+      .describe('Non-deleted trainers and clients, suspended ones included; admins never.'),
+    active: z
+      .object({ trainers7d: count, clients7d: count, trainers30d: count, clients30d: count })
+      .describe('Trainers and clients whose last activity falls in the window (business days, today included).'),
+    completedWorkouts: z.object({ last7d: count, last30d: count }).describe('Workout logs completed in the window.'),
+    weeklySignups: z
+      .array(
+        z.object({
+          weekStart: date.describe('The week’s Monday, a business date.'),
+          trainers: count,
+          clients: count,
+        }),
+      )
+      .describe('Exactly 12 weeks, oldest first; the last is the current (partial) week. Deleted accounts included.'),
+  }),
+)
+
+export const adminDirectoryUserSchema = named(
+  'AdminDirectoryUser',
+  z.object({
+    id,
+    name: z.string(),
+    email: z.string(),
+    role: z.enum(['TRAINER', 'CLIENT']),
+    suspended: z.boolean(),
+    createdAt: instant.describe('Sign-up; for a client, the day their trainer added them.'),
+    lastActiveOn: date.nullable().describe('Business date of the last activity; null if never active.'),
+    currentTrainer: z
+      .object({ id, name: z.string() })
+      .nullable()
+      .describe('Clients only: the current trainer, null when none. Always null for a trainer.'),
+    currentClientCount: count.nullable().describe('Trainers only: clients with an active relationship. Null for a client.'),
+  }),
+)
+
+export const adminDirectoryPageSchema = named(
+  'AdminDirectoryPage',
+  z.object({ users: z.array(adminDirectoryUserSchema), nextCursor }),
+)
+
+export const adminRelationshipSchema = named(
+  'AdminRelationship',
+  z.object({
+    user: adminUserRefSchema.describe('The other party of the relationship.'),
+    startedAt: instant,
+    endedAt: instant.nullable().describe('Null for a current relationship.'),
+    suspended: z.boolean().describe('Whether the other party is suspended.'),
+  }),
+)
+
+const adminProfileBasics = {
+  id,
+  name: z.string(),
+  email: z.string(),
+  cpf: z
+    .string()
+    .nullable()
+    .describe('Masked, `***.***.***-NN` (the last two digits), or null when none. Never the full CPF.'),
+  suspended: z.boolean(),
+  suspendedAt: instant.nullable().describe('Null while active.'),
+  createdAt: instant.describe('Sign-up; for a client, the day their trainer added them.'),
+  lastActiveOn: date.nullable().describe('Business date of the last activity; null if never active.'),
+}
+
+export const adminTrainerProfileSchema = named(
+  'AdminTrainerProfile',
+  z.object({
+    ...adminProfileBasics,
+    role: z.literal('TRAINER'),
+    cref: z.string().nullable(),
+    whatsapp: z.string().nullable().describe('Digits; null unless the trainer shares it.'),
+    instagram: z.string().nullable().describe('Handle without “@”; null unless the trainer shares it.'),
+    currentClients: z.array(adminRelationshipSchema).describe('Oldest relationship first.'),
+    formerClients: z.array(adminRelationshipSchema).describe('Most recently ended first.'),
+    planCount: count,
+    workoutCount: count,
+    privateExerciseCount: count,
+  }),
+)
+
+export const adminClientProfileSchema = named(
+  'AdminClientProfile',
+  z.object({
+    ...adminProfileBasics,
+    role: z.literal('CLIENT'),
+    currentTrainer: adminRelationshipSchema.nullable().describe('Null when the client has no current trainer.'),
+    pastTrainers: z.array(adminRelationshipSchema).describe('Most recently ended first.'),
+    planCount: count,
+    completedWorkoutCount: count,
+    firstAccess: z.object({
+      pending: z.boolean().describe('The client has not set a password yet.'),
+      lastSentAt: instant.nullable().describe('When the latest first-access e-mail was accepted for delivery; null if none.'),
+      lastSendFailed: z.boolean().describe('The latest first-access send failed on every try.'),
+    }),
+  }),
+)
+
+export const adminUserProfileSchema = named(
+  'AdminUserProfile',
+  z.discriminatedUnion('role', [adminTrainerProfileSchema, adminClientProfileSchema]),
+)
+
+export const adminActionSchema = named('AdminAction', z.enum(ADMIN_ACTIONS))
+
+export const adminActionEntrySchema = named(
+  'AdminActionEntry',
+  z.object({
+    id,
+    admin: adminUserRefSchema.describe('Who did it.'),
+    action: adminActionSchema,
+    targetUser: adminUserRefSchema.nullable().describe('The affected trainer or client; null for own-password and catalog actions.'),
+    relatedUser: adminUserRefSchema
+      .nullable()
+      .describe('The trainer of an ended relationship, or a promoted exercise’s owner; null otherwise.'),
+    targetExerciseId: id.nullable().describe('Catalog actions only.'),
+    targetMuscleGroupId: id.nullable().describe('Muscle-group actions only.'),
+    subjectLabel: z.string().nullable().describe('Exercise or muscle-group name at the time of the action; null otherwise.'),
+    reason: z.string().nullable().describe('Suspend / reactivate only; null when the target account was deleted.'),
+    createdAt: instant,
+  }),
+)
+
+export const adminActionPageSchema = named(
+  'AdminActionPage',
+  z.object({ entries: z.array(adminActionEntrySchema).describe('Newest first.'), nextCursor }),
+)
+
+export const adminActionAdminsSchema = named(
+  'AdminActionAdmins',
+  z.object({ admins: z.array(adminUserRefSchema).describe('By name.') }),
 )
 
 export const passwordSetupResultSchema = named(
@@ -536,6 +692,12 @@ export type ResponseSchemasMatchServices = [
   Assert<SameShape<Out<typeof adminChallengeSchema>, adminAuthService.AdminChallenge>>,
   Assert<SameShape<Out<typeof adminEnrollmentSchema>, adminAuthService.AdminEnrollment>>,
   Assert<SameShape<Out<typeof adminSessionSchema>, adminAuthService.AdminSession>>,
+  Assert<SameShape<Out<typeof adminUserRefSchema>, adminService.AdminUserRef>>,
+  Assert<SameShape<Out<typeof adminDashboardSchema>, adminService.AdminDashboard>>,
+  Assert<SameShape<Out<typeof adminDirectoryPageSchema>, adminService.AdminDirectoryPage>>,
+  Assert<SameShape<Out<typeof adminUserProfileSchema>, adminService.AdminUserProfile>>,
+  Assert<SameShape<Out<typeof adminActionPageSchema>, adminService.AdminActionPage>>,
+  Assert<SameShape<Out<typeof adminActionAdminsSchema>, adminService.AdminActionAdmins>>,
   Assert<SameShape<Out<typeof passwordSetupResultSchema>, userService.RedeemedSetup>>,
   Assert<SameShape<Out<typeof consentSchema>, userService.Consent>>,
   Assert<SameShape<Out<typeof meSchema>, userService.Me>>,
