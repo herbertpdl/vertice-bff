@@ -1,4 +1,5 @@
 import Fastify, { type FastifyBaseLogger, type RouteOptions } from 'fastify'
+import { LOG_SERIALIZERS } from './lib/log-serializers.js'
 import cors from '@fastify/cors'
 import { env } from './config/env.js'
 import errorHandler from './plugins/error-handler.js'
@@ -71,6 +72,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       : {
           logger: {
             level: env.LOG_LEVEL,
+            // No query string in the request line: it can carry personal data (admin search).
+            serializers: LOG_SERIALIZERS,
             transport: env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
           },
         }),

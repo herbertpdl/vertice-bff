@@ -14,6 +14,7 @@ import {
   resetUpstreamCallers,
   type Actor,
 } from '../../test/fakeUpstream.js'
+import { LOG_SERIALIZERS, requestSerializer } from '../../lib/log-serializers.js'
 import { toActionEntry, toDirectoryUser, toUserProfile } from './service.js'
 
 // Keep the real mapGrpcError: the fake upstream raises its errors through it.
@@ -48,7 +49,7 @@ describe('admin read routes', () => {
         done()
       },
     })
-    app = await buildApp({ rateLimits: { globalMax: 1_000_000 }, loggerInstance: pino({ level: 'trace' }, sink) })
+    app = await buildApp({ rateLimits: { globalMax: 1_000_000 }, loggerInstance: pino({ level: 'trace', serializers: LOG_SERIALIZERS }, sink) })
     await app.ready()
   })
   afterAll(() => app.close())
@@ -151,6 +152,14 @@ describe('admin read routes', () => {
 
     it.each([['limit=10'], ['limit=25'], ['limit=50'], [`q=${'a'.repeat(100)}`]])('accepts %s', async (query) => {
       expect((await get(`/api/admin/users?${query}`)).statusCode).toBe(200)
+    })
+
+    it('never writes the search text to the logs (B15): the request line has no query string', async () => {
+      const res = await get('/api/admin/users?q=someone%40example.com&limit=10')
+      expect(res.statusCode, res.body).toBe(200)
+      const incoming = logLines.map((l) => JSON.parse(l)).find((l) => l.msg === 'incoming request')
+      expect(incoming.req.url).toBe('/api/admin/users')
+      expect(logLines.join('')).not.toMatch(/someone(%40|@)example\.com/)
     })
 
     it("relays vertice-api's INVALID_ARGUMENT text for a cursor it refuses", async () => {
@@ -360,8 +369,8 @@ describe('admin mapping', () => {
     })
   })
 
-  it('refuses a profile with neither arm set', () => {
-    expect(() => toUserProfile({})).toThrow()
+  it('answers a profile with neither arm set as a 502 bad upstream answer', () => {
+    expect(() => toUserProfile({})).toThrow(expect.objectContaining({ statusCode: 502, code: 'UPSTREAM_ERROR' }))
   })
 
   it('maps a former relationship with its end, and a catalog history entry', () => {
@@ -418,5 +427,17 @@ describe('admin mapping', () => {
     }
     expect(toDirectoryUser({ ...row, role: 'TRAINER' })).toMatchObject({ currentTrainer: null, currentClientCount: 4 })
     expect(toDirectoryUser({ ...row, role: 'CLIENT' })).toMatchObject({ currentTrainer: { id: 11, name: 'X' }, currentClientCount: null })
+  })
+})
+
+describe('request log serializer', () => {
+  it('is the one the production logger uses', async () => {
+    const app = await buildApp()
+    try {
+      const serializers = (app.log as unknown as Record<symbol, Record<string, unknown>>)[pino.symbols.serializersSym]
+      expect(serializers!.req).toBe(requestSerializer)
+    } finally {
+      await app.close()
+    }
   })
 })
