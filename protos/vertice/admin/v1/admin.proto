@@ -30,6 +30,24 @@ service AdminService {
   // Admins that appear as the author of at least one entry, for the history's admin filter (R71),
   // ordered by name.
   rpc ListActionAdmins(ListActionAdminsRequest) returns (ListActionAdminsResponse);
+  // Suspends a trainer or client (R39-R43, E17, E20): every session ends at the user's next call
+  // (UNAUTHENTICATED "Session no longer valid") and their sign-in answers FAILED_PRECONDITION
+  // "Account suspended" once the password matched. Their data, plans, roster and a suspended
+  // trainer's clients are untouched (R45, R46); no e-mail is sent. Writes a SUSPEND_USER history
+  // entry with the reason in the same transaction. FAILED_PRECONDITION "User <id> is already
+  // suspended".
+  rpc SuspendUser(SuspendUserRequest) returns (SuspendUserResponse);
+  // Lifts a suspension (R44, E23): the user signs in again; sessions from before the suspension stay
+  // void. No e-mail is sent. Writes a REACTIVATE_USER history entry with the reason.
+  // FAILED_PRECONDITION "User <id> is not suspended".
+  rpc ReactivateUser(ReactivateUserRequest) returns (ReactivateUserResponse);
+  // E-mails the trainer or client a single-use link to the "Definir senha" page (R48, R49, E24); the
+  // admin never sees it. Redeeming it sets the password and ends every session. Writes a
+  // SEND_PASSWORD_RESET_EMAIL entry only when the limits admitted the send. Limits per user: 1 per
+  // minute, 5 per rolling 24 hours (RESOURCE_EXHAUSTED "Password-reset email limit reached; retry
+  // after N seconds"); UNAVAILABLE "Password-reset email could not be sent" when every try failed;
+  // FAILED_PRECONDITION "Password-reset emails are not enabled" while e-mails are switched off.
+  rpc SendPasswordResetEmail(SendPasswordResetEmailRequest) returns (SendPasswordResetEmailResponse);
 }
 
 enum DirectoryRole {
@@ -252,3 +270,32 @@ message ListActionAdminsRequest {}
 message ListActionAdminsResponse {
   repeated UserRef admins = 1;
 }
+
+message SuspendUserRequest {
+  int64 user_id = 1;
+  // Why (R39, E20): trimmed, 1-500 characters (UTF-16 units), else INVALID_ARGUMENT. Shown in the
+  // history, not to the user.
+  string reason = 2;
+}
+
+message SuspendUserResponse {
+  // The user's directory row after the change (suspended = true).
+  DirectoryUser user = 1;
+}
+
+message ReactivateUserRequest {
+  int64 user_id = 1;
+  // Same rule as SuspendUserRequest.reason (R44).
+  string reason = 2;
+}
+
+message ReactivateUserResponse {
+  // The user's directory row after the change (suspended = false).
+  DirectoryUser user = 1;
+}
+
+message SendPasswordResetEmailRequest {
+  int64 user_id = 1;
+}
+
+message SendPasswordResetEmailResponse {}

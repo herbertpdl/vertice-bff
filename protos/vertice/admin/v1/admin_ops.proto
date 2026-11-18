@@ -19,6 +19,13 @@ service AdminOpsService {
   // Deletes the admin's second factor and ends every session of theirs (R10, E10); they enrol again
   // at the next sign-in. Succeeds when there was no factor to delete.
   rpc ResetAdminSecondFactor(ResetAdminSecondFactorRequest) returns (ResetAdminSecondFactorResponse);
+  // Suspends an admin, with the same effect as AdminService.SuspendUser (every session ends, sign-in
+  // answers FAILED_PRECONDITION "Account suspended"), for an ADMIN target only.
+  // FAILED_PRECONDITION "User <id> is already suspended".
+  rpc SuspendAdmin(SuspendAdminRequest) returns (SuspendAdminResponse);
+  // Lifts an admin's suspension; their old sessions stay void. FAILED_PRECONDITION "User <id> is not
+  // suspended".
+  rpc ReactivateAdmin(ReactivateAdminRequest) returns (ReactivateAdminResponse);
 }
 
 message CreateAdminRequest {
@@ -50,3 +57,15 @@ message ResetAdminSecondFactorRequest {
 }
 
 message ResetAdminSecondFactorResponse {}
+
+message SuspendAdminRequest {
+  int64 user_id = 1;
+}
+
+message SuspendAdminResponse {}
+
+message ReactivateAdminRequest {
+  int64 user_id = 1;
+}
+
+message ReactivateAdminResponse {}

@@ -68,7 +68,9 @@ service UserService {
   // Checks an email/password pair and returns the user it belongs to. The email is matched
   // case-insensitively. A wrong password, an unknown email and a user with no password set all fail
   // the same way: UNAUTHENTICATED "Invalid email or password", and so does a user whose role is not
-  // the request's required_role. A success records the user's activity for the day.
+  // the request's required_role. Only once the password (and required_role) matched, a suspended
+  // account is FAILED_PRECONDITION "Account suspended". A success records the user's activity for
+  // the day.
   // service:bff, or a user checking their own email (re-check before a password change). Contact view.
   rpc VerifyCredentials(VerifyCredentialsRequest) returns (UserResponse);
   // Issues a single-use token that lets the user set their own password (first access). Issuing a
@@ -92,7 +94,8 @@ service UserService {
   // accepts the email; when every try fails they keep working. Limits per client: 1 per minute and
   // 5 per rolling 24 hours, counting every accepted first-access email (on create, resend, email fix
   // or ops). A TRAINER for their active client who has no password yet (PERMISSION_DENIED
-  // otherwise); ADMIN or service:ops for any client (NOT_FOUND when there is no such client).
+  // otherwise); ADMIN or service:ops for any client (NOT_FOUND when there is no such client; an
+  // ADMIN send admitted by the limits writes a SEND_FIRST_ACCESS_EMAIL history entry).
   // RESOURCE_EXHAUSTED "First-access email limit reached; retry after N seconds" over a limit,
   // UNAVAILABLE when all three tries failed, FAILED_PRECONDITION while first-access emails are
   // switched off.
@@ -132,6 +135,9 @@ message UserResponse {
   // A client's first access (client-first-access-email): detail view only (GetUser for the active
   // trainer, UpdateUser, CreateClientForTrainer); empty everywhere else.
   FirstAccessStatus first_access = 13;
+  // Whether an admin suspended the user (admin-panel R46). Set on
+  // TrainerClientService.ListClientsForTrainer only; false everywhere else.
+  bool suspended = 14;
 }
 
 // Whether a client still has to choose their password, and how the first-access emails went. Every
