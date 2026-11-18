@@ -47,7 +47,7 @@ without it.
 | R4 | new admin login | F5: identical 401 |
 | R5 | `requireRole('ADMIN')` on admin module | F4 |
 | R6 | `requireRole` on trainer/client modules; any-role routes | F4 |
-| R7 | route-authorization table (`src/test/route-authorization.test.ts:104`) | F4 |
+| R7 | route-authorization table (`src/test/route-authorization.test.ts:104`, completeness check at `:958`) | F4 |
 | R8 | new route: `POST /api/admin/auth/verify` | F1 |
 | R9 | new route: `POST /api/admin/auth/enroll` | F1, F9 |
 | R10 | `src/ops/` | F10 |
@@ -81,13 +81,13 @@ without it.
 | R38 | none | No admin write route on profiles; F4 |
 | R39 | new route: `POST /api/admin/users/:id/suspend` | Body: reason |
 | R40 | `mapGrpcError` UNAUTHENTICATED→401 (`src/grpc/call.ts:140`) | Existing logout path |
-| R41 | `POST /auth/login`, `POST /auth/session/renew` | F6 |
+| R41 | `POST /auth/login` and the admin login | F6: 403 `ACCOUNT_SUSPENDED` on login only; renew stays on the 401 path (R40) |
 | R42 | same | F5 |
 | R43 | not exposed | |
 | R44 | new route: `POST /api/admin/users/:id/reactivate` | |
 | R45 | not exposed | |
 | R46 | `src/modules/clients` roster | Additive `suspended` field (F11) |
-| R47 | new route: `POST /api/admin/users/:id/first-access-email` | `SendFirstAccessEmail` exists |
+| R47 | new route: `POST /api/admin/users/:id/first-access-email` | `SendFirstAccessEmail` exists on vertice-api main but not in the synced protos: needs `npm run sync:protos` (F3) |
 | R48 | new route: `POST /api/admin/users/:id/password-reset-email` | F3 |
 | R49 | same | Response carries status only |
 | R50 | new route: `DELETE /api/admin/relationships/:clientId` | `EndTrainerClientRelationship` exists |
@@ -171,14 +171,16 @@ There is no admin module.
   and client modules use `requireRole('TRAINER')` or `requireRole('TRAINER', 'CLIENT')`. The
   exercise list admits ADMIN (`src/modules/exercises/routes.ts:28`). The auth routes `GET/PATCH
   /auth/me`, the password change, the export and `DELETE /auth/me` admit any role, ADMIN
-  included (`src/modules/auth/routes.ts:125,246`).
+  included. The authoritative list is the pinned `ADMIN_ROUTES` (`src/test/route-authorization.test.ts:1038-1048`):
+  `GET/PATCH/DELETE /auth/me`, `GET /auth/me/export`, `POST /auth/me/consent`, `POST /auth/password`,
+  `GET /exercises`, `GET /exercises/:id`, `GET /muscle-groups`.
 - **Rate limiting.** Auth buckets are an in-memory fixed-window counter per process
   (`src/lib/attempt-limiter.ts:4-26`, "a shared store such as Redis is the follow-up").
 - **Error mapping.** `mapGrpcError` gives fixed messages per status
-  (`src/grpc/call.ts:107-155`): `ALREADY_EXISTS` → 409 "Email or CPF already in use",
+  (`UPSTREAM_MESSAGES` and `mapGrpcError`, `src/grpc/call.ts:108-156`): `ALREADY_EXISTS` → 409 "Email or CPF already in use",
   `FAILED_PRECONDITION` → 409 generic, `UNAUTHENTICATED` → 401 session invalid.
 - **Tests.** About 365 Vitest cases. `src/test/route-authorization.test.ts:104` holds one entry per
-  registered route (a route without one fails the suite).
+  registered route (a route without one fails the suite, `:958`).
 - **Drift.** `docs/api-contract.md` (526 lines) still documents ADMIN as having "no defined
   product" through its echo in `service.ts:32`. That comment will be wrong once this ships.
 
@@ -236,15 +238,31 @@ There is no admin module.
 - **Why it matters:** If the code check lives only in the web, anyone with the password calls
   `POST https://api.vertice.fit/api/auth/login` and holds an admin session without the code.
 - **Recommendation:**
-  - The trainer/client login refuses ADMIN with the generic 401, so no admin token ever comes
-    from it (R3).
+  - The trainer/client login never signs a token for ADMIN (R3). After a correct password it
+    answers with a distinct code (for example 403 `ADMIN_LOGIN_ELSEWHERE`), which the web maps to
+    today's `APP_ONLY_MESSAGE` so R3's "refused as today" holds (owner's decision; web assessment
+    F9). A wrong password still gets the shared 401, so the role is revealed only to someone who
+    already has the password, as today.
   - A separate admin login returns only a short-lived challenge after the password: a distinct
     token type, minutes long, accepted by `verify`/`enroll` only.
   - `verifyToken` must reject the challenge everywhere else.
   - After a valid code, sign the admin token with a second-factor claim. The API refuses ADMIN
     tokens without it (API assessment option A), so an older token or a mis-signed one is useless
     upstream too.
-  - Code attempts get their own attempt-limit bucket keyed by user and IP.
+  - Code attempts get their own attempt-limit bucket keyed by user and IP. That limiter is
+    per process (`src/lib/attempt-limiter.ts:24-26`), so N BFF tasks give N times the guesses.
+    The API's verify RPC must also count failed attempts per admin next to the secret (API
+    assessment F9). The BFF bucket is the first layer only.
+  - **Where the code is checked.** The code check, replay protection included, runs in the
+    API's verify RPC. The BFF relays the code with the user id from the challenge and signs the
+    token only on success. The secret never leaves the API, except once as the enrolment
+    provisioning URI.
+  - **Service-token exception.** During the code step the admin holds only a challenge, so the
+    BFF calls enrol and verify with its service token. That widens `SERVICE_TOKEN_RPCS`, which is
+    pinned to exactly three RPCs (`src/test/route-authorization.test.ts:1031`) and mirrored by
+    `API_SERVICE_SUBJECT_RPCS` in `src/test/fakeUpstream.ts`. CLAUDE.md says "Never widen either
+    list for convenience". Treat it as a reviewed exception: only the routes holding a valid
+    challenge may call them, and both pins change on purpose in the same PR.
 
 **F2 (High). There is no idle limit, and the fixed 8h lifetime doesn't match R11/R12.**
 - **What:** Web tokens are fixed at 8h with no renewal (`src/lib/jwt.ts:63`, renewal is
@@ -256,6 +274,8 @@ There is no admin module.
   - Admin tokens live 30 minutes, carry the original sign-in time, and renew through an admin-only
     renew route while still valid.
   - Renewal is refused once 12h have passed since sign-in, and the renewed token keeps that time.
+    Its `exp` is `min(now + 30 min, signedInAt + 12h)`, so a renewal at 11h50m expires at exactly
+    12h, and `verifyToken` rejects an admin token whose `signedInAt + 12h` has passed (R12, E12).
   - Renewal must go through vertice-api first, as mobile renewal does (so suspension and password
     changes stop it).
   - The web calls renew on activity.
@@ -271,15 +291,22 @@ There is no admin module.
 - **Recommendation:**
   - Register the admin module as a plugin whose `preHandler` hook is `requireRole('ADMIN')`,
     like the modules that hook roles today.
-  - Decide per any-role route whether ADMIN keeps it. `/auth/me` stays (the panel shows who is
-    signed in). Export and `DELETE /auth/me` arguably don't apply to admins.
+  - Decide each of the nine pinned `ADMIN_ROUTES` (`route-authorization.test.ts:1038-1048`).
+    Owner's decision (PRD R16a, R16b): an admin sees their own name and e-mail and changes their
+    own password, nothing else on their own account.
+    - Keep: `GET /auth/me`, `POST /auth/password`, `POST /auth/me/consent`, `GET /muscle-groups`
+      (the admin screens need the list; web assessment F3).
+    - Drop for ADMIN: `PATCH /auth/me`, `DELETE /auth/me`, `GET /auth/me/export` (R16b).
+    - Drop for ADMIN: `GET /exercises` and `GET /exercises/:id`, in favour of
+      `/api/admin/exercises`. Do this in the same slice as API F1/F2, which change what those
+      RPCs return for ADMIN.
   - Every new route gets a row in the route-authorization table with `roles: ['ADMIN']`, and the
     table asserts TRAINER and CLIENT get 403.
 
 **F5 (Medium). The admin login must not reveal roles.**
 - **What:** R4 requires a non-admin's correct password to get the same 401 as a wrong password.
   Today an unknown e-mail, a wrong password and no password share one 401
-  (`src/modules/auth/routes.ts:50-52`).
+  (`src/modules/auth/service.ts:55-67` and `userService.verifyCredentials`).
 - **Where:** new admin login; R4, E3, E4, E19.
 - **Why it matters:** A different status, body or timing lets anyone find which e-mails are
   admins.
@@ -298,8 +325,12 @@ There is no admin module.
 - **Why it matters:** The web would show the wrong text, or have to parse messages (forbidden:
   "Clients key on the `code`").
 - **Recommendation:**
-  - Map per route. Login and renew turn the suspended status into 403 `ACCOUNT_SUSPENDED` with the
-    R41 text.
+  - Map per route. The login routes (trainer/client `POST /auth/login` and the admin login) turn
+    the suspended status into 403 `ACCOUNT_SUSPENDED` with the R41 text. vertice-api returns it as
+    `FAILED_PRECONDITION` with a fixed description, only after the password matched (API
+    assessment F22). Renew (mobile and admin) calls `GetUser` with the caller's token, so it sees
+    the existing `UNAUTHENTICATED` and stays on the 401 path (R40). The mobile app signs out only
+    on a 401.
   - Admin exercise and muscle-group routes map `ALREADY_EXISTS` → 409 `NAME_TAKEN` and in-use →
     409 `EXERCISE_IN_USE`.
   - Keep the global mapping unchanged for every other route.
@@ -342,7 +373,7 @@ cache.
   - Enrolment completes only after a code from the new secret verifies.
 
 **F14 (Medium). Logging redaction.**
-- **What:** `logUpstreamError` already strips e-mails and CPFs (`src/grpc/call.ts:157-160`).
+- **What:** `redactUpstreamText` already strips e-mails and CPFs from upstream text before it is logged (`src/grpc/call.ts:158-165`).
   Admin routes add suspension reasons and code submissions.
 - **Where:** `src/grpc/call.ts`; R39, R68.
 - **Why it matters:** A free-text reason could carry personal data into logs.
@@ -372,6 +403,8 @@ cache.
 
 **F16 (Low).**
 - **What:** These need documenting:
+  - CLAUDE.md's Trust model: the reviewed `SERVICE_TOKEN_RPCS` exception for enrol and verify
+    (F1), and the second-factor claim;
   - CLAUDE.md's Auth section ("ADMIN has no defined product yet… Don't add `ADMIN` to a role list
     without a PRD"): this PRD is that PRD, and the pinned ADMIN route list in
     `route-authorization.test.ts` changes with it;
@@ -389,8 +422,9 @@ cache.
 
 **F10 (Medium). Platform-team actions.**
 - **What:** R10 and R14 (create an admin, reset their factor, suspend an admin) have no product
-  path. `src/ops/` already has a `service:ops` script pattern (`issue-setup-tokens.ts`,
-  `ops-token.ts`).
+  path. `src/ops/` already has an ops script, `npm run ops:issue-setup-tokens`
+  (`issue-setup-tokens.ts`), which calls vertice-api with a `service:ops` token
+  (`ops-token.ts`).
 - **Where:** `src/ops/`; R10, R14, E10.
 - **Why it matters:** Without a script, these get done as manual SQL in production.
 - **Recommendation:** Add ops scripts over ops-only API RPCs. They run locally with the ops
@@ -404,13 +438,14 @@ code, the API stores the secret and checks the claim). No other material choice 
 ## 6. Testing strategy
 
 See F15. Key scenarios:
-- **Trainer/client login:** ADMIN refused with the generic 401.
+- **Trainer/client login:** an ADMIN's correct password gets the distinct code and no token. A wrong one gets the shared 401.
 - **Admin login:**
   - with a TRAINER's correct password, identical 401;
   - with the right password, a challenge only, which `/api/admin/*` and `/api/auth/me` refuse;
   - wrong code refused, replayed code refused;
   - a valid code gives a token with the claim, which renews until 12h and fails after 30 minutes
     without renewal;
+  - a renewal at 11h50m expires at exactly 12h;
   - a suspended admin at renew gets 401.
 - **Suspended trainer or client:** at the login with the right password 403
   `ACCOUNT_SUSPENDED`, with the wrong one 401.
@@ -440,17 +475,18 @@ second-factor and session design needing more than one review round.
 
 ## 9. Questions and assumptions
 
-- A1: Admins keep `GET/PATCH /auth/me` and the password change, and lose `DELETE /auth/me` and
-  the export (they are platform accounts, managed by the platform team). Confirm in the spec.
+- A1 (decided by the owner, PRD R16a/R16b): admins keep `GET /auth/me`, the password change and
+  consent. They lose `PATCH /auth/me`, `DELETE /auth/me` and the export. See F4 for the
+  exercise reads.
 - A2: The admin token's lifetime is 30 minutes, renewed on activity, capped 12h after sign-in.
 - A3: Challenge tokens last 5 minutes.
 
 ## 10. Inputs to the spec
 
-- [ ] F1: Admin login flow (challenge, verify, enrol), refusing ADMIN at the trainer login, the second-factor claim, code attempt limits.
-- [ ] F2: Admin token lifetime, renew route, 12h cap, upstream re-check on renew.
+- [ ] F1: Admin login flow (challenge, verify, enrol), the distinct code for ADMIN at the trainer login, the second-factor claim, code attempt limits (BFF and API), the code check living in the API, the reviewed `SERVICE_TOKEN_RPCS` exception.
+- [ ] F2: Admin token lifetime, renew route, 12h cap with `exp = min(now + 30 min, signedInAt + 12h)`, upstream re-check on renew.
 - [ ] F3: Which routes ship in which slice, gated on which API RPCs; proto sync per slice.
-- [ ] F4: The admin module's role hook, which any-role routes ADMIN keeps, route-authorization rows.
+- [ ] F4: The admin module's role hook, the keep/drop list for the nine `ADMIN_ROUTES`, route-authorization rows.
 - [ ] F5: Identical refusals at the admin login.
 - [ ] F6: Per-route codes (`ACCOUNT_SUSPENDED`, `NAME_TAKEN`, `EXERCISE_IN_USE`).
 - [ ] F7: One paging shape for admin lists, `limit` ∈ {10, 25, 50}.
