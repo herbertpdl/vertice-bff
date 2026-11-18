@@ -75,6 +75,8 @@ export const ERROR_CODES = [
   'SESSION_NOT_RENEWABLE',
   'CHALLENGE_INVALID',
   'INVALID_SECOND_FACTOR_CODE',
+  'ADMIN_LOGIN_ELSEWHERE',
+  'ACCOUNT_SUSPENDED',
 ] as const
 
 export const errorCodeSchema = named('ErrorCode', z.enum(ERROR_CODES))
@@ -84,7 +86,12 @@ export const errorResponseSchema = named(
   z.object({
     error: z.object({
       code: errorCodeSchema.describe('Machine-readable. Key on this, never on `message`.'),
-      message: z.string().describe('English, for logs and debugging; not meant to be shown to users.'),
+      message: z
+        .string()
+        .describe(
+          'English, for logs and debugging; not meant to be shown to users. Two exceptions carry the Portuguese text ' +
+            'to show: `ACCOUNT_SUSPENDED` and `ADMIN_LOGIN_ELSEWHERE`.',
+        ),
       details: z
         .unknown()
         .optional()
@@ -215,6 +222,11 @@ export const adminDirectoryUserSchema = named(
       .describe('Clients only: the current trainer, null when none. Always null for a trainer.'),
     currentClientCount: count.nullable().describe('Trainers only: clients with an active relationship. Null for a client.'),
   }),
+)
+
+export const adminUserResultSchema = named(
+  'AdminUserResult',
+  z.object({ user: adminDirectoryUserSchema.describe('The user’s directory row after the change.') }),
 )
 
 export const adminDirectoryPageSchema = named(
@@ -436,6 +448,9 @@ export const clientSummarySchema = named(
     weekActivity: z
       .array(z.object({ date, dayOfWeek: weekdaySchema, completed: z.boolean() }))
       .describe('Monday to Friday of the current week.'),
+    suspended: z
+      .boolean()
+      .describe('An admin suspended the client: they stay on the roster but cannot sign in until reactivated.'),
   }),
 )
 
@@ -695,6 +710,7 @@ export type ResponseSchemasMatchServices = [
   Assert<SameShape<Out<typeof adminUserRefSchema>, adminService.AdminUserRef>>,
   Assert<SameShape<Out<typeof adminDashboardSchema>, adminService.AdminDashboard>>,
   Assert<SameShape<Out<typeof adminDirectoryPageSchema>, adminService.AdminDirectoryPage>>,
+  Assert<SameShape<Out<typeof adminUserResultSchema>, adminService.AdminUserResult>>,
   Assert<SameShape<Out<typeof adminUserProfileSchema>, adminService.AdminUserProfile>>,
   Assert<SameShape<Out<typeof adminActionPageSchema>, adminService.AdminActionPage>>,
   Assert<SameShape<Out<typeof adminActionAdminsSchema>, adminService.AdminActionAdmins>>,

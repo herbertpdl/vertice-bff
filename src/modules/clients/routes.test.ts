@@ -5,7 +5,7 @@ import { buildApp } from '../../app.js'
 import { grpcCall, mapGrpcError } from '../../grpc/call.js'
 import pino from 'pino'
 import { Writable } from 'node:stream'
-import { bearer, cpfOf, emailOf, fakeGrpcCall, ids, setupTokenFor } from '../../test/fakeUpstream.js'
+import { bearer, cpfOf, emailOf, fakeGrpcCall, fakeSuspended, ids, resetFakeSuspended, setupTokenFor } from '../../test/fakeUpstream.js'
 
 // Keep the real mapGrpcError: the fake upstream raises its errors through it.
 vi.mock('../../grpc/call.js', async (importOriginal) => ({
@@ -221,17 +221,31 @@ describe('client personal data (P1-03)', () => {
           "id": 20,
           "lastWorkoutAt": null,
           "name": "Client A",
+          "suspended": false,
           "weekActivity": Any<Array>,
         }
       `)
       for (const entry of roster) {
         expect(Object.keys(entry).sort()).toEqual(
-          ['activePlanCount', 'currentPlan', 'id', 'lastWorkoutAt', 'name', 'weekActivity'].sort(),
+          ['activePlanCount', 'currentPlan', 'id', 'lastWorkoutAt', 'name', 'suspended', 'weekActivity'].sort(),
         )
       }
       // The fake upstream still answers with the contact view (email set), so this proves the BFF
       // drops the email itself rather than relying on vertice-api's summary view.
       expect(res.body).not.toMatch(/email|cpf|cref|@vertice\.test|52998224/i)
+    })
+
+    it('flags a suspended client, who stays on the roster (admin-panel R46, E22)', async () => {
+      fakeSuspended.add(ids.clientA2)
+      try {
+        const roster = (await get('/api/clients')).json() as { id: number; suspended: boolean }[]
+        expect(roster.map(({ id, suspended }) => ({ id, suspended }))).toEqual([
+          { id: ids.clientA, suspended: false },
+          { id: ids.clientA2, suspended: true },
+        ])
+      } finally {
+        resetFakeSuspended()
+      }
     })
 
     it('drops an email and a CPF even if upstream sends them (an older vertice-api, or a view change)', async () => {

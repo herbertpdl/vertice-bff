@@ -83,12 +83,14 @@ export default async function adminAuthRoutes(app: FastifyInstance) {
           'Checks the password of an ADMIN account and answers a short-lived challenge, never a session. A wrong ' +
           'password, an unknown email, an account with no password and a trainer’s or client’s correct password ' +
           'all get the same 401 `UNAUTHORIZED` “Invalid email or password”. `secondFactor` says whether to enroll ' +
-          'an authenticator first. Failed attempts are rate limited.',
+          'an authenticator first. With the right password, a suspended admin is 403 `ACCOUNT_SUSPENDED` (message: ' +
+          '“Sua conta está suspensa. Entre em contato com o suporte.”) and gets no challenge. Failed attempts are ' +
+          'rate limited.',
         tag: 'Admin auth',
         auth: 'public',
         body: adminLoginSchema,
         ok: { status: 200, description: 'The challenge for the code step.', schema: adminChallengeSchema },
-        errors: [401, 429],
+        errors: [401, 403, 429],
       }),
     },
     async (req) => {

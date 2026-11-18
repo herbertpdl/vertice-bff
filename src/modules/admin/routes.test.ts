@@ -8,9 +8,16 @@ import { grpcCall, mapGrpcError } from '../../grpc/call.js'
 import {
   bearer,
   cpfOf,
+  FAKE_EMAIL_RETRY_SECONDS,
+  FAKE_PASSWORD,
+  emailOf,
+  fakeAdminActions,
+  fakeEmailSends,
   fakeGrpcCall,
+  fakeSuspended,
   ids,
   resetFakeAdminActions,
+  resetFakeSuspended,
   resetUpstreamCallers,
   type Actor,
 } from '../../test/fakeUpstream.js'
@@ -427,6 +434,149 @@ describe('admin mapping', () => {
     }
     expect(toDirectoryUser({ ...row, role: 'TRAINER' })).toMatchObject({ currentTrainer: null, currentClientCount: 4 })
     expect(toDirectoryUser({ ...row, role: 'CLIENT' })).toMatchObject({ currentTrainer: { id: 11, name: 'X' }, currentClientCount: null })
+  })
+})
+
+describe('admin write routes (VRT-28)', () => {
+  let app: FastifyInstance
+  const logLines: string[] = []
+
+  beforeAll(async () => {
+    const sink = new Writable({
+      write(chunk, _encoding, done) {
+        logLines.push(String(chunk))
+        done()
+      },
+    })
+    app = await buildApp({
+      rateLimits: { globalMax: 1_000_000, authMax: 1_000_000 },
+      loggerInstance: pino({ level: 'trace', serializers: LOG_SERIALIZERS }, sink),
+    })
+    await app.ready()
+  })
+  afterAll(() => app.close())
+  beforeEach(() => {
+    logLines.length = 0
+    resetFakeSuspended()
+    fakeEmailSends.mode = 'ok'
+  })
+
+  const post = (url: string, body?: object, as: Actor = 'admin') =>
+    app.inject({ method: 'POST', url, headers: bearer(as), ...(body ? { payload: body } : {}) })
+  const auditLines = () => logLines.map((l) => JSON.parse(l)).filter((l) => l.audit)
+  const REASON = 'Conta compartilhada com terceiros'
+
+  describe('suspend and reactivate', () => {
+    it('suspends with the trimmed reason and answers the directory row; the history gets the entry', async () => {
+      const res = await post(`/api/admin/users/${ids.trainerA}/suspend`, { reason: `  ${REASON}  ` })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('SuspendUser')).toEqual({ userId: ids.trainerA, reason: REASON })
+      expect(res.json()).toEqual({
+        user: expect.objectContaining({ id: ids.trainerA, role: 'TRAINER', suspended: true, currentTrainer: null }),
+      })
+      expect(fakeAdminActions[0]).toMatchObject({ action: 'ADMIN_ACTION_SUSPEND_USER', targetUserId: ids.trainerA })
+    })
+
+    it('reactivates a suspended user (suspended: false)', async () => {
+      fakeSuspended.add(ids.clientA)
+      const res = await post(`/api/admin/users/${ids.clientA}/reactivate`, { reason: REASON })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json().user).toMatchObject({ id: ids.clientA, suspended: false })
+    })
+
+    it('accepts a 500-character reason counted in UTF-16 units, and refuses 501 before upstream', async () => {
+      expect((await post(`/api/admin/users/${ids.clientA}/suspend`, { reason: '😀'.repeat(250) })).statusCode).toBe(200)
+      resetFakeSuspended()
+      grpcCallMock.mockClear()
+      const res = await post(`/api/admin/users/${ids.clientA}/suspend`, { reason: `${'😀'.repeat(250)}x` })
+      expect(res.statusCode).toBe(400)
+      expect(res.json().error.details.fieldErrors.reason).toBeDefined()
+      expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+
+    it('writes an audit line with actor and target, never the reason', async () => {
+      await post(`/api/admin/users/${ids.clientA}/suspend`, { reason: REASON })
+      expect(auditLines()).toEqual([
+        expect.objectContaining({ audit: 'admin.user.suspend', actorId: ids.admin, targetUserId: ids.clientA }),
+      ])
+      expect(logLines.join('\n')).not.toContain(REASON)
+    })
+
+    it('ends the session of the suspended user, and refuses their password at login', async () => {
+      await post(`/api/admin/users/${ids.clientA}/suspend`, { reason: REASON })
+      const me = await app.inject({ method: 'GET', url: '/api/auth/me', headers: bearer('clientA') })
+      expect(me.statusCode).toBe(401)
+      expect(me.json().error.code).toBe('UNAUTHENTICATED')
+      const login = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { email: emailOf(ids.clientA), password: FAKE_PASSWORD },
+      })
+      expect(login.statusCode).toBe(403)
+      expect(login.json().error.code).toBe('ACCOUNT_SUSPENDED')
+    })
+  })
+
+  describe.each([
+    ['first-access-email', 'SendFirstAccessEmail', ids.clientA2, 'admin.user.first_access_email'],
+    ['password-reset-email', 'SendPasswordResetEmail', ids.trainerA, 'admin.user.password_reset_email'],
+  ])('POST /admin/users/:id/%s', (path, rpc, target, audit) => {
+    const url = `/api/admin/users/${target}/${path}`
+
+    it('answers 204 with an empty body: no link, no token, no status (R49)', async () => {
+      const res = await post(url)
+      expect(res.statusCode, res.body).toBe(204)
+      expect(res.body).toBe('')
+      expect(upstreamRequest(rpc)).toEqual({ userId: target })
+      expect(auditLines()).toEqual([expect.objectContaining({ audit, actorId: ids.admin, targetUserId: target })])
+    })
+
+    it('answers a send limit with 429 RATE_LIMITED and the API’s Retry-After', async () => {
+      fakeEmailSends.mode = 'limited'
+      const res = await post(url)
+      expect(res.statusCode).toBe(429)
+      expect(res.json().error.code).toBe('RATE_LIMITED')
+      expect(res.headers['retry-after']).toBe(String(FAKE_EMAIL_RETRY_SECONDS))
+      expect(auditLines()).toEqual([])
+    })
+
+    it('answers 409 PRECONDITION_FAILED while e-mails are switched off upstream', async () => {
+      fakeEmailSends.mode = 'disabled'
+      const res = await post(url)
+      expect(res.statusCode).toBe(409)
+      expect(res.json().error.code).toBe('PRECONDITION_FAILED')
+    })
+
+    it('answers 503 UPSTREAM_UNAVAILABLE when every send failed', async () => {
+      fakeEmailSends.mode = 'failed'
+      const res = await post(url)
+      expect(res.statusCode).toBe(503)
+      expect(res.json().error.code).toBe('UPSTREAM_UNAVAILABLE')
+    })
+
+    it('defaults Retry-After to 60 when the upstream text has no seconds', async () => {
+      grpcCallMock.mockImplementation(async () => {
+        throw mapGrpcError({ code: status.RESOURCE_EXHAUSTED, details: 'limit reached' })
+      })
+      const res = await post(url)
+      expect(res.statusCode).toBe(429)
+      expect(res.headers['retry-after']).toBe('60')
+    })
+  })
+
+  describe('DELETE /admin/relationships/:trainerId/:clientId', () => {
+    it('ends the relationship with both ids and answers 204', async () => {
+      const res = await app.inject({
+        method: 'DELETE',
+        url: `/api/admin/relationships/${ids.trainerA}/${ids.clientA}`,
+        headers: bearer('admin'),
+      })
+      expect(res.statusCode, res.body).toBe(204)
+      expect(upstreamRequest('EndTrainerClientRelationship')).toEqual({ trainerId: ids.trainerA, clientId: ids.clientA })
+      expect(auditLines()).toEqual([
+        expect.objectContaining({ audit: 'admin.relationship.end', actorId: ids.admin, trainerId: ids.trainerA, clientId: ids.clientA }),
+      ])
+    })
   })
 })
 

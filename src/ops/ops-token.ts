@@ -14,8 +14,7 @@ export const OPS_TOKEN_TTL_SECONDS = 60
 
 /**
  * The only RPCs vertice-api allows `service:ops` on: what `issue-setup-tokens` needs, and the
- * `AdminOpsService` RPCs of the admin scripts (`admin-ops.ts`, admin-panel spec B6). VRT-28 adds
- * `SuspendAdmin` and `ReactivateAdmin`.
+ * `AdminOpsService` RPCs of the admin scripts (`admin-ops.ts`, admin-panel spec B6).
  */
 export const OPS_TOKEN_RPCS: ReadonlySet<string> = new Set([
   'ListUsers',
@@ -23,6 +22,8 @@ export const OPS_TOKEN_RPCS: ReadonlySet<string> = new Set([
   'CreateAdmin',
   'IssueAdminSetupToken',
   'ResetAdminSecondFactor',
+  'SuspendAdmin',
+  'ReactivateAdmin',
 ])
 
 /** A fresh short-lived ops token. Cheap (one HMAC), so scripts mint one per call. */

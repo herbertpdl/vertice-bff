@@ -202,7 +202,7 @@ describe('admin tokens (admin-panel spec B3, vertice-api D6)', () => {
   })
 
   it.each([
-    ['the plain 8h ADMIN token /auth/login signs', () => signToken({ id: 1, role: 'ADMIN' })],
+    ['the plain 8h ADMIN token /auth/login signs', () => crafted({ amr: undefined, auth_time: undefined, iat: now(), exp: now() + 8 * 3600 })],
     ['no amr', () => crafted({ amr: undefined })],
     ['amr without "otp"', () => crafted({ amr: ['pwd'] })],
     ['amr that is not a list', () => crafted({ amr: 'otp' })],

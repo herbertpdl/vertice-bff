@@ -18,7 +18,7 @@ import {
   type AuthUser,
 } from '../../lib/jwt.js'
 import * as userService from '../users/service.js'
-import type { SessionUser } from '../auth/service.js'
+import { asAccountSuspended, type SessionUser } from '../auth/service.js'
 import { PASSWORD_MAX_BYTES } from '../auth/schemas.js'
 
 /**
@@ -122,9 +122,10 @@ export async function login(email: string, password: string, trace: SigninTrace)
     user = await userService.verifyCredentials(email, password, 'ADMIN')
   } catch (err) {
     if (err instanceof UnauthorizedError) throw invalid()
-    // "Account suspended" (vertice-api VRT-27): the generic 409 until VRT-28 maps it.
+    // "Account suspended" (vertice-api D10, only after the password and the ADMIN role matched):
+    // 403 `ACCOUNT_SUSPENDED` (B10).
     if (err instanceof PreconditionFailedError) trace.reason = 'suspended'
-    throw err
+    throw asAccountSuspended(err)
   }
   // vertice-api already refused any other role; checked again so only an admin gets a challenge.
   if (user.role !== 'ADMIN') throw invalid()

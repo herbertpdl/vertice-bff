@@ -13,6 +13,9 @@ import {
   API_SERVICE_SUBJECT_RPCS,
   bearer,
   craftedAdminToken,
+  fakeSuspended,
+  plainAdminToken,
+  resetFakeSuspended,
   FAKE_TOTP_CODES,
   resetFakeSecondFactors,
   emailOf,
@@ -187,6 +190,82 @@ const routes: RouteCase[] = [
     ],
   },
   { route: 'GET /api/admin/actions/admins', roles: ['ADMIN'], ok: { as: 'admin', url: '/api/admin/actions/admins' } },
+
+  // admin panel writes (admin-panel spec §2.3, VRT-28). Client A2 starts suspended (see beforeEach).
+  {
+    route: 'POST /api/admin/users/:id/suspend',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/users/${ids.clientA}/suspend`, body: { reason: 'Pagamento pendente' } },
+    denied: [
+      { as: 'admin', url: `/api/admin/users/${ids.clientA}/suspend`, body: { reason: '   ' }, why: 'body: a blank reason (E20)', status: 400 },
+      { as: 'admin', url: `/api/admin/users/${ids.clientA}/suspend`, body: {}, why: 'body: no reason (E20)', status: 400 },
+      { as: 'admin', url: `/api/admin/users/${ids.clientA}/suspend`, body: { reason: 'x'.repeat(501) }, why: 'body: a 501-character reason', status: 400 },
+      { as: 'admin', url: `/api/admin/users/${ids.admin}/suspend`, body: { reason: 'r' }, why: 'path: an admin (R14)', status: 404, byUpstream: 'SuspendUser' },
+      { as: 'admin', url: '/api/admin/users/9999/suspend', body: { reason: 'r' }, why: 'path: a missing user', status: 404, byUpstream: 'SuspendUser' },
+      { as: 'admin', url: `/api/admin/users/${ids.clientA2}/suspend`, body: { reason: 'r' }, why: 'state: already suspended', status: 409, byUpstream: 'SuspendUser' },
+    ],
+    scoped: [
+      {
+        as: 'admin',
+        url: `/api/admin/users/${ids.clientA}/suspend`,
+        body: { reason: '  Pagamento pendente  ' },
+        why: 'the reason trimmed, with the path id',
+        rpc: 'SuspendUser',
+        sends: { userId: ids.clientA, reason: 'Pagamento pendente' },
+      },
+    ],
+  },
+  {
+    route: 'POST /api/admin/users/:id/reactivate',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/users/${ids.clientA2}/reactivate`, body: { reason: 'Pagamento recebido' } },
+    denied: [
+      { as: 'admin', url: `/api/admin/users/${ids.clientA2}/reactivate`, body: { reason: '' }, why: 'body: an empty reason', status: 400 },
+      { as: 'admin', url: `/api/admin/users/${ids.admin}/reactivate`, body: { reason: 'r' }, why: 'path: an admin (R14)', status: 404, byUpstream: 'ReactivateUser' },
+      { as: 'admin', url: `/api/admin/users/${ids.clientA}/reactivate`, body: { reason: 'r' }, why: 'state: not suspended', status: 409, byUpstream: 'ReactivateUser' },
+    ],
+  },
+  {
+    route: 'POST /api/admin/users/:id/first-access-email',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/users/${ids.clientA2}/first-access-email` },
+    denied: [
+      { as: 'admin', url: `/api/admin/users/${ids.trainerA}/first-access-email`, why: 'path: a trainer is not a client', status: 404, byUpstream: 'SendFirstAccessEmail' },
+      { as: 'admin', url: `/api/admin/users/${ids.admin}/first-access-email`, why: 'path: an admin', status: 404, byUpstream: 'SendFirstAccessEmail' },
+    ],
+  },
+  {
+    route: 'POST /api/admin/users/:id/password-reset-email',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/users/${ids.trainerA}/password-reset-email` },
+    denied: [
+      { as: 'admin', url: `/api/admin/users/${ids.admin}/password-reset-email`, why: 'path: an admin', status: 404, byUpstream: 'SendPasswordResetEmail' },
+    ],
+  },
+  {
+    route: 'DELETE /api/admin/relationships/:trainerId/:clientId',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/relationships/${ids.trainerA}/${ids.clientA}` },
+    denied: [
+      {
+        as: 'admin',
+        url: `/api/admin/relationships/${ids.trainerA}/${ids.clientB}`,
+        why: 'path: no active relationship for the pair',
+        status: 404,
+        byUpstream: 'EndTrainerClientRelationship',
+      },
+      { as: 'admin', url: `/api/admin/relationships/0/${ids.clientA}`, why: 'path: a malformed trainer id', status: 400 },
+    ],
+    scoped: [
+      {
+        as: 'admin',
+        url: `/api/admin/relationships/${ids.trainerA}/${ids.clientA}`,
+        why: 'both ids come from the path',
+        rpc: 'EndTrainerClientRelationship',
+        sends: { trainerId: ids.trainerA, clientId: ids.clientA },
+      },
+    ],
+  },
   {
     // Self only: the client's own trainer, from the token.
     route: 'GET /api/auth/me/trainer',
@@ -1000,6 +1079,9 @@ describe('route authorization', () => {
     resetFakeConsents()
     resetFakeSecondFactors()
     resetFakeAdminActions()
+    resetFakeSuspended()
+    // A suspended client, so reactivate has a target (client A2 is no actor: no token is refused).
+    fakeSuspended.add(ids.clientA2)
   })
 
   const send = (method: string, call: Partial<Call> & { url: string }) =>
@@ -1172,7 +1254,7 @@ describe('route authorization', () => {
   const challengeBearer = () => ({ authorization: `Bearer ${signAdminChallenge(ids.admin)}` })
   const now = () => Math.floor(Date.now() / 1000)
   const badAdminTokens: [string, () => string][] = [
-    ['the plain 8h ADMIN token /auth/login signs', () => signToken({ id: ids.admin, role: 'ADMIN' })],
+    ['the plain 8h ADMIN token /auth/login signs', () => plainAdminToken()],
     ['an ADMIN token without amr', () => craftedAdminToken({ amr: undefined })],
     ['an ADMIN token whose amr lacks "otp"', () => craftedAdminToken({ amr: ['pwd'] })],
     ['an ADMIN token without auth_time', () => craftedAdminToken({ auth_time: undefined })],

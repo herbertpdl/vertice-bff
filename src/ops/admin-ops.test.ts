@@ -4,7 +4,9 @@ import {
   emailOf,
   fakeGrpcCall,
   ids,
+  fakeSuspended,
   resetFakeSecondFactors,
+  resetFakeSuspended,
   resetUpstreamCallers,
   setupTokenFor,
   upstreamCallers,
@@ -14,7 +16,9 @@ import {
   issueAdminSetupToken,
   parseCreateAdminArgs,
   parseUserIdArgs,
+  reactivateAdmin,
   resetAdminSecondFactor,
+  suspendAdmin,
 } from './admin-ops.js'
 import { opsToken } from './ops-token.js'
 
@@ -30,6 +34,7 @@ describe('admin ops scripts', () => {
     grpcCallMock.mockImplementation(fakeGrpcCall)
     resetUpstreamCallers()
     resetFakeSecondFactors()
+    resetFakeSuspended()
   })
 
   it('creates an admin and answers the www "Definir senha" link, as service:ops', async () => {
@@ -53,6 +58,18 @@ describe('admin ops scripts', () => {
   it('resets the second factor as service:ops', async () => {
     await resetAdminSecondFactor(ids.admin, opsToken)
     expect(upstreamCallers).toEqual([{ method: 'ResetAdminSecondFactor', caller: 'service:ops' }])
+  })
+
+  it('suspends and reactivates an admin as service:ops; a repeat is 409, a non-admin id 404', async () => {
+    await suspendAdmin(ids.admin, opsToken)
+    expect(fakeSuspended.has(ids.admin)).toBe(true)
+    await expect(suspendAdmin(ids.admin, opsToken)).rejects.toMatchObject({ statusCode: 409, code: 'PRECONDITION_FAILED' })
+    await reactivateAdmin(ids.admin, opsToken)
+    expect(fakeSuspended.has(ids.admin)).toBe(false)
+    await expect(reactivateAdmin(ids.admin, opsToken)).rejects.toMatchObject({ statusCode: 409 })
+    await expect(suspendAdmin(ids.trainerA, opsToken)).rejects.toMatchObject({ statusCode: 404 })
+    expect(upstreamCallers.every((c) => c.caller === 'service:ops')).toBe(true)
+    expect(grpcCallMock.mock.calls[0]![2]).toEqual({ userId: ids.admin })
   })
 
   it('is refused upstream without the ops token (the BFF never calls AdminOpsService)', async () => {

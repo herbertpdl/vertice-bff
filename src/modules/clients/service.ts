@@ -127,6 +127,11 @@ export interface ClientSummary {
   currentPlan: CurrentPlanInfo | null
   lastWorkoutAt: string | null
   weekActivity: WeekActivityDay[]
+  /**
+   * An admin suspended the client (admin-panel R46, E22): they stay on the roster, with their plans
+   * and history, but cannot sign in until reactivated.
+   */
+  suspended: boolean
 }
 
 const WEEKDAY_LABELS: WeekdayLabel[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY']
@@ -171,6 +176,8 @@ export async function listClientsOverviewForTrainer(trainerId: number): Promise<
     planService.listTrainingPlans({ trainerId }),
   ])
   const roster = rosterRes.clients.map(userService.toUser)
+  // `suspended` is set on this RPC only (admin-panel R46); `toUser` doesn't carry it.
+  const suspendedIds = new Set(rosterRes.clients.filter((c) => c.suspended).map((c) => Number(c.id)))
 
   const countByClient = new Map<number, number>()
   const plansByClient = new Map<number, planService.TrainingPlan[]>()
@@ -212,6 +219,7 @@ export async function listClientsOverviewForTrainer(trainerId: number): Promise<
       currentPlan: activePlan ? { id: activePlan.id, name: activePlan.name, endDate: activePlan.endDate } : null,
       lastWorkoutAt,
       weekActivity,
+      suspended: suspendedIds.has(client.id),
     }
   })
 }

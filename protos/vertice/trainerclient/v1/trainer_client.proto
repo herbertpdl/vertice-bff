@@ -15,13 +15,14 @@ service TrainerClientService {
   // still keeps the client.
   rpc CreateClientForTrainer(CreateClientForTrainerRequest) returns (vertice.user.v1.UserResponse);
   // The trainer's active clients in the summary view (id, name, role): never email, cpf or cref
-  // (P1-03).
+  // (P1-03). A suspended client stays on the roster with suspended = true (admin-panel R46).
   rpc ListClientsForTrainer(ListClientsForTrainerRequest) returns (ListClientsForTrainerResponse);
   rpc IsTrainersClient(IsTrainersClientRequest) returns (IsTrainersClientResponse);
   // Ends the trainer's active relationship with the client: sets ended_at, nothing else. The
   // client's account, the plans and every log stay as they are. TRAINER for their own trainer_id
   // (PERMISSION_DENIED when the client isn't on their active roster, the same answer for a
-  // missing client), or ADMIN (NOT_FOUND when there is no active relationship). Afterwards the
+  // missing client), or ADMIN (NOT_FOUND when there is no active relationship; an END_RELATIONSHIP
+  // history entry is written in the same transaction). Afterwards the
   // trainer loses everything an active link grants (roster, detail view, progress, setup links,
   // new plans for the client, UpdateTrainingPlan) and keeps the plan-tree access of the plans
   // they wrote: the client keeps reading them too.

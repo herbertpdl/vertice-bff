@@ -16,10 +16,12 @@ import {
   FAKE_CONSENT_AT,
   FAKE_PASSWORD,
   fakeGrpcCall,
+  fakeSuspended,
   fakeUpstreamProfile,
   ids,
   listUsersPageCalls,
   resetFakeConsents,
+  resetFakeSuspended,
   resetUpstreamCallers,
   setupTokenFor,
   upstreamCallers,
@@ -100,6 +102,42 @@ describe('auth routes', () => {
       const res = await login(`  USER${ids.clientA}@Vertice.TEST `, FAKE_PASSWORD)
       expect(res.statusCode, res.body).toBe(200)
       expect(upstreamRequest('VerifyCredentials')).toMatchObject({ email: emailOf(ids.clientA) })
+    })
+
+    it('answers the correct password of an ADMIN with 403 ADMIN_LOGIN_ELSEWHERE and no token; a wrong one is the shared 401 (B9)', async () => {
+      const admin = await login(emailOf(ids.admin), FAKE_PASSWORD)
+      expect(admin.statusCode, admin.body).toBe(403)
+      expect(admin.json()).toEqual({
+        error: { code: 'ADMIN_LOGIN_ELSEWHERE', message: 'O acesso de alunos é feito somente pelo aplicativo Vertice.' },
+      })
+      expect(admin.body).not.toMatch(/token/)
+      const wrong = await login(emailOf(ids.admin), 'wrong-password')
+      expect(wrong.statusCode).toBe(401)
+      expect(wrong.body).toBe((await login('nobody@vertice.test', FAKE_PASSWORD)).body)
+    })
+
+    describe('a suspended account (B10)', () => {
+      afterEach(() => resetFakeSuspended())
+
+      it.each([
+        ['trainer', ids.trainerA],
+        ['client', ids.clientA],
+        ['admin', ids.admin],
+      ])('answers the correct password of a suspended %s with 403 ACCOUNT_SUSPENDED and no token', async (_, id) => {
+        fakeSuspended.add(id)
+        const res = await login(emailOf(id), FAKE_PASSWORD)
+        expect(res.statusCode, res.body).toBe(403)
+        expect(res.json()).toEqual({
+          error: { code: 'ACCOUNT_SUSPENDED', message: 'Sua conta está suspensa. Entre em contato com o suporte.' },
+        })
+      })
+
+      it('answers the wrong password of a suspended user with the shared 401 (R42, E19)', async () => {
+        fakeSuspended.add(ids.trainerA)
+        const res = await login(emailOf(ids.trainerA), 'wrong-password')
+        expect(res.statusCode).toBe(401)
+        expect(res.json().error.code).toBe('UNAUTHORIZED')
+      })
     })
 
     it('treats a password over 72 bytes as wrong without asking upstream', async () => {
@@ -666,10 +704,14 @@ describe('mobile persistent session', () => {
       expectSession(res.json(), 'web')
     })
 
-    it('give ADMIN the web session even with the header', async () => {
-      const res = await login(emailOf(ids.admin), MOBILE)
-      expect(res.statusCode, res.body).toBe(200)
-      expectSession(res.json(), 'web')
+    it('refuse ADMIN with 403 ADMIN_LOGIN_ELSEWHERE and no token, with or without the header (B9)', async () => {
+      for (const headers of [MOBILE, {}]) {
+        const res = await login(emailOf(ids.admin), headers)
+        expect(res.statusCode, res.body).toBe(403)
+        expect(res.json()).toEqual({
+          error: { code: 'ADMIN_LOGIN_ELSEWHERE', message: 'O acesso de alunos é feito somente pelo aplicativo Vertice.' },
+        })
+      }
     })
 
     it('register: 90 days with the header, 8h without', async () => {
@@ -702,6 +744,17 @@ describe('mobile persistent session', () => {
       expect(res.json().user).toEqual({ id: ids.clientA, name: 'Client A', email: emailOf(ids.clientA), role: 'CLIENT' })
       expect(upstreamCallers).toEqual([{ method: 'GetUser', caller: { id: ids.clientA, role: 'CLIENT' } }])
       expect(upstreamRequest('GetUser')).toEqual({ id: ids.clientA })
+    })
+
+    it('answers a suspended user 401 UNAUTHENTICATED and no new token (R40, E17)', async () => {
+      fakeSuspended.add(ids.clientA)
+      try {
+        const res = await renew(bearer('clientA', { mobile: true }))
+        expect(res.statusCode, res.body).toBe(401)
+        expect(res.json().error).toEqual({ code: 'UNAUTHENTICATED', message: 'Session no longer valid' })
+      } finally {
+        resetFakeSuspended()
+      }
     })
 
     it('backdates the new iat to before the upstream check, so a password change in the same second voids it', async () => {

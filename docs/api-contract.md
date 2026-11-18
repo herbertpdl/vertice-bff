@@ -7,11 +7,11 @@ Base URL (dev): `http://localhost:3000/api`
 All endpoints except `/auth/login`, `/auth/register`, `/auth/password/setup`, `/legal/versions` and the admin sign-in steps (`/admin/auth/login`, `/admin/auth/enroll`, `/admin/auth/verify`) require:
 `Authorization: Bearer <token>`
 
-`/auth/login` serves every role, the same for the web and the mobile app: each app decides whom it
-lets in (the web admits trainers only and refuses any other role before it creates its session).
-An ADMIN signs in at `/admin/auth/login` instead (password, then an authenticator code; see "Admin
-sign-in" below): the token `/auth/login` still signs an ADMIN is refused by every route, by the
-BFF and by vertice-api, until VRT-28 turns that answer into a 403.
+`/auth/login` serves trainers and clients, the same for the web and the mobile app: each app decides
+whom it lets in (the web admits trainers only and refuses any other role before it creates its
+session). An ADMIN signs in at `/admin/auth/login` instead (password, then an authenticator code;
+see "Admin sign-in" below): `/auth/login` answers an ADMIN's correct password with **`403
+ADMIN_LOGIN_ELSEWHERE`** and no token.
 
 The token is the one `/auth/login` or `/auth/register` returned. Treat it as opaque: it carries
 only the user id and role (scoped `iss: vertice-bff`, `aud: vertice-api`, with an expiry), not the
@@ -22,8 +22,7 @@ before the scoping change, or by anything other than this BFF, gets a `401` (log
 register with the request header **`X-Vertice-Client: mobile`** (sent by vertice-mobile only)
 issues a **mobile session**: a token that expires 90 days after it was issued and carries the extra
 claim `session: "mobile"`. Without the header (or with any other value) it is the **web session**,
-8 hours (`JWT_EXPIRES_IN`), no `session` claim, exactly as before. ADMIN always gets the web
-session. The client is never guessed from `User-Agent`. Every session response carries
+8 hours (`JWT_EXPIRES_IN`), no `session` claim, exactly as before. The client is never guessed from `User-Agent`. Every session response carries
 `expiresAt`, the token's expiry as an ISO-8601 instant. The mobile app keeps its session alive with
 `POST /auth/session/renew` (below): a fresh 90 days on each use, so a phone used at least once
 every 90 days is never logged out. What ends a session early is vertice-api's call on every
@@ -36,9 +35,9 @@ All error responses have the shape:
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "...", "details": {} } }
 ```
-Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `CHALLENGE_INVALID` (401, admin sign-in only), `INVALID_SECOND_FACTOR_CODE` (400, admin sign-in only), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `TOO_LARGE` (413), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503).
+Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `CHALLENGE_INVALID` (401, admin sign-in only), `INVALID_SECOND_FACTOR_CODE` (400, admin sign-in only), `FORBIDDEN` (403), `ACCOUNT_SUSPENDED` (403, the two logins only), `ADMIN_LOGIN_ELSEWHERE` (403, `/auth/login` only), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `TOO_LARGE` (413), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503).
 
-**Key on `code`, not on `message`.** Messages are English and meant for logs and debugging. When vertice-api refuses a call, the BFF relays vertice-api's own text only for `INVALID_ARGUMENT`, as a 400 `VALIDATION_ERROR` whose `message` is the field error (`name: must not be blank`). Every other upstream refusal gets a fixed message, and the upstream text goes to the BFF's log only, with emails and CPFs redacted:
+**Key on `code`, not on `message`.** Messages are English and meant for logs and debugging, except the two login refusals `ACCOUNT_SUSPENDED` and `ADMIN_LOGIN_ELSEWHERE`, whose message is the Portuguese text to show. When vertice-api refuses a call, the BFF relays vertice-api's own text only for `INVALID_ARGUMENT`, as a 400 `VALIDATION_ERROR` whose `message` is the field error (`name: must not be blank`). Every other upstream refusal gets a fixed message, and the upstream text goes to the BFF's log only, with emails and CPFs redacted:
 
 | Upstream gRPC status | HTTP | `code` | `message` |
 |---|---|---|---|
@@ -103,7 +102,7 @@ Admin sign-in for the admin panel: password, then the authenticator code, then a
 
 ### Admin
 
-The admin panel’s reads: dashboard, user directory and profiles, action history (ADMIN only, with the admin session token).
+The admin panel: dashboard, user directory and profiles, action history, suspension, account e-mails and ending relationships (ADMIN only, with the admin session token).
 
 | Method | Path | Access | `operationId` | Summary |
 |---|---|---|---|---|
@@ -112,6 +111,11 @@ The admin panel’s reads: dashboard, user directory and profiles, action histor
 | GET | `/api/admin/users/{id}` | ADMIN | `getAdminUserProfile` | A trainer’s or client’s profile |
 | GET | `/api/admin/actions` | ADMIN | `listAdminActions` | One page of the admin action history |
 | GET | `/api/admin/actions/admins` | ADMIN | `listAdminActionAdmins` | Admins that appear in the action history |
+| POST | `/api/admin/users/{id}/suspend` | ADMIN | `suspendAdminUser` | Suspend a trainer or client |
+| POST | `/api/admin/users/{id}/reactivate` | ADMIN | `reactivateAdminUser` | Reactivate a suspended trainer or client |
+| POST | `/api/admin/users/{id}/first-access-email` | ADMIN | `sendAdminFirstAccessEmail` | E-mail a client a new first-access link |
+| POST | `/api/admin/users/{id}/password-reset-email` | ADMIN | `sendAdminPasswordResetEmail` | E-mail a trainer or client a password-reset link |
+| DELETE | `/api/admin/relationships/{trainerId}/{clientId}` | ADMIN | `endAdminRelationship` | End a trainer–client relationship |
 
 ### Legal
 
@@ -337,6 +341,10 @@ Every request body and query string is parsed with Zod before any upstream call;
 Passwords follow vertice-api's policy everywhere one is set: **at least 8 characters, at most 72 UTF-8 bytes, not blank**. A violation is `400 VALIDATION_ERROR`, checked in the BFF before any upstream call. Emails are trimmed and lower-cased.
 
 - `POST /login` `{email, password}` → `{token, expiresAt, user: {id,name,email,role}}`. Optional header `X-Vertice-Client: mobile`: a TRAINER or CLIENT gets a 90-day mobile session instead of the 8h web one (see "Web and mobile sessions" above); `expiresAt` is the token's expiry. The password is checked by vertice-api (`VerifyCredentials`). A wrong password, an unknown email and an account with no password yet all get the **same** `401 {"error":{"code":"UNAUTHORIZED","message":"Invalid email or password"}}`.
+  - With the right password, two refusals and no token (admin-panel spec B9, B10). Both carry Portuguese text in `message`, the only two codes that do; still key on `code`:
+    - **`403 ACCOUNT_SUSPENDED`** `Sua conta está suspensa. Entre em contato com o suporte.`: an admin suspended the account (any role). vertice-api says so only after the password matched, so a suspended account's wrong password is the shared 401.
+    - **`403 ADMIN_LOGIN_ELSEWHERE`** `O acesso de alunos é feito somente pelo aplicativo Vertice.` (the web's `APP_ONLY_MESSAGE`): an ADMIN, with or without `X-Vertice-Client`. The web maps it to its `TRAINERS_ONLY` answer; an admin signs in at `/admin/auth/login`.
+  - A session that is already open when its user is suspended ends at the next request: **`401 UNAUTHENTICATED`** `Session no longer valid`, renewal included (the logout path).
   - Rollout flag: with `VERIFY_PASSWORDS=false` (development/test only; the BFF refuses to start with it anywhere else) login only checks that the email exists, the old MVP behaviour. Default is `true`.
 - `POST /register` `{name, email, password, role: "TRAINER", cpf, cref?, acceptedTermsVersion}` → `201`, same shape as login, and the same `X-Vertice-Client: mobile` header. **Only `TRAINER`**: `role: "CLIENT"` is `400 VALIDATION_ERROR` (clients are created by their trainer, `POST /clients`). **`cpf` is required for a trainer** (vertice-api rejects an empty or invalid one; it is optional only for a CLIENT). `cref` is optional (trainer license number). **`acceptedTermsVersion`** (P1-04): the version of the Terms of Use / Privacy Policy the user accepted on the form, normally `terms` from `GET /legal/versions`. Format: 1 to 32 of `[A-Za-z0-9._-]` (vertice-api's); malformed is `400 VALIDATION_ERROR` before any upstream call. Any well-formed version is accepted, not only the current one. vertice-api stores it with its own timestamp. **Required**: missing is `400 VALIDATION_ERROR` before any upstream call, so no account is created without an acceptance on record. A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`, the same body for both.
 - `POST /session/renew` (auth, TRAINER or CLIENT; no body, send no `Content-Type`) → `200` `{token, expiresAt, user}`, the login shape: a new mobile session token that expires 90 days from now. The caller's token must be a mobile session (`session: "mobile"`); a web token is **`403 SESSION_NOT_RENEWABLE`** `Only a mobile session can be renewed`, with or without `X-Vertice-Client` (the header is accepted and ignored here: renewal decides from the token alone). Before signing, the BFF calls vertice-api's `GetUser` on the caller's own id with the caller's token, so a session vertice-api no longer accepts (account deleted, role changed, password changed since the token was issued) is **`401 UNAUTHENTICATED`** `Session no longer valid` and gets no new token; clients log out on it. The old token is not revoked and stays valid until its own expiry. ADMIN is 403 by role. The mobile app should renew on use, at most about once a day; refusals are rate limited (see Rate limits). Neither token is ever logged.
@@ -370,7 +378,7 @@ The web compares `termsVersion` / `healthDataVersion` with `GET /legal/versions`
 ## Admin sign-in — `/admin/auth`
 Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.1 (B1–B4, B8, B11, B14). Three public steps, then a stateless, sliding admin session. The BFF sets no cookie: every token travels in JSON bodies, and the web keeps them in its own host-only cookies on the admin host.
 
-1. `POST /admin/auth/login` (public) `{email, password}` (the `/auth/login` body) → `200 AdminChallenge` `{challenge, challengeExpiresAt, secondFactor: "ENROLLED" | "NOT_ENROLLED"}`. The password is checked by `VerifyCredentials` with `required_role: ADMIN`, so a wrong password, an unknown email, an account with no password **and a trainer's or client's correct password** all get the same `401 UNAUTHORIZED` `Invalid email or password`. No user fields: they come with the session. The **challenge** lasts 5 minutes and is not a session: it is accepted only in the body of enroll and verify, and is a `401` as a bearer on every route (its audience is `vertice-bff:admin-challenge`). It can be reused until it expires.
+1. `POST /admin/auth/login` (public) `{email, password}` (the `/auth/login` body) → `200 AdminChallenge` `{challenge, challengeExpiresAt, secondFactor: "ENROLLED" | "NOT_ENROLLED"}`. The password is checked by `VerifyCredentials` with `required_role: ADMIN`, so a wrong password, an unknown email, an account with no password **and a trainer's or client's correct password** all get the same `401 UNAUTHORIZED` `Invalid email or password`. A suspended admin's correct password is **`403 ACCOUNT_SUSPENDED`** (as on `/auth/login`) and gets no challenge. No user fields: they come with the session. The **challenge** lasts 5 minutes and is not a session: it is accepted only in the body of enroll and verify, and is a `401` as a bearer on every route (its audience is `vertice-bff:admin-challenge`). It can be reused until it expires.
 2. `POST /admin/auth/enroll` (public, only when `secondFactor` is `NOT_ENROLLED`) `{challenge}` → `200 AdminEnrollment` `{provisioningUri}`: the `otpauth://totp/...` URI, which contains the secret. Render it as a QR code in-process (never through a third-party service), never log or store it. Each call starts enrolment again with a new secret (a lost QR is "call enroll again"). Enrolment completes at verify, with a code from that secret. An admin already enrolled is `409 PRECONDITION_FAILED` (go to the code step).
 3. `POST /admin/auth/verify` (public) `{challenge, code}` (`code`: exactly six ASCII digits, else `400 VALIDATION_ERROR` before any upstream call) → `200 AdminSession` `{token, expiresAt, sessionEndsAt, user: {id, name, email, role: "ADMIN"}}`. vertice-api checks the code (`VerifySecondFactor`: the current 30-second step and its neighbours, each step once). Only then does the BFF sign the admin token and check it upstream (`GetUser` with it).
 4. `POST /admin/auth/renew` (ADMIN, no body) → `200 AdminSession` with a new token. Before signing, `GetUser` with the current token, so vertice-api re-checks the account; the old token stays valid until its own `exp`. `sessionEndsAt` never moves.
@@ -388,12 +396,12 @@ Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.1 (B1�
 | verify | vertice-api refuses the new token (suspended or reset meanwhile) | `401 CHALLENGE_INVALID` |
 | renew, every ADMIN route | Token expired, past 12h, without the second-factor claims; or the admin suspended, re-roled, reset, password changed | `401 UNAUTHORIZED` (BFF) / `401 UNAUTHENTICATED` (vertice-api): sign in again |
 
-**Logging.** Each request to login, enroll and verify writes one INFO line, `{"audit":"admin.signin","step":"password"|"enroll"|"code","outcome":"success"|"failure"|"error","reason":…,"userId":…,"msg":"Admin sign-in"}` (spec §4; VRT-19's CloudWatch alarm filters on `audit` and `outcome`, so the names and values are a contract). `reason` is on failures only (`invalid_credentials`, `invalid_request`, `invalid_challenge`, `invalid_code`, `locked`, `not_enrolled`, `already_enrolled`, `rate_limited`; `suspended` from VRT-28); `userId` appears once known (a matched admin password or a valid challenge), so a non-admin's correct password looks like any wrong one. Never an email, password, code, challenge, token or URI.
+**Logging.** Each request to login, enroll and verify writes one INFO line, `{"audit":"admin.signin","step":"password"|"enroll"|"code","outcome":"success"|"failure"|"error","reason":…,"userId":…,"msg":"Admin sign-in"}` (spec §4; VRT-19's CloudWatch alarm filters on `audit` and `outcome`, so the names and values are a contract). `reason` is on failures only (`invalid_credentials`, `invalid_request`, `invalid_challenge`, `invalid_code`, `locked`, `not_enrolled`, `already_enrolled`, `rate_limited`, `suspended`); `userId` appears once known (a matched admin password or a valid challenge), so a non-admin's correct password looks like any wrong one. Never an email, password, code, challenge, token or URI.
 
-**Ops** (no route): `npm run ops:create-admin`, `ops:issue-admin-setup-token`, `ops:reset-admin-2fa` (README "Operations"). The setup link is the www "Definir senha" page; `POST /auth/password/setup` answers `{role: "ADMIN", email}`, so the web can send the admin on to the admin host.
+**Ops** (no route): `npm run ops:create-admin`, `ops:issue-admin-setup-token`, `ops:reset-admin-2fa`, `ops:suspend-admin`, `ops:reactivate-admin` (README "Operations"; the panel never suspends an admin, R14). The setup link is the www "Definir senha" page; `POST /auth/password/setup` answers `{role: "ADMIN", email}`, so the web can send the admin on to the admin host.
 
-## Admin panel reads — `/admin` (ADMIN only)
-Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.2 (B12, B13, B16). Every route here is behind the `/admin` plugin's hooks: the admin session token (from `/admin/auth/verify` or `/renew`), else `401`; a TRAINER or CLIENT token is **`403 FORBIDDEN`** before any upstream call. Each route is one `vertice.admin.v1.AdminService` RPC with the caller's token; vertice-api re-checks ADMIN and the second-factor claims on every call. **Admins are invisible** in every list and count, and a missing or deleted user, or an admin (the caller included), is **`404 NOT_FOUND`** (one answer, no oracle). Responses are built field by field; enum values carry no upstream prefix (`TRAINER`, `SUSPENDED`, `VIEW_USER_PROFILE`). Until vertice-api's VRT-27 ships, `suspended` reads `false` and `suspendedAt` `null` everywhere.
+## Admin panel — `/admin` (ADMIN only)
+Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.2 (B12, B13, B16). Every route here is behind the `/admin` plugin's hooks: the admin session token (from `/admin/auth/verify` or `/renew`), else `401`; a TRAINER or CLIENT token is **`403 FORBIDDEN`** before any upstream call. Each route is one `vertice.admin.v1.AdminService` RPC with the caller's token; vertice-api re-checks ADMIN and the second-factor claims on every call. **Admins are invisible** in every list and count, and a missing or deleted user, or an admin (the caller included), is **`404 NOT_FOUND`** (one answer, no oracle). Responses are built field by field; enum values carry no upstream prefix (`TRAINER`, `SUSPENDED`, `VIEW_USER_PROFILE`).
 
 **Paging** (every admin list): query `limit` ∈ {10, 25, 50} (absent or empty = 25, anything else `400 VALIDATION_ERROR` with no upstream call) and `cursor` (the previous page's `nextCursor`, opaque, ≤ 512 characters, sent with the same filters); the response carries `nextCursor: string | null` (`null` on the last page). No page numbers or totals. A cursor vertice-api refuses is `400 VALIDATION_ERROR` with its text. Lists come in upstream order: don't re-sort client-side.
 
@@ -408,6 +416,23 @@ Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.2 (B12
 - `GET /actions?adminId=&action=&targetUserId=&limit=&cursor=` → `200 AdminActionPage` `{entries: AdminActionEntry[], nextCursor}`, newest first. `adminId`, `targetUserId`: positive integers (absent = any; `targetUserId` includes deleted accounts); `action`: one of `VIEW_USER_PROFILE`, `SUSPEND_USER`, `REACTIVATE_USER`, `SEND_FIRST_ACCESS_EMAIL`, `SEND_PASSWORD_RESET_EMAIL`, `END_RELATIONSHIP`, `CHANGE_OWN_PASSWORD`, `CREATE_STARTER_EXERCISE`, `UPDATE_STARTER_EXERCISE`, `DELETE_STARTER_EXERCISE`, `PROMOTE_EXERCISE`, `CREATE_MUSCLE_GROUP`, `RENAME_MUSCLE_GROUP` (absent = any). `AdminActionEntry` = `{id, admin: {id, name, role}, action, targetUser, relatedUser ({id, name, role} or null; a deleted user's name is "Usuário removido"), targetExerciseId, targetMuscleGroupId (null when not a catalog action), subjectLabel (exercise or muscle-group name at the time, else null), reason (suspend/reactivate only; null when empty or the target was deleted), createdAt}`.
 - `GET /actions/admins` → `200 AdminActionAdmins` `{admins: [{id, name, role}]}`: the authors of at least one entry, by name (the history's admin filter). Not paged.
 
+**Writes** (spec §2.3, VRT-28). Each writes its history entry upstream in the same transaction, and one `audit: "admin.<action>"` INFO line here (`admin.user.suspend`, `admin.user.reactivate`, `admin.user.first_access_email`, `admin.user.password_reset_email`, `admin.relationship.end`; actor and target ids, never the reason).
+
+- `POST /users/:id/suspend` and `POST /users/:id/reactivate` `{reason}` → `200 AdminUserResult` `{user: AdminDirectoryUser}`, the row as it is now (update the list and the profile from it). `reason`: trimmed, 1 to 500 characters (UTF-16); missing, blank or longer is `400 VALIDATION_ERROR` before any upstream call (E20). It goes to the history only. Suspending ends every session of the user at their next request and makes their login a `403 ACCOUNT_SUSPENDED`; their data, plans and roster stay, and a suspended client stays on their trainer's roster (`GET /clients` `suspended: true`). Reactivating lets them sign in again; old sessions stay void. No e-mail either way. Already suspended / not suspended: **`409 PRECONDITION_FAILED`** (refetch the profile).
+- `POST /users/:id/first-access-email` (a client) and `POST /users/:id/password-reset-email` (a trainer or client), no body → **`204`**, empty: the link is e-mailed to the user and never reaches the admin (R49). A trainer at `first-access-email` is 404.
+
+| Route(s) | Situation | Answer |
+|---|---|---|
+| every `/users/:id/**` write | A missing or deleted user, or an admin | `404 NOT_FOUND` |
+| e-mail routes | Over the per-user limit (1 per minute, 5 per 24 hours) | **`429 RATE_LIMITED`**, `Retry-After` = vertice-api's seconds (60 when it gives none) |
+| e-mail routes | E-mails switched off upstream (`vertice.first-access-email.enabled`, off in production until SES is ready) | **`409 PRECONDITION_FAILED`**: show "envio indisponível" |
+| e-mail routes | Every send attempt failed | `503 UPSTREAM_UNAVAILABLE`: try again later |
+| `DELETE /relationships/:trainerId/:clientId` | No active relationship for the pair | `404 NOT_FOUND` |
+
+On the e-mail routes `409 PRECONDITION_FAILED` has that one meaning: switched off is the only `FAILED_PRECONDITION` those RPCs send. A history entry is written only for an accepted send.
+
+- `DELETE /relationships/:trainerId/:clientId` → **`204`**. Both ids, from the profile on screen (`EndTrainerClientRelationship`; an admin has no side-effect-free way to look the trainer up). Only the relationship ends: both accounts, the plans and every log stay; the trainer loses the client, the client keeps reading the plans.
+
 ADMIN also keeps `GET /muscle-groups` (filters and, later, the exercise form). Errors beyond the paging and role rows above: `401 UNAUTHENTICATED` when vertice-api no longer accepts the admin (sign in again), `403 FORBIDDEN` if vertice-api refuses the token's second-factor claims.
 
 ## Legal — `/legal`
@@ -419,7 +444,7 @@ A trainer's roster = the clients with an active trainer–client relationship, f
 
 `ClientDetail` = `{id, name, email, cpf, role}` (`cpf` masked; no `cref`).
 
-- **`GET /`** → `ClientSummary[]` = `{id, name, activePlanCount, currentPlan, lastWorkoutAt, weekActivity}`, for the roster/list screen. **No `email`, `cpf`, `cref` or `role`** (P1-03); the detail routes carry the email.
+- **`GET /`** → `ClientSummary[]` = `{id, name, activePlanCount, currentPlan, lastWorkoutAt, weekActivity, suspended}`, for the roster/list screen. `suspended: true` marks a client an admin suspended: they stay on the roster with their plans and history but cannot sign in (admin-panel R46). **No `email`, `cpf`, `cref` or `role`** (P1-03); the detail routes carry the email.
   - `currentPlan`: `{id, name, endDate} | null` — the student's date-active training plan (`startDate <= today <= endDate`) among the trainer's plans for them; `null` if none is currently active (shown as a "Sem plano" tag in the UI). If more than one plan is active at once, the most recently started one is returned.
   - `lastWorkoutAt`: ISO timestamp of the student's most recent *completed* workout log, or `null`. **Scoped to the current week only** — see limitation note below.
   - `weekActivity`: `{date, dayOfWeek, completed}[]`, always 5 entries for Monday–Friday of the current week, `completed` true if a workout log finished on that calendar date. Powers the 5-dot weekly-activity indicator.

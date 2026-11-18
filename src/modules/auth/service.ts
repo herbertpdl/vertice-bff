@@ -29,10 +29,9 @@ export interface Session {
 export type SessionClient = 'mobile' | 'web'
 
 /**
- * Only trainers and clients use the mobile app (PRD §2); an admin signs in at `POST
- * /admin/auth/login` (admin-panel spec). Until VRT-28 refuses it (403 `ADMIN_LOGIN_ELSEWHERE`),
- * `/auth/login` still signs an ADMIN the plain 8h web token, only so the web can read the role and
- * drop it; `verifyToken` and vertice-api both refuse that token (no `amr`/`auth_time`).
+ * Only trainers and clients use the mobile app (PRD §2) and get a session here at all: an admin
+ * signs in at `POST /admin/auth/login` (admin-panel spec B9), so `login` refuses one before
+ * `session()` is reached, and `signToken` throws on `role: ADMIN`.
  */
 const MOBILE_ROLES: readonly Role[] = ['TRAINER', 'CLIENT']
 
@@ -47,8 +46,41 @@ function session(user: userService.User, client: SessionClient, issuedAt?: numbe
 }
 
 /**
+ * The 403 `ADMIN_LOGIN_ELSEWHERE` message (admin-panel spec B9): the web's `APP_ONLY_MESSAGE`
+ * verbatim, as a safety net for a client that shows `message`. One of the two Portuguese BFF
+ * messages (with `ACCOUNT_SUSPENDED_MESSAGE`); clients key on the code.
+ */
+export const ADMIN_LOGIN_ELSEWHERE_MESSAGE = 'O acesso de alunos é feito somente pelo aplicativo Vertice.'
+
+/** The 403 `ACCOUNT_SUSPENDED` message (admin-panel R41, spec B10), the text the user is shown. */
+export const ACCOUNT_SUSPENDED_MESSAGE = 'Sua conta está suspensa. Entre em contato com o suporte.'
+
+/**
+ * vertice-api's `VerifyCredentials` answers a suspended account FAILED_PRECONDITION "Account
+ * suspended", only once the password (and `required_role`) matched (D10). On the two login routes
+ * that is 403 `ACCOUNT_SUSPENDED` (B10); everywhere else FAILED_PRECONDITION keeps the global 409.
+ * Call it from a login's catch: it rethrows anything else unchanged.
+ */
+export function asAccountSuspended(err: unknown): unknown {
+  return err instanceof PreconditionFailedError
+    ? new HttpError(403, ACCOUNT_SUSPENDED_MESSAGE, 'ACCOUNT_SUSPENDED')
+    : err
+}
+
+/**
+ * Refuses an ADMIN at the trainer/client login (B9, R3): no token, whatever `X-Vertice-Client`
+ * says. Only reached with a correct password (a wrong one is the shared 401 before this), so the
+ * role is revealed only to the holder of the password, as before.
+ */
+function refuseAdmin(user: userService.User): userService.User {
+  if (user.role === 'ADMIN') throw new HttpError(403, ADMIN_LOGIN_ELSEWHERE_MESSAGE, 'ADMIN_LOGIN_ELSEWHERE')
+  return user
+}
+
+/**
  * Checks the password upstream (`VerifyCredentials`). A wrong password, an unknown email and a
- * user without a password all get the same 401 body.
+ * user without a password all get the same 401 body. With the right password, a suspended account
+ * is 403 `ACCOUNT_SUSPENDED` and an ADMIN is 403 `ADMIN_LOGIN_ELSEWHERE`; neither gets a token.
  *
  * `VERIFY_PASSWORDS=false` (development/test only, see `config/env.ts`) keeps the old
  * email-only login for the rollout window: it finds the user by scanning `ListUsers` and
@@ -58,14 +90,20 @@ export async function login(email: string, password: string, client: SessionClie
   if (!env.VERIFY_PASSWORDS) {
     const user = await userService.findUserByEmail(email)
     if (!user) throw new UnauthorizedError(userService.INVALID_CREDENTIALS_MESSAGE)
-    return session(user, client)
+    return session(refuseAdmin(user), client)
   }
   // No stored password can be longer (it is vertice-api's policy), and bcrypt would only read
   // the first 72 bytes anyway, so this can only be a wrong password.
   if (Buffer.byteLength(password, 'utf8') > PASSWORD_MAX_BYTES) {
     throw new UnauthorizedError(userService.INVALID_CREDENTIALS_MESSAGE)
   }
-  return session(await userService.verifyCredentials(email, password), client)
+  let user: userService.User
+  try {
+    user = await userService.verifyCredentials(email, password)
+  } catch (err) {
+    throw asAccountSuspended(err)
+  }
+  return session(refuseAdmin(user), client)
 }
 
 export async function register(input: {

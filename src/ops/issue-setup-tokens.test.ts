@@ -119,7 +119,9 @@ describe('issueSetupTokens', () => {
       'CreatePasswordSetupToken',
       'IssueAdminSetupToken',
       'ListUsers',
+      'ReactivateAdmin',
       'ResetAdminSecondFactor',
+      'SuspendAdmin',
     ])
     expect([...OPS_TOKEN_RPCS].sort()).toEqual([...API_SERVICE_SUBJECT_RPCS['service:ops']!].sort())
   })

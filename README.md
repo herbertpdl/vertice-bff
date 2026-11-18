@@ -137,6 +137,7 @@ A basic health check is available at `GET /health`.
 | `npm run ops:create-admin -- --name <name> --email <email>` | Create an admin and print their setup link (see [Admin accounts](#admin-accounts)) |
 | `npm run ops:issue-admin-setup-token -- --user-id <id>` | A new setup link for an admin (forgotten password) |
 | `npm run ops:reset-admin-2fa -- --user-id <id>` | Reset a lost authenticator and end the admin's sessions |
+| `npm run ops:suspend-admin -- --user-id <id>` / `ops:reactivate-admin -- --user-id <id>` | Suspend an admin (ends their sessions, sign-in refused) or lift it |
 
 ## CI
 
@@ -228,7 +229,7 @@ npm run -s ops:issue-setup-tokens > setup-links.csv
   `POST /api/clients/:id/setup-token` while that client has no password.
 - It calls vertice-api as its own identity, `service:ops` (`src/ops/ops-token.ts`): a 60s token
   signed with `JWT_SECRET`, minted per call inside the script process only. vertice-api allows it
-  on `ListUsers` and `CreatePasswordSetupToken` and nothing else; the running BFF's
+  on `ListUsers`, `CreatePasswordSetupToken` and the `AdminOpsService` RPCs below, and nothing else; the running BFF's
   `service:bff` token is not allowed on either.
 
 ### Admin accounts
@@ -245,14 +246,18 @@ npm run -s ops:create-admin -- --name "Ana Souza" --email ana@vertice.fit
 npm run -s ops:issue-admin-setup-token -- --user-id 42
 # Lost authenticator: deletes it and ends every session; they enrol again at the next sign-in
 npm run -s ops:reset-admin-2fa -- --user-id 42
+# Suspend an admin: every session ends, sign-in answers 403 ACCOUNT_SUSPENDED; and lift it
+npm run -s ops:suspend-admin -- --user-id 42
+npm run -s ops:reactivate-admin -- --user-id 42
 ```
 
 - `setupLink` is `https://www.vertice.fit/definir-senha?token=…`, single use, 72h. **It is a
   credential**: hand it to the admin out of band. After choosing the password there, the admin
   signs in at the admin host (password, then enrols an authenticator app from a QR code).
 - Against a non-admin id, `issue-admin-setup-token` and `reset-admin-2fa` fail with NOT_FOUND;
-  `create-admin` fails on an e-mail already in use. Suspending and reactivating admins
-  (`ops:suspend-admin`, `ops:reactivate-admin`) arrive with VRT-28.
+  `create-admin` fails on an e-mail already in use. The admin panel cannot suspend an admin
+  (R14): `suspend-admin` and `reactivate-admin` are the only way, and fail on an admin already
+  suspended / not suspended (`PRECONDITION_FAILED`) and on a non-admin id (NOT_FOUND).
 
 ### Admin sign-in alarms (CloudWatch)
 

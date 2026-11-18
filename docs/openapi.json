@@ -811,6 +811,19 @@
         ],
         "additionalProperties": false
       },
+      "AdminUserResult": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "description": "The user’s directory row after the change.",
+            "$ref": "#/components/schemas/AdminDirectoryUser"
+          }
+        },
+        "required": [
+          "user"
+        ],
+        "additionalProperties": false
+      },
       "AdminVerifyRequest": {
         "type": "object",
         "properties": {
@@ -1076,6 +1089,10 @@
               "additionalProperties": false
             },
             "description": "Monday to Friday of the current week."
+          },
+          "suspended": {
+            "type": "boolean",
+            "description": "An admin suspended the client: they stay on the roster but cannot sign in until reactivated."
           }
         },
         "required": [
@@ -1084,7 +1101,8 @@
           "activePlanCount",
           "currentPlan",
           "lastWorkoutAt",
-          "weekActivity"
+          "weekActivity",
+          "suspended"
         ],
         "additionalProperties": false
       },
@@ -1595,7 +1613,9 @@
           "ACTIVE_CLIENTS",
           "SESSION_NOT_RENEWABLE",
           "CHALLENGE_INVALID",
-          "INVALID_SECOND_FACTOR_CODE"
+          "INVALID_SECOND_FACTOR_CODE",
+          "ADMIN_LOGIN_ELSEWHERE",
+          "ACCOUNT_SUSPENDED"
         ]
       },
       "ErrorResponse": {
@@ -1610,7 +1630,7 @@
               },
               "message": {
                 "type": "string",
-                "description": "English, for logs and debugging; not meant to be shown to users."
+                "description": "English, for logs and debugging; not meant to be shown to users. Two exceptions carry the Portuguese text to show: `ACCOUNT_SUSPENDED` and `ADMIN_LOGIN_ELSEWHERE`."
               },
               "details": {
                 "description": "Only on the BFF’s own validation errors (`VALIDATION_ERROR`): Zod’s flattened field errors, `{ formErrors: string[], fieldErrors: { [field]: string[] } }`. Never set from upstream."
@@ -3224,7 +3244,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Public: no token needed. The password is checked by vertice-api. A wrong password, an unknown email and an account with no password yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited. With `X-Vertice-Client: mobile` a TRAINER or CLIENT gets a 90-day mobile session, renewable with `POST /auth/session/renew`; without it (and for ADMIN) the 8h web session. An admin signs in at `POST /admin/auth/login` instead: the token this route signs an ADMIN is refused everywhere.",
+        "description": "Public: no token needed. The password is checked by vertice-api. A wrong password, an unknown email and an account with no password yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited. With `X-Vertice-Client: mobile` a TRAINER or CLIENT gets a 90-day mobile session, renewable with `POST /auth/session/renew`; without it the 8h web session. With the right password, a suspended account is 403 `ACCOUNT_SUSPENDED` (message: the text to show, “Sua conta está suspensa. Entre em contato com o suporte.”), and an ADMIN is 403 `ADMIN_LOGIN_ELSEWHERE` (message: “O acesso de alunos é feito somente pelo aplicativo Vertice.”), whatever `X-Vertice-Client` says: an admin signs in at `POST /admin/auth/login`. Neither gets a token.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3273,6 +3293,16 @@
           },
           "401": {
             "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3424,7 +3454,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3540,7 +3570,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3612,7 +3642,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3733,7 +3763,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3976,7 +4006,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4044,7 +4074,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4137,7 +4167,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4227,7 +4257,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4310,7 +4340,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4392,7 +4422,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4474,7 +4504,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4599,7 +4629,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4677,7 +4707,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4754,7 +4784,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4823,7 +4853,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4913,7 +4943,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4986,7 +5016,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5093,7 +5123,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5210,7 +5240,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5278,7 +5308,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5361,7 +5391,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5451,7 +5481,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5524,7 +5554,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5620,7 +5650,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5710,7 +5740,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5796,7 +5826,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5869,7 +5899,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5959,7 +5989,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6032,7 +6062,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6125,7 +6155,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6217,7 +6247,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6303,7 +6333,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6393,7 +6423,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6483,7 +6513,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6585,7 +6615,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6658,7 +6688,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6754,7 +6784,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6844,7 +6874,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6936,7 +6966,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7009,7 +7039,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7111,7 +7141,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7213,7 +7243,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7331,7 +7361,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7423,7 +7453,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7525,7 +7555,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7610,7 +7640,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7705,7 +7735,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7797,7 +7827,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7860,7 +7890,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7910,7 +7940,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7952,7 +7982,7 @@
         "tags": [
           "Admin auth"
         ],
-        "description": "Public: no token needed. Checks the password of an ADMIN account and answers a short-lived challenge, never a session. A wrong password, an unknown email, an account with no password and a trainer’s or client’s correct password all get the same 401 `UNAUTHORIZED` “Invalid email or password”. `secondFactor` says whether to enroll an authenticator first. Failed attempts are rate limited.",
+        "description": "Public: no token needed. Checks the password of an ADMIN account and answers a short-lived challenge, never a session. A wrong password, an unknown email, an account with no password and a trainer’s or client’s correct password all get the same 401 `UNAUTHORIZED` “Invalid email or password”. `secondFactor` says whether to enroll an authenticator first. With the right password, a suspended admin is 403 `ACCOUNT_SUSPENDED` (message: “Sua conta está suspensa. Entre em contato com o suporte.”) and gets no challenge. Failed attempts are rate limited.",
         "requestBody": {
           "required": true,
           "content": {
@@ -7987,6 +8017,16 @@
           },
           "401": {
             "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8192,7 +8232,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8252,7 +8292,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8388,7 +8428,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8460,7 +8500,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8616,7 +8656,7 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8666,7 +8706,508 @@
             }
           },
           "403": {
-            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{id}/suspend": {
+      "post": {
+        "operationId": "suspendAdminUser",
+        "summary": "Suspend a trainer or client",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. Every session of the user ends at their next request (401 `UNAUTHENTICATED`) and their sign-in answers 403 `ACCOUNT_SUSPENDED` until reactivated. Their data, plans and roster are untouched; no e-mail is sent. Writes a `SUSPEND_USER` history entry with the reason. Already suspended: 409 `PRECONDITION_FAILED` (refetch the profile). A missing or deleted user, or an admin, is 404.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "Why, for the action history (not shown to the user). Trimmed; 1-500 characters."
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "200": {
+            "description": "The user’s directory row after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{id}/reactivate": {
+      "post": {
+        "operationId": "reactivateAdminUser",
+        "summary": "Reactivate a suspended trainer or client",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. The user can sign in again; sessions from before the suspension stay void. No e-mail is sent. Writes a `REACTIVATE_USER` history entry with the reason. Not suspended: 409 `PRECONDITION_FAILED` (refetch the profile). A missing or deleted user, or an admin, is 404.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "Why, for the action history (not shown to the user). Trimmed; 1-500 characters."
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "200": {
+            "description": "The user’s directory row after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{id}/first-access-email": {
+      "post": {
+        "operationId": "sendAdminFirstAccessEmail",
+        "summary": "E-mail a client a new first-access link",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. For a client: a new single-use link to choose their password. A trainer, a missing or a deleted user is 404. No body. 204 on an accepted send: the link never reaches the admin. Limits per user: 1 per minute and 5 per 24 hours, 429 `RATE_LIMITED` with `Retry-After`. While e-mails are switched off upstream, 409 `PRECONDITION_FAILED` (“envio indisponível”); when every send attempt failed, 503 `UPSTREAM_UNAVAILABLE` (try again later). Writes a history entry only for an accepted send.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "204": {
+            "description": "The e-mail was accepted for sending."
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{id}/password-reset-email": {
+      "post": {
+        "operationId": "sendAdminPasswordResetEmail",
+        "summary": "E-mail a trainer or client a password-reset link",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. A single-use link to the “Definir senha” page; redeeming it sets the password and ends every session. A missing or deleted user, or an admin, is 404. No body. 204 on an accepted send: the link never reaches the admin. Limits per user: 1 per minute and 5 per 24 hours, 429 `RATE_LIMITED` with `Retry-After`. While e-mails are switched off upstream, 409 `PRECONDITION_FAILED` (“envio indisponível”); when every send attempt failed, 503 `UPSTREAM_UNAVAILABLE` (try again later). Writes a history entry only for an accepted send.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "204": {
+            "description": "The e-mail was accepted for sending."
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/relationships/{trainerId}/{clientId}": {
+      "delete": {
+        "operationId": "endAdminRelationship",
+        "summary": "End a trainer–client relationship",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. Both ids, from the profile on screen. Only the relationship ends: both accounts, the plans and every log stay; the trainer loses access to the client, the client keeps reading the plans. Writes an `END_RELATIONSHIP` history entry. No active relationship for the pair is 404.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "trainerId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "clientId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "204": {
+            "description": "The relationship ended."
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8696,7 +9237,7 @@
     },
     {
       "name": "Admin",
-      "description": "The admin panel’s reads: dashboard, user directory and profiles, action history (ADMIN only, with the admin session token)."
+      "description": "The admin panel: dashboard, user directory and profiles, action history, suspension, account e-mails and ending relationships (ADMIN only, with the admin session token)."
     },
     {
       "name": "Legal",
