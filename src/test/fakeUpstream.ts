@@ -510,6 +510,174 @@ function listUsers(r: Req) {
     nextPageToken: matching.length > limit ? `after-${page.at(-1)!.id}` : '',
   }
 }
+/**
+ * Mirrors vertice-api's `AdminService` (admin-panel D18, D19, D26, D27): ADMIN callers only (the
+ * D6 claims are checked in `authenticateCall`), admins invisible, page_size 0/10/25/50, an opaque
+ * `next_page_token`. The fixture data is small and fixed; history entries live in `adminActions`.
+ */
+function requireAdminCaller() {
+  if (caller()?.role !== 'ADMIN') upstreamError(status.PERMISSION_DENIED, 'AdminService is ADMIN only')
+}
+function adminPage<T>(rows: T[], r: Req): { page: T[]; nextPageToken: string } {
+  const pageSize = Number(r.pageSize ?? 0)
+  if (![0, 10, 25, 50].includes(pageSize)) upstreamError(status.INVALID_ARGUMENT, 'page_size: must be 10, 25 or 50')
+  const token = String(r.pageToken ?? '')
+  const offset = token === '' ? 0 : Number(/^offset-(\d+)$/.exec(token)?.[1] ?? NaN)
+  if (Number.isNaN(offset)) upstreamError(status.INVALID_ARGUMENT, 'page_token: malformed')
+  const size = pageSize || 25
+  const page = rows.slice(offset, offset + size)
+  return { page, nextPageToken: offset + size < rows.length ? `offset-${offset + size}` : '' }
+}
+const userRef = (u: (typeof users)[number]) => ({ id: str(u.id), name: u.name, role: u.role })
+const FAKE_CREATED_AT = '2026-10-01T12:00:00Z'
+/** A visible profile target: a trainer or client that exists. Missing or ADMIN is NOT_FOUND (D4). */
+function profileTarget(userId: unknown) {
+  const user = users.find((u) => u.id === Number(userId))
+  if (!user || user.role === 'ADMIN') upstreamError(status.NOT_FOUND, `User with id ${Number(userId)} not found`)
+  return user
+}
+const profileBasics = (u: (typeof users)[number]) => ({
+  id: str(u.id),
+  name: u.name,
+  email: emailOf(u.id),
+  cpfMasked: `***.***.***-${cpfOf(u.id).slice(-2)}`,
+  suspended: false,
+  suspendedAt: '',
+  createdAt: FAKE_CREATED_AT,
+  lastActiveOn: today,
+})
+const relationshipRef = (other: (typeof users)[number]) => ({
+  user: userRef(other),
+  startedAt: FAKE_CREATED_AT,
+  endedAt: '',
+  suspended: false,
+})
+/** The fake history: `GetUserProfile` appends a VIEW_USER_PROFILE entry, as vertice-api does (D17). */
+export const fakeAdminActions: { id: number; adminId: number; action: string; targetUserId: number }[] = []
+export const resetFakeAdminActions = () => {
+  fakeAdminActions.length = 0
+}
+
+const adminHandlers: Record<string, (req: Req) => unknown> = {
+  GetDashboard: () => {
+    requireAdminCaller()
+    const trainers = users.filter((u) => u.role === 'TRAINER').length
+    const clients = users.filter((u) => u.role === 'CLIENT').length
+    return {
+      trainers: str(trainers),
+      clients: str(clients),
+      activeTrainers7d: '1',
+      activeClients7d: '2',
+      activeTrainers30d: str(trainers),
+      activeClients30d: str(clients),
+      completedWorkouts7d: '3',
+      completedWorkouts30d: '9',
+      weeklySignups: Array.from({ length: 12 }, (_, i) => ({
+        weekStart: `2026-${String(8 + Math.floor(i / 4)).padStart(2, '0')}-${String(3 + (i % 4) * 7).padStart(2, '0')}`,
+        trainers: '0',
+        clients: str(i % 3),
+      })),
+    }
+  },
+  ListDirectoryUsers: (r) => {
+    requireAdminCaller()
+    const search = String(r.search ?? '').trim().toLowerCase()
+    if (search.length > 100) upstreamError(status.INVALID_ARGUMENT, 'search: must be at most 100 characters')
+    const role = r.role === 'DIRECTORY_ROLE_TRAINER' ? 'TRAINER' : r.role === 'DIRECTORY_ROLE_CLIENT' ? 'CLIENT' : null
+    // Nobody is suspended until VRT-27, as upstream reads it today.
+    const rows = users
+      .filter((u) => u.role !== 'ADMIN' && (!role || u.role === role) && r.status !== 'DIRECTORY_STATUS_SUSPENDED')
+      .filter((u) => !search || u.name.toLowerCase().includes(search) || emailOf(u.id).includes(search))
+      .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.id - b.id)
+    const { page, nextPageToken } = adminPage(rows, r)
+    return {
+      users: page.map((u) => {
+        const trainerId = trainerClients.find(([, c]) => c === u.id)?.[0]
+        return {
+          id: str(u.id),
+          name: u.name,
+          email: emailOf(u.id),
+          role: u.role,
+          suspended: false,
+          createdAt: FAKE_CREATED_AT,
+          lastActiveOn: u.id === ids.clientA2 ? '' : today,
+          currentTrainer: u.role === 'CLIENT' && trainerId ? userRef(find(users, trainerId, 'User')) : null,
+          currentClientCount: u.role === 'TRAINER' ? trainerClients.filter(([t]) => t === u.id).length : 0,
+        }
+      }),
+      nextPageToken,
+    }
+  },
+  GetUserProfile: (r) => {
+    requireAdminCaller()
+    const user = profileTarget(r.userId)
+    fakeAdminActions.unshift({ id: fakeAdminActions.length + 1, adminId: caller()!.id, action: 'ADMIN_ACTION_VIEW_USER_PROFILE', targetUserId: user.id })
+    if (user.role === 'TRAINER') {
+      const clientsOf = trainerClients.filter(([t]) => t === user.id).map(([, c]) => find(users, c, 'User'))
+      return {
+        trainer: {
+          basics: profileBasics(user),
+          cref: '123456-G/SP',
+          whatsapp: '11987654321',
+          instagram: '',
+          showEmail: true,
+          showWhatsapp: true,
+          showInstagram: false,
+          currentClients: clientsOf.map(relationshipRef),
+          formerClients: [],
+          planCount: plans.filter((p) => p.trainerId === user.id).length,
+          workoutCount: 1,
+          privateExerciseCount: 1,
+        },
+        profile: 'trainer',
+      }
+    }
+    const trainerId = trainerClients.find(([, c]) => c === user.id)?.[0]
+    return {
+      client: {
+        basics: { ...profileBasics(user), cpfMasked: user.id === ids.clientA2 ? '' : profileBasics(user).cpfMasked },
+        currentTrainer: trainerId ? relationshipRef(find(users, trainerId, 'User')) : null,
+        pastTrainers: [],
+        planCount: plans.filter((p) => p.clientId === user.id).length,
+        completedWorkoutCount: 2,
+        firstAccess: { pending: withoutPassword.has(user.id), lastSentAt: '', lastSendFailed: false, sendResult: 'FIRST_ACCESS_SEND_RESULT_UNSPECIFIED', retryAfterSeconds: 0 },
+      },
+      profile: 'client',
+    }
+  },
+  ListActions: (r) => {
+    requireAdminCaller()
+    if (Number(r.adminId ?? 0) < 0 || Number(r.targetUserId ?? 0) < 0) upstreamError(status.INVALID_ARGUMENT, 'id: must not be negative')
+    const rows = fakeAdminActions.filter(
+      (a) =>
+        byNumber(r.adminId, a.adminId) &&
+        byNumber(r.targetUserId, a.targetUserId) &&
+        (!r.action || r.action === 'ADMIN_ACTION_UNSPECIFIED' || r.action === a.action),
+    )
+    const { page, nextPageToken } = adminPage(rows, r)
+    return {
+      entries: page.map((a) => ({
+        id: str(a.id),
+        admin: userRef(find(users, a.adminId, 'User')),
+        action: a.action,
+        targetUser: userRef(find(users, a.targetUserId, 'User')),
+        relatedUser: null,
+        targetExerciseId: '0',
+        targetMuscleGroupId: '0',
+        subjectLabel: '',
+        reason: '',
+        createdAt: FAKE_CREATED_AT,
+      })),
+      nextPageToken,
+    }
+  },
+  ListActionAdmins: () => {
+    requireAdminCaller()
+    const authors = new Set(fakeAdminActions.map((a) => a.adminId))
+    return { admins: users.filter((u) => u.role === 'ADMIN' && authors.has(u.id)).map(userRef) }
+  },
+}
+
 const byNumber = (value: unknown, actual: number) => !Number(value) || Number(value) === actual
 
 const handlers: Record<string, (req: Req) => unknown> = {
@@ -761,6 +929,9 @@ const handlers: Record<string, (req: Req) => unknown> = {
     }
   },
   ListWorkoutFeedback: () => ({ workoutFeedback: [] }),
+
+  // AdminService
+  ...adminHandlers,
 
   // TrainerClientService
   CreateClientForTrainer: (r) => ({ ...userRes(users[3]!, 'detail'), id: '99', email: r.email, cpf: r.cpf }),

@@ -101,6 +101,18 @@ Admin sign-in for the admin panel: password, then the authenticator code, then a
 | POST | `/api/admin/auth/verify` | public | `adminVerify` | Admin sign-in: the code step |
 | POST | `/api/admin/auth/renew` | ADMIN | `adminRenew` | Renew the admin session |
 
+### Admin
+
+The admin panel’s reads: dashboard, user directory and profiles, action history (ADMIN only, with the admin session token).
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/admin/dashboard` | ADMIN | `getAdminDashboard` | The admin dashboard |
+| GET | `/api/admin/users` | ADMIN | `listAdminUsers` | One page of the user directory |
+| GET | `/api/admin/users/{id}` | ADMIN | `getAdminUserProfile` | A trainer’s or client’s profile |
+| GET | `/api/admin/actions` | ADMIN | `listAdminActions` | One page of the admin action history |
+| GET | `/api/admin/actions/admins` | ADMIN | `listAdminActionAdmins` | Admins that appear in the action history |
+
 ### Legal
 
 Versions of the legal texts, for the consent flow.
@@ -379,6 +391,24 @@ Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.1 (B1�
 **Logging.** Each request to login, enroll and verify writes one INFO line, `{"audit":"admin.signin","step":"password"|"enroll"|"code","outcome":"success"|"failure"|"error","reason":…,"userId":…,"msg":"Admin sign-in"}` (spec §4; VRT-19's CloudWatch alarm filters on `audit` and `outcome`, so the names and values are a contract). `reason` is on failures only (`invalid_credentials`, `invalid_request`, `invalid_challenge`, `invalid_code`, `locked`, `not_enrolled`, `already_enrolled`, `rate_limited`; `suspended` from VRT-28); `userId` appears once known (a matched admin password or a valid challenge), so a non-admin's correct password looks like any wrong one. Never an email, password, code, challenge, token or URI.
 
 **Ops** (no route): `npm run ops:create-admin`, `ops:issue-admin-setup-token`, `ops:reset-admin-2fa` (README "Operations"). The setup link is the www "Definir senha" page; `POST /auth/password/setup` answers `{role: "ADMIN", email}`, so the web can send the admin on to the admin host.
+
+## Admin panel reads — `/admin` (ADMIN only)
+Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.2 (B12, B13, B16). Every route here is behind the `/admin` plugin's hooks: the admin session token (from `/admin/auth/verify` or `/renew`), else `401`; a TRAINER or CLIENT token is **`403 FORBIDDEN`** before any upstream call. Each route is one `vertice.admin.v1.AdminService` RPC with the caller's token; vertice-api re-checks ADMIN and the second-factor claims on every call. **Admins are invisible** in every list and count, and a missing or deleted user, or an admin (the caller included), is **`404 NOT_FOUND`** (one answer, no oracle). Responses are built field by field; enum values carry no upstream prefix (`TRAINER`, `SUSPENDED`, `VIEW_USER_PROFILE`). Until vertice-api's VRT-27 ships, `suspended` reads `false` and `suspendedAt` `null` everywhere.
+
+**Paging** (every admin list): query `limit` ∈ {10, 25, 50} (absent or empty = 25, anything else `400 VALIDATION_ERROR` with no upstream call) and `cursor` (the previous page's `nextCursor`, opaque, ≤ 512 characters, sent with the same filters); the response carries `nextCursor: string | null` (`null` on the last page). No page numbers or totals. A cursor vertice-api refuses is `400 VALIDATION_ERROR` with its text. Lists come in upstream order: don't re-sort client-side.
+
+- `GET /dashboard` → `200 AdminDashboard` `{totals: {trainers, clients}, active: {trainers7d, clients7d, trainers30d, clients30d}, completedWorkouts: {last7d, last30d}, weeklySignups: [{weekStart, trainers, clients}] × 12}`. One upstream call, no BFF cache. Windows are business days in America/Sao_Paulo ("7 days" = today and the 6 before); `weekStart` is a Monday (business date), oldest week first, the last one the current partial week. Totals include suspended accounts, sign-ups include deleted ones. The most-used exercises arrive with VRT-31 (`GET /admin/exercises/most-used`).
+- `GET /users?role=&status=&q=&limit=&cursor=` → `200 AdminDirectoryPage` `{users: AdminDirectoryUser[], nextCursor}`. `role`: `TRAINER` | `CLIENT` (absent = both; `ADMIN` is a 400); `status`: `ACTIVE` | `SUSPENDED` (absent = both); `q`: trimmed, empty = no search, ≤ 100 characters (UTF-16), a case-insensitive substring of name or e-mail. Ordered by name, then id. `AdminDirectoryUser` = `{id, name, email, role, suspended, createdAt, lastActiveOn (business date, null if never active), currentTrainer ({id, name} for a client with one, else null; always null for a trainer), currentClientCount (number for a trainer, null for a client)}`.
+- `GET /users/:id` → `200 AdminUserProfile`, a union on `role`:
+  - common: `id`, `name`, `email`, `role`, `cpf` (masked `***.***.***-NN` or `null`, never in full: anything vertice-api sends that isn't that mask becomes `null`, with a WARN line that carries the user id only), `suspended`, `suspendedAt` (null while active), `createdAt`, `lastActiveOn` (null if never);
+  - `AdminTrainerProfile` (`role: "TRAINER"`): `cref` (null when empty), `whatsapp`, `instagram` (null unless the trainer shares them), `currentClients[]`, `formerClients[]` (`AdminRelationship` `{user: {id, name, role}, startedAt, endedAt (null when current), suspended}`; deleted accounts are left out), `planCount`, `workoutCount`, `privateExerciseCount`;
+  - `AdminClientProfile` (`role: "CLIENT"`): `currentTrainer` (`AdminRelationship` or null), `pastTrainers[]`, `planCount`, `completedWorkoutCount`, `firstAccess` `{pending, lastSentAt (null), lastSendFailed}`.
+  - No logs, weights, feedback, progress or plan contents exist in the upstream response to leak.
+  - **Not a pure read: every call writes a `VIEW_USER_PROFILE` entry to the action history** (vertice-api, in the same transaction). Fetch it once per visit to the profile screen; never refetch it on window focus, poll it, prefetch it or retry it silently. The response is `Cache-Control: no-store` (the `/api` default), so no shared or browser cache serves it either.
+- `GET /actions?adminId=&action=&targetUserId=&limit=&cursor=` → `200 AdminActionPage` `{entries: AdminActionEntry[], nextCursor}`, newest first. `adminId`, `targetUserId`: positive integers (absent = any; `targetUserId` includes deleted accounts); `action`: one of `VIEW_USER_PROFILE`, `SUSPEND_USER`, `REACTIVATE_USER`, `SEND_FIRST_ACCESS_EMAIL`, `SEND_PASSWORD_RESET_EMAIL`, `END_RELATIONSHIP`, `CHANGE_OWN_PASSWORD`, `CREATE_STARTER_EXERCISE`, `UPDATE_STARTER_EXERCISE`, `DELETE_STARTER_EXERCISE`, `PROMOTE_EXERCISE`, `CREATE_MUSCLE_GROUP`, `RENAME_MUSCLE_GROUP` (absent = any). `AdminActionEntry` = `{id, admin: {id, name, role}, action, targetUser, relatedUser ({id, name, role} or null; a deleted user's name is "Usuário removido"), targetExerciseId, targetMuscleGroupId (null when not a catalog action), subjectLabel (exercise or muscle-group name at the time, else null), reason (suspend/reactivate only; null when empty or the target was deleted), createdAt}`.
+- `GET /actions/admins` → `200 AdminActionAdmins` `{admins: [{id, name, role}]}`: the authors of at least one entry, by name (the history's admin filter). Not paged.
+
+ADMIN also keeps `GET /muscle-groups` (filters and, later, the exercise form). Errors beyond the paging and role rows above: `401 UNAUTHENTICATED` when vertice-api no longer accepts the admin (sign in again), `403 FORBIDDEN` if vertice-api refuses the token's second-factor claims.
 
 ## Legal — `/legal`
 - `GET /versions` (public) → `{terms, healthData}`: the current version of the Terms of Use / Privacy Policy and of the health-data consent notice (env `TERMS_VERSION`, `HEALTH_DATA_CONSENT_VERSION`, default `2026-10-draft`; the texts are drafts pending legal review). The web shows the matching texts, sends `terms` as `acceptedTermsVersion` on register and the versions to `POST /auth/me/consent`, and compares them with `GET /auth/me`'s `consent` to tell whether a stored consent is outdated. No upstream call. Cacheable: `Cache-Control: public, max-age=300` (errors stay `no-store`). A version changes only on a BFF deploy that bumps the env var.
