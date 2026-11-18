@@ -108,6 +108,17 @@ export function addFakeUsers(count: number, role: Role = 'CLIENT'): { ids: numbe
 export const FAKE_PASSWORD = 'correct-horse-battery'
 const withoutPassword = new Set<number>([ids.clientA2])
 
+/**
+ * Suspended users (admin-panel VRT-27): their tokens are refused (UNAUTHENTICATED) and their correct
+ * password is FAILED_PRECONDITION "Account suspended", as upstream. Empty by default.
+ */
+export const fakeSuspended = new Set<number>()
+export const resetFakeSuspended = () => fakeSuspended.clear()
+
+/** E-mail send outcomes for the admin e-mail RPCs: `ok`, `limited`, `failed` or `disabled`. */
+export const fakeEmailSends: { mode: 'ok' | 'limited' | 'failed' | 'disabled' } = { mode: 'ok' }
+export const FAKE_EMAIL_RETRY_SECONDS = 42
+
 /** What the fake `CreatePasswordSetupToken` issues; `RedeemPasswordSetupToken` accepts only these. */
 export const setupTokenFor = (userId: number) => `issued-${userId}`
 
@@ -174,6 +185,15 @@ export function craftedAdminToken(claims: Record<string, unknown>, id: number = 
     env.JWT_SECRET,
     { algorithm: 'HS256', issuer: TOKEN_ISSUER, audience: TOKEN_AUDIENCE, subject: String(id) },
   )
+}
+
+/**
+ * The plain 8h ADMIN token `/auth/login` signed before VRT-28 (no `amr`/`auth_time`): `signToken`
+ * refuses to sign it now, but tokens like it may still be out there, so both verifiers must refuse it.
+ */
+export function plainAdminToken(id: number = ids.admin): string {
+  const now = Math.floor(Date.now() / 1000)
+  return craftedAdminToken({ amr: undefined, auth_time: undefined, iat: now, exp: now + 8 * 60 * 60 }, id)
 }
 
 export const emailOf = (id: number) => `user${id}@vertice.test`
@@ -316,6 +336,8 @@ export const API_SERVICE_SUBJECT_RPCS: Readonly<Record<string, readonly string[]
     'CreateAdmin',
     'IssueAdminSetupToken',
     'ResetAdminSecondFactor',
+    'SuspendAdmin',
+    'ReactivateAdmin',
   ],
 }
 
@@ -382,6 +404,7 @@ function userCaller(claims: jwt.JwtPayload): AuthUser {
   if (!['ADMIN', 'TRAINER', 'CLIENT'].includes(role)) upstreamError(status.UNAUTHENTICATED, 'Unrecognized caller identity')
   const stored = users.find((u) => u.id === id)
   if (stored?.role !== role) upstreamError(status.UNAUTHENTICATED, 'Session no longer valid')
+  if (fakeSuspended.has(id)) upstreamError(status.UNAUTHENTICATED, 'Session no longer valid')
   if (role === 'ADMIN' && !acceptsAdminToken(claims)) upstreamError(status.UNAUTHENTICATED, 'Session no longer valid')
   return { id, role }
 }
@@ -541,8 +564,8 @@ const profileBasics = (u: (typeof users)[number]) => ({
   name: u.name,
   email: emailOf(u.id),
   cpfMasked: `***.***.***-${cpfOf(u.id).slice(-2)}`,
-  suspended: false,
-  suspendedAt: '',
+  suspended: fakeSuspended.has(u.id),
+  suspendedAt: fakeSuspended.has(u.id) ? FAKE_CREATED_AT : '',
   createdAt: FAKE_CREATED_AT,
   lastActiveOn: today,
 })
@@ -550,12 +573,103 @@ const relationshipRef = (other: (typeof users)[number]) => ({
   user: userRef(other),
   startedAt: FAKE_CREATED_AT,
   endedAt: '',
-  suspended: false,
+  suspended: fakeSuspended.has(other.id),
 })
 /** The fake history: `GetUserProfile` appends a VIEW_USER_PROFILE entry, as vertice-api does (D17). */
 export const fakeAdminActions: { id: number; adminId: number; action: string; targetUserId: number }[] = []
 export const resetFakeAdminActions = () => {
   fakeAdminActions.length = 0
+}
+
+function directoryRow(u: (typeof users)[number]) {
+  const trainerId = trainerClients.find(([, c]) => c === u.id)?.[0]
+  return {
+    id: str(u.id),
+    name: u.name,
+    email: emailOf(u.id),
+    role: u.role,
+    suspended: fakeSuspended.has(u.id),
+    createdAt: FAKE_CREATED_AT,
+    lastActiveOn: u.id === ids.clientA2 ? '' : today,
+    currentTrainer: u.role === 'CLIENT' && trainerId ? userRef(find(users, trainerId, 'User')) : null,
+    currentClientCount: u.role === 'TRAINER' ? trainerClients.filter(([t]) => t === u.id).length : 0,
+  }
+}
+
+const recordAdminAction = (action: string, targetUserId: number) =>
+  fakeAdminActions.unshift({ id: fakeAdminActions.length + 1, adminId: caller()!.id, action: `ADMIN_ACTION_${action}`, targetUserId })
+
+/** vertice-api's reason rule (D21): trimmed, 1-500 UTF-16 units. */
+function requireReason(r: Req) {
+  const reason = String(r.reason ?? '').trim()
+  if (reason.length < 1 || reason.length > 500) upstreamError(status.INVALID_ARGUMENT, 'reason: must be 1-500 characters')
+}
+
+function requireUserId(r: Req) {
+  if (!(Number(r.userId) >= 1)) upstreamError(status.INVALID_ARGUMENT, 'user_id: must be positive')
+}
+
+/** The e-mail sends' failure modes, with vertice-api's texts (spec §3). */
+function emailSend(kind: string) {
+  if (fakeEmailSends.mode === 'disabled') upstreamError(status.FAILED_PRECONDITION, `${kind} emails are not enabled`)
+  if (fakeEmailSends.mode === 'limited') {
+    upstreamError(status.RESOURCE_EXHAUSTED, `${kind} email limit reached; retry after ${FAKE_EMAIL_RETRY_SECONDS} seconds`)
+  }
+  if (fakeEmailSends.mode === 'failed') upstreamError(status.UNAVAILABLE, `${kind} email could not be sent`)
+}
+
+/** Mirrors VRT-27's `AdminService` writes (ADMIN only) and the admin path of `SendFirstAccessEmail`. */
+function adminWriteHandlers(): Record<string, (req: Req) => unknown> {
+  return {
+    SuspendUser: (r) => {
+      requireAdminCaller()
+      requireUserId(r)
+      requireReason(r)
+      const user = profileTarget(r.userId)
+      if (fakeSuspended.has(user.id)) upstreamError(status.FAILED_PRECONDITION, `User ${user.id} is already suspended`)
+      fakeSuspended.add(user.id)
+      recordAdminAction('SUSPEND_USER', user.id)
+      return { user: directoryRow(user) }
+    },
+    ReactivateUser: (r) => {
+      requireAdminCaller()
+      requireUserId(r)
+      requireReason(r)
+      const user = profileTarget(r.userId)
+      if (!fakeSuspended.has(user.id)) upstreamError(status.FAILED_PRECONDITION, `User ${user.id} is not suspended`)
+      fakeSuspended.delete(user.id)
+      recordAdminAction('REACTIVATE_USER', user.id)
+      return { user: directoryRow(user) }
+    },
+    SendPasswordResetEmail: (r) => {
+      requireAdminCaller()
+      requireUserId(r)
+      const user = profileTarget(r.userId)
+      emailSend('Password-reset')
+      recordAdminAction('SEND_PASSWORD_RESET_EMAIL', user.id)
+      return {}
+    },
+    // UserService. ADMIN (or service:ops) for any client, NOT_FOUND for anyone else; a TRAINER for
+    // their active client with no password yet, PERMISSION_DENIED otherwise.
+    SendFirstAccessEmail: (r) => {
+      requireUserId(r)
+      const target = users.find((u) => u.id === Number(r.userId))
+      const user = caller()
+      if (user?.role === 'ADMIN' || currentCaller === 'service:ops') {
+        if (target?.role !== 'CLIENT') upstreamError(status.NOT_FOUND, `Client with id ${Number(r.userId)} not found`)
+      } else if (
+        user?.role !== 'TRAINER' ||
+        !target ||
+        !withoutPassword.has(target.id) ||
+        !trainerClients.some(([t, c]) => t === user.id && c === target.id)
+      ) {
+        upstreamError(status.PERMISSION_DENIED, 'Not allowed to send this first-access email')
+      }
+      emailSend('First-access')
+      if (user?.role === 'ADMIN') recordAdminAction('SEND_FIRST_ACCESS_EMAIL', target!.id)
+      return { status: { pending: true, lastSentAt: FAKE_CREATED_AT, lastSendFailed: false, sendResult: 'FIRST_ACCESS_SEND_RESULT_SENT', retryAfterSeconds: 0 } }
+    },
+  }
 }
 
 const adminHandlers: Record<string, (req: Req) => unknown> = {
@@ -584,30 +698,19 @@ const adminHandlers: Record<string, (req: Req) => unknown> = {
     const search = String(r.search ?? '').trim().toLowerCase()
     if (search.length > 100) upstreamError(status.INVALID_ARGUMENT, 'search: must be at most 100 characters')
     const role = r.role === 'DIRECTORY_ROLE_TRAINER' ? 'TRAINER' : r.role === 'DIRECTORY_ROLE_CLIENT' ? 'CLIENT' : null
-    // Nobody is suspended until VRT-27, as upstream reads it today.
+    const wantSuspended = r.status === 'DIRECTORY_STATUS_SUSPENDED' ? true : r.status === 'DIRECTORY_STATUS_ACTIVE' ? false : null
     const rows = users
-      .filter((u) => u.role !== 'ADMIN' && (!role || u.role === role) && r.status !== 'DIRECTORY_STATUS_SUSPENDED')
+      .filter((u) => u.role !== 'ADMIN' && (!role || u.role === role))
+      .filter((u) => wantSuspended === null || fakeSuspended.has(u.id) === wantSuspended)
       .filter((u) => !search || u.name.toLowerCase().includes(search) || emailOf(u.id).includes(search))
       .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.id - b.id)
     const { page, nextPageToken } = adminPage(rows, r)
     return {
-      users: page.map((u) => {
-        const trainerId = trainerClients.find(([, c]) => c === u.id)?.[0]
-        return {
-          id: str(u.id),
-          name: u.name,
-          email: emailOf(u.id),
-          role: u.role,
-          suspended: false,
-          createdAt: FAKE_CREATED_AT,
-          lastActiveOn: u.id === ids.clientA2 ? '' : today,
-          currentTrainer: u.role === 'CLIENT' && trainerId ? userRef(find(users, trainerId, 'User')) : null,
-          currentClientCount: u.role === 'TRAINER' ? trainerClients.filter(([t]) => t === u.id).length : 0,
-        }
-      }),
+      users: page.map((u) => directoryRow(u)),
       nextPageToken,
     }
   },
+  ...adminWriteHandlers(),
   GetUserProfile: (r) => {
     requireAdminCaller()
     const user = profileTarget(r.userId)
@@ -750,6 +853,8 @@ const handlers: Record<string, (req: Req) => unknown> = {
     if (!user || withoutPassword.has(user.id) || r.password !== FAKE_PASSWORD || (requiredRole && requiredRole !== user.role)) {
       upstreamError(status.UNAUTHENTICATED, 'Invalid email or password')
     }
+    // D10: only once the password and required_role matched.
+    if (fakeSuspended.has(user.id)) upstreamError(status.FAILED_PRECONDITION, 'Account suspended')
     return userRes(user, 'contact')
   },
 
@@ -794,6 +899,18 @@ const handlers: Record<string, (req: Req) => unknown> = {
   IssueAdminSetupToken: (r) => ({ setupToken: setupTokenFor(opsAdmin(r.userId).id), expiresAt: '2099-01-01T00:00:00Z' }),
   ResetAdminSecondFactor: (r) => {
     secondFactors.delete(opsAdmin(r.userId).id)
+    return {}
+  },
+  SuspendAdmin: (r) => {
+    const admin = opsAdmin(r.userId)
+    if (fakeSuspended.has(admin.id)) upstreamError(status.FAILED_PRECONDITION, `User ${admin.id} is already suspended`)
+    fakeSuspended.add(admin.id)
+    return {}
+  },
+  ReactivateAdmin: (r) => {
+    const admin = opsAdmin(r.userId)
+    if (!fakeSuspended.has(admin.id)) upstreamError(status.FAILED_PRECONDITION, `User ${admin.id} is not suspended`)
+    fakeSuspended.delete(admin.id)
     return {}
   },
   // Any id: the user `CreateClientForTrainer` just created (id 99) isn't in the fixtures.
@@ -938,7 +1055,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
   ListClientsForTrainer: (r) => ({
     clients: trainerClients
       .filter(([t]) => t === Number(r.trainerId))
-      .map(([, c]) => userRes(find(users, c, 'User'), 'summary')),
+      .map(([, c]) => ({ ...userRes(find(users, c, 'User'), 'summary'), suspended: fakeSuspended.has(c) })),
   }),
   // Mirrors vertice-api: the trainer for their own trainer_id and an active client (anything else,
   // a missing client included, is PERMISSION_DENIED), or ADMIN. Stateless, like DeleteAccount.
@@ -947,6 +1064,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
     const active = trainerClients.some(([t, c]) => t === Number(r.trainerId) && c === Number(r.clientId))
     if (user?.role === 'ADMIN') {
       if (!active) upstreamError(status.NOT_FOUND, 'No active relationship')
+      recordAdminAction('END_RELATIONSHIP', Number(r.clientId))
       return {}
     }
     if (user?.role !== 'TRAINER' || user.id !== Number(r.trainerId) || !active) {
@@ -967,7 +1085,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
 
 /** RPCs that change upstream state. A refused request must never reach one. */
 export const isWriteRpc = (method: string) =>
-  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard|Start|Verify|Issue|Reset)/.test(method) &&
+  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard|Start|Verify|Issue|Reset|Suspend|Reactivate|Send)/.test(method) &&
   method !== 'VerifyCredentials'
 
 /**

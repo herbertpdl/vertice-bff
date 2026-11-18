@@ -9,7 +9,8 @@ import { setupLinkPath } from './issue-setup-tokens.js'
 
 /**
  * Admin lifecycle for the platform team (admin-panel spec B6; vertice-api D9, `AdminOpsService`):
- * create an admin, issue a new setup link (forgotten password), reset a lost authenticator. Only
+ * create an admin, issue a new setup link (forgotten password), reset a lost authenticator,
+ * suspend and reactivate an admin (R14: the panel never suspends an admin). Only
  * the scripts under `scripts/` call these, with their own `service:ops` token (`opsToken`); the
  * server never imports this module, and no route reaches `AdminOpsService`.
  *
@@ -59,6 +60,20 @@ export async function issueAdminSetupToken(userId: number, callerToken: () => st
 /** `ResetAdminSecondFactor`: deletes the authenticator and ends the admin's sessions; they enrol again at sign-in. */
 export async function resetAdminSecondFactor(userId: number, callerToken: () => string): Promise<void> {
   await grpcCall(adminOpsClient, 'ResetAdminSecondFactor', { userId }, asOps(callerToken))
+}
+
+/**
+ * `SuspendAdmin`: every session of the admin ends at their next call and their sign-in answers
+ * 403 `ACCOUNT_SUSPENDED`. vertice-api refuses a non-admin id (NOT_FOUND) and an admin already
+ * suspended (FAILED_PRECONDITION, the 409 `PRECONDITION_FAILED`).
+ */
+export async function suspendAdmin(userId: number, callerToken: () => string): Promise<void> {
+  await grpcCall(adminOpsClient, 'SuspendAdmin', { userId }, asOps(callerToken))
+}
+
+/** `ReactivateAdmin`: the admin signs in again (old sessions stay void). FAILED_PRECONDITION when not suspended. */
+export async function reactivateAdmin(userId: number, callerToken: () => string): Promise<void> {
+  await grpcCall(adminOpsClient, 'ReactivateAdmin', { userId }, asOps(callerToken))
 }
 
 /** The command line of an admin script, or a usage message. Unknown arguments are refused. */

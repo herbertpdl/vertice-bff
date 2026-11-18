@@ -77,6 +77,9 @@ export const ADMIN_AMR = ['pwd', 'otp'] as const
  * (renewal backdates it, see `renewSession`).
  */
 export function signToken(user: AuthUser, options: { issuedAt?: number } = {}): string {
+  // An admin's only session is `signAdminToken`'s, after the second factor (admin-panel spec B3,
+  // B9): `/auth/login` refuses an ADMIN before signing, so this would be a bug, not a login.
+  if (user.role === 'ADMIN') throw new Error('signToken: an ADMIN token is signed only by signAdminToken')
   const mobile = user.session === MOBILE_SESSION
   const claims = mobile ? { role: user.role, session: MOBILE_SESSION } : { role: user.role }
   // An explicit `iat` (seconds) also moves `exp`, which jsonwebtoken derives from the payload's `iat`.

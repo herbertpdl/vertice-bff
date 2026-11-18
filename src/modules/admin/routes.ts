@@ -8,6 +8,7 @@ import {
   adminDashboardSchema,
   adminDirectoryPageSchema,
   adminUserProfileSchema,
+  adminUserResultSchema,
 } from '../../openapi/responses.js'
 import {
   ADMIN_ACTIONS,
@@ -16,6 +17,7 @@ import {
   ADMIN_SEARCH_MAX,
   adminActionsQuerySchema,
   adminDirectoryQuerySchema,
+  adminReasonSchema,
   DIRECTORY_ROLES,
   DIRECTORY_STATUSES,
 } from './schemas.js'
@@ -40,6 +42,8 @@ const cursorDoc = z
  * public steps are not behind these hooks.
  *
  * VRT-24: the read routes (spec §2.2), one `AdminService` RPC each, with the caller's admin token.
+ * VRT-28: suspension, account e-mails and ending a relationship (spec §2.3), each with an
+ * `audit: "admin.<action>"` line (actor and target ids; never the reason, B15).
  * vertice-api re-checks ADMIN and the second-factor claims (D6) on every call.
  */
 export default async function adminRoutes(app: FastifyInstance) {
@@ -154,5 +158,108 @@ export default async function adminRoutes(app: FastifyInstance) {
       }),
     },
     async () => adminService.listActionAdmins(),
+  )
+
+  for (const [action, suspend] of [
+    ['suspend', true],
+    ['reactivate', false],
+  ] as const) {
+    app.post<{ Params: { id: string } }>(
+      `/users/:id/${action}`,
+      {
+        schema: routeDoc({
+          operationId: suspend ? 'suspendAdminUser' : 'reactivateAdminUser',
+          summary: suspend ? 'Suspend a trainer or client' : 'Reactivate a suspended trainer or client',
+          description: suspend
+            ? 'Every session of the user ends at their next request (401 `UNAUTHENTICATED`) and their sign-in answers ' +
+              '403 `ACCOUNT_SUSPENDED` until reactivated. Their data, plans and roster are untouched; no e-mail is sent. ' +
+              'Writes a `SUSPEND_USER` history entry with the reason. Already suspended: 409 `PRECONDITION_FAILED` ' +
+              '(refetch the profile). A missing or deleted user, or an admin, is 404.'
+            : 'The user can sign in again; sessions from before the suspension stay void. No e-mail is sent. Writes a ' +
+              '`REACTIVATE_USER` history entry with the reason. Not suspended: 409 `PRECONDITION_FAILED` (refetch the ' +
+              'profile). A missing or deleted user, or an admin, is 404.',
+          tag: 'Admin',
+          roles: ['ADMIN'],
+          params: idParams('id'),
+          body: adminReasonSchema,
+          ok: { status: 200, description: 'The user’s directory row after the change.', schema: adminUserResultSchema },
+          errors: [403, 404, 409],
+        }),
+      },
+      async (req) => {
+        const id = parseId(req.params.id)
+        const { reason } = adminReasonSchema.parse(req.body)
+        const result = await adminService.setSuspended(id, suspend, reason)
+        req.log.info({ audit: `admin.user.${action}`, actorId: req.user!.id, targetUserId: id }, `User ${action}d by an admin`)
+        return result
+      },
+    )
+  }
+
+  for (const [path, operationId, kind] of [
+    ['first-access-email', 'sendAdminFirstAccessEmail', 'first_access_email'],
+    ['password-reset-email', 'sendAdminPasswordResetEmail', 'password_reset_email'],
+  ] as const) {
+    const firstAccess = kind === 'first_access_email'
+    app.post<{ Params: { id: string } }>(
+      `/users/:id/${path}`,
+      {
+        schema: routeDoc({
+          operationId,
+          summary: firstAccess
+            ? 'E-mail a client a new first-access link'
+            : 'E-mail a trainer or client a password-reset link',
+          description:
+            (firstAccess
+              ? 'For a client: a new single-use link to choose their password. A trainer, a missing or a deleted user is 404. '
+              : 'A single-use link to the “Definir senha” page; redeeming it sets the password and ends every session. ' +
+                'A missing or deleted user, or an admin, is 404. ') +
+            'No body. 204 on an accepted send: the link never reaches the admin. Limits per user: 1 per minute and 5 per ' +
+            '24 hours, 429 `RATE_LIMITED` with `Retry-After`. While e-mails are switched off upstream, 409 ' +
+            '`PRECONDITION_FAILED` (“envio indisponível”); when every send attempt failed, 503 `UPSTREAM_UNAVAILABLE` ' +
+            '(try again later). Writes a history entry only for an accepted send.',
+          tag: 'Admin',
+          roles: ['ADMIN'],
+          params: idParams('id'),
+          ok: { status: 204, description: 'The e-mail was accepted for sending.' },
+          errors: [403, 404, 409, 429],
+        }),
+      },
+      async (req, reply) => {
+        const id = parseId(req.params.id)
+        await (firstAccess ? adminService.sendFirstAccessEmail(id) : adminService.sendPasswordResetEmail(id))
+        req.log.info({ audit: `admin.user.${kind}`, actorId: req.user!.id, targetUserId: id }, 'Account e-mail sent by an admin')
+        reply.status(204)
+      },
+    )
+  }
+
+  app.delete<{ Params: { trainerId: string; clientId: string } }>(
+    '/relationships/:trainerId/:clientId',
+    {
+      schema: routeDoc({
+        operationId: 'endAdminRelationship',
+        summary: 'End a trainer–client relationship',
+        description:
+          'Both ids, from the profile on screen. Only the relationship ends: both accounts, the plans and every log stay; ' +
+          'the trainer loses access to the client, the client keeps reading the plans. Writes an `END_RELATIONSHIP` ' +
+          'history entry. No active relationship for the pair is 404.',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        params: idParams('trainerId', 'clientId'),
+        ok: { status: 204, description: 'The relationship ended.' },
+        errors: [403, 404],
+      }),
+    },
+    async (req, reply) => {
+      const trainerId = parseId(req.params.trainerId)
+      const clientId = parseId(req.params.clientId)
+      await adminService.endRelationship(trainerId, clientId)
+      req.log.info(
+        { audit: 'admin.relationship.end', actorId: req.user!.id, trainerId, clientId },
+        'Relationship ended by an admin',
+      )
+      reply.status(204)
+    },
   )
 }

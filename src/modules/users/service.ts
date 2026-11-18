@@ -37,6 +37,8 @@ export interface UserResponse {
   showInstagram?: boolean
   /** Only in the self view (`GetUser` on the caller's own id); null otherwise. */
   consent?: ConsentStateResponse | null
+  /** Whether an admin suspended the user (admin-panel R46): set on `ListClientsForTrainer` only, false elsewhere. */
+  suspended?: boolean
 }
 
 export function toUser(r: UserResponse): User {

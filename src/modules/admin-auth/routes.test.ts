@@ -11,7 +11,6 @@ import {
   ADMIN_SESSION_TTL_SECONDS,
   signAdminChallenge,
   signAdminToken,
-  signToken,
   verifyToken,
 } from '../../lib/jwt.js'
 import {
@@ -22,8 +21,11 @@ import {
   FAKE_PASSWORD,
   FAKE_TOTP_CODES,
   fakeGrpcCall,
+  fakeSuspended,
   ids,
+  plainAdminToken,
   resetFakeSecondFactors,
+  resetFakeSuspended,
   resetUpstreamCallers,
   setFakeSecondFactor,
   upstreamCallers,
@@ -83,6 +85,24 @@ describe('admin sign-in', () => {
     logLines.map((line) => JSON.parse(line)).filter((line) => line.audit === 'admin.signin')
 
   describe('POST /admin/auth/login', () => {
+    it('answers a suspended admin’s correct password with 403 ACCOUNT_SUSPENDED and no challenge (B10)', async () => {
+      fakeSuspended.add(ids.admin)
+      try {
+        const res = await login(emailOf(ids.admin))
+        expect(res.statusCode, res.body).toBe(403)
+        expect(res.json()).toEqual({
+          error: { code: 'ACCOUNT_SUSPENDED', message: 'Sua conta está suspensa. Entre em contato com o suporte.' },
+        })
+        expect(upstreamMethods()).not.toContain('GetSecondFactorState')
+        expect(signinLines()).toEqual([expect.objectContaining({ step: 'password', outcome: 'failure', reason: 'suspended' })])
+        const wrong = await login(emailOf(ids.admin), 'wrong-password')
+        expect(wrong.statusCode).toBe(401)
+        expect(wrong.json().error.code).toBe('UNAUTHORIZED')
+      } finally {
+        resetFakeSuspended()
+      }
+    })
+
     it("answers a challenge for an admin's password, never a session, checked with required_role ADMIN", async () => {
       const res = await login(emailOf(ids.admin))
       expect(res.statusCode, res.body).toBe(200)
@@ -140,7 +160,7 @@ describe('admin sign-in', () => {
 
     it.each([
       ['garbage', () => 'not-a-token'],
-      ['a user token', () => signToken({ id: ids.admin, role: 'ADMIN' })],
+      ['a user token', () => plainAdminToken()],
       ['an admin session token', () => adminSessionToken()],
       [
         'an expired challenge',

@@ -72,3 +72,21 @@ export const adminActionsQuerySchema = z.object({
   cursor: cursorQuery,
 })
 export type AdminActionsQuery = z.infer<typeof adminActionsQuerySchema>
+
+/** vertice-api's reason bound (D21): trimmed, then 1-500 UTF-16 units, as Java's `String.length()`. */
+export const ADMIN_REASON_MAX = 500
+
+/**
+ * Body of `POST /admin/users/:id/suspend` and `/reactivate` (R39, R44, E20). Missing or blank is a
+ * 400 with no upstream call. The reason goes to the history only: never logged here (B15).
+ */
+export const adminReasonSchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(1)
+    .refine((value) => value.length <= ADMIN_REASON_MAX, `Too big: expected string to have <=${ADMIN_REASON_MAX} characters`)
+    .meta({ maxLength: ADMIN_REASON_MAX })
+    .describe('Why, for the action history (not shown to the user). Trimmed; 1-500 characters.'),
+})
+export type AdminReason = z.infer<typeof adminReasonSchema>

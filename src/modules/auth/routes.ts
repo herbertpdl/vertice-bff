@@ -51,14 +51,17 @@ export default async function authRoutes(app: FastifyInstance) {
           'The password is checked by vertice-api. A wrong password, an unknown email and an account with no password ' +
           'yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited. ' +
           'With `X-Vertice-Client: mobile` a TRAINER or CLIENT gets a 90-day mobile session, renewable with ' +
-          '`POST /auth/session/renew`; without it (and for ADMIN) the 8h web session. An admin signs in at ' +
-          '`POST /admin/auth/login` instead: the token this route signs an ADMIN is refused everywhere.',
+          '`POST /auth/session/renew`; without it the 8h web session. With the right password, a suspended account ' +
+          'is 403 `ACCOUNT_SUSPENDED` (message: the text to show, “Sua conta está suspensa. Entre em contato com o ' +
+          'suporte.”), and an ADMIN is 403 `ADMIN_LOGIN_ELSEWHERE` (message: “O acesso de alunos é feito somente pelo ' +
+          'aplicativo Vertice.”), whatever `X-Vertice-Client` says: an admin signs in at `POST /admin/auth/login`. ' +
+          'Neither gets a token.',
         tag: 'Auth',
         auth: 'public',
         headers: sessionClientHeadersSchema,
         body: loginSchema,
         ok: { status: 200, description: 'The session token, its expiry and the user.', schema: sessionSchema },
-        errors: [401, 429],
+        errors: [401, 403, 429],
       }),
     },
     async (req) => {

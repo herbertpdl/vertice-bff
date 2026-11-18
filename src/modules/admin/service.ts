@@ -1,6 +1,6 @@
-import { adminClient } from '../../grpc/clients.js'
+import { adminClient, trainerClientClient, userClient } from '../../grpc/clients.js'
 import { grpcCall, UPSTREAM_MESSAGES } from '../../grpc/call.js'
-import { HttpError } from '../../lib/errors.js'
+import { HttpError, TooManyRequestsError, UpstreamExhaustedError } from '../../lib/errors.js'
 import { requestContext } from '../../lib/request-context.js'
 import type { Role } from '../users/service.js'
 import type { AdminAction, AdminActionsQuery, AdminDirectoryQuery } from './schemas.js'
@@ -132,6 +132,11 @@ export interface AdminDirectoryUser {
   currentTrainer: { id: number; name: string } | null
   /** Trainers only (R32); null for every client. */
   currentClientCount: number | null
+}
+
+/** `POST /admin/users/:id/suspend` and `/reactivate`: the row as it is now, for list and profile. */
+export interface AdminUserResult {
+  user: AdminDirectoryUser
 }
 
 export interface AdminDirectoryPage {
@@ -382,4 +387,70 @@ export async function listActions(query: AdminActionsQuery): Promise<AdminAction
 export async function listActionAdmins(): Promise<AdminActionAdmins> {
   const res = await grpcCall<Record<string, never>, { admins: UserRefResponse[] }>(adminClient, 'ListActionAdmins', {})
   return { admins: res.admins.map(toUserRef) }
+}
+
+// ---- writes (VRT-28, spec §2.3) --------------------------------------------------------------------
+
+/**
+ * Suspends or reactivates a trainer or client (R39, R44). vertice-api re-validates the reason,
+ * refuses a missing, deleted or admin target (NOT_FOUND, the 404) and a repeat (FAILED_PRECONDITION
+ * "already suspended" / "not suspended", the generic 409 `PRECONDITION_FAILED`: refetch the
+ * profile), and writes the history entry with the reason in the same transaction.
+ */
+export async function setSuspended(userId: number, suspend: boolean, reason: string): Promise<AdminUserResult> {
+  const res = await grpcCall<{ userId: number; reason: string }, { user: DirectoryUserResponse | null }>(
+    adminClient,
+    suspend ? 'SuspendUser' : 'ReactivateUser',
+    { userId, reason },
+  )
+  if (!res.user) {
+    requestContext.getStore()?.log?.warn({ rpc: suspend ? 'SuspendUser' : 'ReactivateUser' }, 'Answered no user')
+    throw new HttpError(502, UPSTREAM_MESSAGES.upstreamError, 'UPSTREAM_ERROR')
+  }
+  return { user: toDirectoryUser(res.user) }
+}
+
+/** `Retry-After` for a send limit whose upstream text has no seconds (spec B11). */
+const DEFAULT_EMAIL_RETRY_SECONDS = 60
+export const EMAIL_LIMIT_MESSAGE = 'Too many e-mails to this user, try again later'
+
+/**
+ * The account e-mails' one route-specific mapping (B11): a send limit (RESOURCE_EXHAUSTED, 1 per
+ * minute and 5 per 24h per user) is 429 `RATE_LIMITED` with `Retry-After` = vertice-api's N, not
+ * the global 413. Everything else keeps the global mapping: FAILED_PRECONDITION (e-mails switched
+ * off, the only one these RPCs send) is 409 `PRECONDITION_FAILED`, UNAVAILABLE (every try failed)
+ * 503 `UPSTREAM_UNAVAILABLE`, NOT_FOUND 404.
+ */
+async function sendAccountEmail(call: () => Promise<unknown>): Promise<void> {
+  try {
+    await call()
+  } catch (err) {
+    if (err instanceof UpstreamExhaustedError) {
+      throw new TooManyRequestsError(EMAIL_LIMIT_MESSAGE, err.retryAfterSeconds ?? DEFAULT_EMAIL_RETRY_SECONDS)
+    }
+    throw err
+  }
+}
+
+/**
+ * E-mails a client a new first-access link (`SendFirstAccessEmail`, R47). The answer upstream
+ * carries the client's first-access status; none of it is returned (R49: status only, the 204).
+ * A trainer target, or a missing or deleted one, is vertice-api's NOT_FOUND.
+ */
+export async function sendFirstAccessEmail(userId: number): Promise<void> {
+  await sendAccountEmail(() => grpcCall(userClient, 'SendFirstAccessEmail', { userId }))
+}
+
+/** E-mails a trainer or client a password-reset link (`SendPasswordResetEmail`, R48); 204, never the link. */
+export async function sendPasswordResetEmail(userId: number): Promise<void> {
+  await sendAccountEmail(() => grpcCall(adminClient, 'SendPasswordResetEmail', { userId }))
+}
+
+/**
+ * Ends a trainer-client relationship (`EndTrainerClientRelationship` with the admin token, R50, B17):
+ * both ids, since an admin has no side-effect-free read of the trainer. Nothing but `ended_at`
+ * changes upstream; no active relationship for the pair is vertice-api's NOT_FOUND.
+ */
+export async function endRelationship(trainerId: number, clientId: number): Promise<void> {
+  await grpcCall(trainerClientClient, 'EndTrainerClientRelationship', { trainerId, clientId })
 }
