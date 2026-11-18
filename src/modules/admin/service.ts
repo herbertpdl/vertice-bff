@@ -1,5 +1,6 @@
 import { adminClient } from '../../grpc/clients.js'
-import { grpcCall } from '../../grpc/call.js'
+import { grpcCall, UPSTREAM_MESSAGES } from '../../grpc/call.js'
+import { HttpError } from '../../lib/errors.js'
 import { requestContext } from '../../lib/request-context.js'
 import type { Role } from '../users/service.js'
 import type { AdminAction, AdminActionsQuery, AdminDirectoryQuery } from './schemas.js'
@@ -298,8 +299,10 @@ export function toUserProfile(res: GetUserProfileResponse): AdminUserProfile {
       },
     }
   }
-  // Neither arm set: not a shape vertice-api answers; a 502 rather than an empty profile.
-  throw new Error('GetUserProfile answered no profile')
+  // Neither arm set: not a shape vertice-api answers. A 502 (a bad upstream answer, as `grpcCall`
+  // maps one) rather than an empty profile or a 500 that would point at the BFF.
+  requestContext.getStore()?.log?.warn({ rpc: 'GetUserProfile' }, 'GetUserProfile answered no profile')
+  throw new HttpError(502, UPSTREAM_MESSAGES.upstreamError, 'UPSTREAM_ERROR')
 }
 
 export function toActionEntry(e: ActionEntryResponse): AdminActionEntry {
