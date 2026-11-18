@@ -11,7 +11,7 @@ import { setupLinkPath } from './issue-setup-tokens.js'
  * Admin lifecycle for the platform team (admin-panel spec B6; vertice-api D9, `AdminOpsService`):
  * create an admin, issue a new setup link (forgotten password), reset a lost authenticator,
  * suspend and reactivate an admin (R14: the panel never suspends an admin). Only
- * the scripts under `scripts/` call these, with their own `service:ops` token (`opsToken`); the
+ * the CLIs under `src/ops/cli/` call these, with their own `service:ops` token (`opsToken`); the
  * server never imports this module, and no route reaches `AdminOpsService`.
  *
  * The setup link is a credential: it goes to stdout only (the scripts), never to a logger.

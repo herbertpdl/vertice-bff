@@ -4,11 +4,15 @@
  * Usage:
  *
  *   npm run ops:reset-admin-2fa -- --user-id 42
+ *
+ * In production it runs compiled inside the BFF task, through ECS Exec (README "Admin accounts"):
+ *
+ *   node /app/dist/ops/cli/reset-admin-2fa.js --user-id 42
  */
-import { parseUserIdArgs, resetAdminSecondFactor } from '../src/ops/admin-ops.js'
-import { opsToken } from '../src/ops/ops-token.js'
-import { grpcTarget } from '../src/config/env.js'
-import { adminOpsClient } from '../src/grpc/clients.js'
+import { parseUserIdArgs, resetAdminSecondFactor } from '../admin-ops.js'
+import { opsToken } from '../ops-token.js'
+import { grpcTarget } from '../../config/env.js'
+import { adminOpsClient } from '../../grpc/clients.js'
 
 const args = parseUserIdArgs(process.argv.slice(2), 'ops:reset-admin-2fa')
 if (!args.ok) {

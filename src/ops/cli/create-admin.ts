@@ -3,13 +3,17 @@
  *
  *   npm run ops:create-admin -- --name "Ana Souza" --email ana@vertice.fit
  *
+ * In production it runs compiled inside the BFF task, through ECS Exec (README "Admin accounts"):
+ *
+ *   node /app/dist/ops/cli/create-admin.js --name "Ana Souza" --email ana@vertice.fit
+ *
  * Prints the new user id and a single-use "Definir senha" link on stdout (a credential: hand it to
  * the admin out of band); progress and errors go to stderr. See the README's "Operations".
  */
-import { createAdmin, parseCreateAdminArgs } from '../src/ops/admin-ops.js'
-import { opsToken } from '../src/ops/ops-token.js'
-import { grpcTarget } from '../src/config/env.js'
-import { adminOpsClient } from '../src/grpc/clients.js'
+import { createAdmin, parseCreateAdminArgs } from '../admin-ops.js'
+import { opsToken } from '../ops-token.js'
+import { grpcTarget } from '../../config/env.js'
+import { adminOpsClient } from '../../grpc/clients.js'
 
 const args = parseCreateAdminArgs(process.argv.slice(2))
 if (!args.ok) {

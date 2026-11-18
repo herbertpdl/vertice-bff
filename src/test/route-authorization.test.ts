@@ -1397,6 +1397,11 @@ describe('route authorization', () => {
     expect(filesMentioning(/\badminOpsClient\b/).filter((file) => !file.startsWith('ops/'))).toEqual(['grpc/clients.ts'])
   })
 
+  it('never imports src/ops from the server: the ops CLIs ship in dist/ but only run by hand', () => {
+    // dist/ops/cli/*.js is in the production image for ECS Exec; the server must not load it.
+    expect(filesMentioning(/from '(\.\.?\/)+ops\//).filter((file) => !file.startsWith('ops/'))).toEqual([])
+  })
+
   // A challenge is not a session, on any route (B2); and an ADMIN token without the second-factor
   // claims, past its 12h, or longer than 30 minutes is refused by the BFF itself (B3), before upstream.
   const challengeBearer = () => ({ authorization: `Bearer ${signAdminChallenge(ids.admin)}` })
