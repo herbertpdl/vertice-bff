@@ -3,9 +3,9 @@ import { env } from '../config/env.js'
 import { TOKEN_AUDIENCE, TOKEN_ISSUER } from '../lib/jwt.js'
 
 /**
- * Identity of the ops scripts under `scripts/`, separate from the running BFF's `service:bff`:
- * they need RPCs the server must never call without a user (listing every user, issuing a
- * password setup token for anyone). Minted only inside a script process; nothing under
+ * Identity of the ops CLIs (`scripts/issue-setup-tokens.ts`, `src/ops/cli/`), separate from the
+ * running BFF's `service:bff`: they need RPCs the server must never call without a user (listing
+ * every user, issuing a password setup token for anyone). Minted only inside a script process; nothing under
  * `src/` outside `src/ops/` imports this module.
  */
 export const OPS_SUBJECT = 'service:ops'

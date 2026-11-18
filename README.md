@@ -26,7 +26,8 @@ src/
   grpc/                  proto loading and gRPC client instances for vertice-api
   lib/                   shared helpers (JWT, error types, date/ownership utils, net)
   plugins/               Fastify plugins (authentication, error handling, rate limits)
-  ops/                   one-off operations run from scripts/ (e.g. issuing setup tokens)
+  ops/                   operator tasks: setup tokens, admin lifecycle (cli/: the admin
+                          entrypoints, compiled into the image for ECS Exec)
   modules/                one folder per resource (routes/schemas/service), e.g.
                           auth, legal, clients, exercises, training-plans, workouts,
                           workout-exercises, exercise-sets, workout-sessions,
@@ -258,6 +259,41 @@ npm run -s ops:reactivate-admin -- --user-id 42
   `create-admin` fails on an e-mail already in use. The admin panel cannot suspend an admin
   (R14): `suspend-admin` and `reactivate-admin` are the only way, and fail on an admin already
   suspended / not suspended (`PRECONDITION_FAILED`) and on a non-admin id (NOT_FOUND).
+
+#### In production (ECS Exec)
+
+vertice-api's gRPC port is reachable only from the BFF's security group, so in production the
+scripts run inside the running BFF task. The image ships them compiled as
+`dist/ops/cli/<script>.js` (same arguments, no `--`), and the task already has `JWT_SECRET` and
+`VERTICE_API_GRPC_HOST`/`PORT`. Needed locally: AWS CLI v2 with credentials allowed
+`ecs:ExecuteCommand` on the cluster, and the Session Manager plugin
+(`brew install --cask session-manager-plugin`; check with `session-manager-plugin --version`).
+
+```sh
+TASK=$(aws ecs list-tasks --region us-east-2 --cluster vertice --service-name vertice-bff \
+  --desired-status RUNNING --query 'taskArns[0]' --output text)
+# Ready when enableExecuteCommand is true and ExecuteCommandAgent is RUNNING
+aws ecs describe-tasks --region us-east-2 --cluster vertice --tasks "$TASK" \
+  --query 'tasks[0].{exec:enableExecuteCommand,agent:containers[?name==`vertice-bff`].managedAgents[0].lastStatus}'
+# Keep the link out of the terminal scrollback: write the session to a private file
+umask 077
+aws ecs execute-command --region us-east-2 --cluster vertice --task "$TASK" \
+  --container vertice-bff --interactive \
+  --command "node dist/ops/cli/create-admin.js --name 'Ana Souza' --email ana@vertice.fit" \
+  > admin-setup.txt
+```
+
+- The other scripts work the same way: `node dist/ops/cli/issue-admin-setup-token.js --user-id 42`,
+  `reset-admin-2fa.js`, `suspend-admin.js`, `reactivate-admin.js`. Run one with no arguments to
+  check access: it prints the usage and exits 2 without calling vertice-api.
+- Read `setupLink` from `admin-setup.txt`, hand it to the admin out of band, then delete the file.
+- ECS Exec session logging is off on the cluster (`executeCommandConfiguration.logging=NONE`), so
+  the session's output, the link included, is not stored in CloudWatch or S3; keep it that way.
+  CloudTrail records each `ExecuteCommand` call with its command string (so the name and e-mail
+  appear there, never the link).
+- The task role `vertice-bff-task` only grants the Session Manager channels ECS Exec needs
+  (`ssmmessages:*Channel`); the server itself has no AWS permissions. Commands run as root in
+  the container; sessions time out after 20 idle minutes.
 
 ### Admin sign-in alarms (CloudWatch)
 

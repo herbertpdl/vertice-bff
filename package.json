@@ -19,11 +19,11 @@
     "sync:protos": "tsx scripts/sync-protos.ts",
     "openapi": "tsx scripts/generate-openapi.ts",
     "ops:issue-setup-tokens": "tsx scripts/issue-setup-tokens.ts",
-    "ops:create-admin": "tsx scripts/create-admin.ts",
-    "ops:issue-admin-setup-token": "tsx scripts/issue-admin-setup-token.ts",
-    "ops:reset-admin-2fa": "tsx scripts/reset-admin-2fa.ts",
-    "ops:suspend-admin": "tsx scripts/suspend-admin.ts",
-    "ops:reactivate-admin": "tsx scripts/reactivate-admin.ts"
+    "ops:create-admin": "tsx src/ops/cli/create-admin.ts",
+    "ops:issue-admin-setup-token": "tsx src/ops/cli/issue-admin-setup-token.ts",
+    "ops:reset-admin-2fa": "tsx src/ops/cli/reset-admin-2fa.ts",
+    "ops:suspend-admin": "tsx src/ops/cli/suspend-admin.ts",
+    "ops:reactivate-admin": "tsx src/ops/cli/reactivate-admin.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
