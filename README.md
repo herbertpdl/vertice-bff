@@ -228,6 +228,24 @@ npm run -s ops:issue-setup-tokens > setup-links.csv
   on `ListUsers` and `CreatePasswordSetupToken` and nothing else; the running BFF's
   `service:bff` token is not allowed on either.
 
+### Admin sign-in alarms (CloudWatch)
+
+Two metric filters on the `/ecs/vertice-bff` log group (us-east-2) count the admin sign-in
+audit lines ([admin-panel spec §4](docs/specs/admin-panel/spec.md)). Each matching line adds 1,
+and the default is 0. The filters feed two alarms (Sum over 5 minutes, one period, missing data is
+not breaching):
+
+| Filter | Pattern | Metric (`Vertice/Admin`) | Alarm |
+|---|---|---|---|
+| `admin-signin-failures` | `{ ($.audit = "admin.signin") && ($.outcome = "failure") }` | `AdminSignInFailures` | `vertice-admin-signin-failures`, ≥ 10 |
+| `admin-second-factor-failures` | `{ ($.audit = "admin.signin") && ($.step = "code") && ($.outcome = "failure") }` | `AdminSecondFactorFailures` | `vertice-admin-second-factor-failures`, ≥ 5 |
+
+`outcome: "error"` (5xx, upstream down) is never counted. The field names and values are a
+contract: renaming `audit`, `step` or `outcome`, or one of their values, silently breaks the
+alarms, so change the filters in the same rollout. The alarms have **no actions yet**: subscribe
+an SNS topic (e-mail) with `aws cloudwatch put-metric-alarm ... --alarm-actions <topic ARN>`.
+Created by CLI for VRT-19 on 2026-11-18. There is no IaC yet.
+
 ## API
 
 All routes are mounted under `/api` (e.g. `POST /api/auth/login`, `GET /api/clients`).
