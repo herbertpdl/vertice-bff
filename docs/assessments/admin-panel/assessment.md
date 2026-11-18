@@ -43,7 +43,7 @@ without it.
 |---|---|---|
 | R1 | new route: `POST /api/admin/auth/login` (+ code step) | F1 |
 | R2 | not exposed | Web navigation |
-| R3 | `src/modules/auth/service.ts:37-43` | F1: trainer login should refuse ADMIN outright, not only the web |
+| R3 | `src/modules/auth/service.ts:37-43` | F1: trainer login answers an ADMIN's correct password with a distinct code and no token; rollout order in §7 |
 | R4 | new admin login | F5: identical 401 |
 | R5 | `requireRole('ADMIN')` on admin module | F4 |
 | R6 | `requireRole` on trainer/client modules; any-role routes | F4 |
@@ -57,6 +57,8 @@ without it.
 | R14 | not exposed | API refuses (`CreateUser` never ADMIN); ops F10 |
 | R15 | not exposed | No BFF route changes roles; keep it so |
 | R16 | admin module | API filters; BFF never accepts a role filter of ADMIN |
+| R16a | `GET /auth/me`, `POST /auth/password` | Kept for ADMIN (F4) |
+| R16b | `PATCH /auth/me`, `DELETE /auth/me`, `GET /auth/me/export` | Dropped for ADMIN (F4) |
 | R17 | new route: `GET /api/admin/dashboard` | F3 |
 | R18 | same | F3 |
 | R19 | not exposed | API defines activity (API F4) |
@@ -153,6 +155,8 @@ without it.
 | E38 | user detail route | |
 | E39 | not exposed | |
 | E40 | dashboard | |
+| E41 | route-authorization rows | ADMIN gets 403 on the three R16b routes (F4) |
+| E42 | `POST /auth/password` as ADMIN | 204, then every admin token, the current one included, is refused upstream via `sessions_valid_after`; the admin signs in again with password and code (F2) |
 
 ## 3. Current state
 
@@ -301,7 +305,7 @@ There is no admin module.
       `/api/admin/exercises`. Do this in the same slice as API F1/F2, which change what those
       RPCs return for ADMIN.
   - Every new route gets a row in the route-authorization table with `roles: ['ADMIN']`, and the
-    table asserts TRAINER and CLIENT get 403.
+    table asserts TRAINER and CLIENT get 403. The three R16b routes assert ADMIN gets 403 (E41).
 
 **F5 (Medium). The admin login must not reveal roles.**
 - **What:** R4 requires a non-admin's correct password to get the same 401 as a wrong password.
@@ -446,6 +450,8 @@ See F15. Key scenarios:
   - a valid code gives a token with the claim, which renews until 12h and fails after 30 minutes
     without renewal;
   - a renewal at 11h50m expires at exactly 12h;
+  - after `POST /auth/password` as ADMIN, the same token gets 401 on its next call (E42);
+  - ADMIN gets 403 on `PATCH /auth/me`, `DELETE /auth/me` and the export (E41);
   - a suspended admin at renew gets 401.
 - **Suspended trainer or client:** at the login with the right password 403
   `ACCOUNT_SUSPENDED`, with the wrong one 401.
@@ -460,8 +466,12 @@ the web.
 - Slice 1 (admin login, 2FA, renew, directory, profiles, dashboard, history) can't ship before
   the API refuses ADMIN tokens without the claim. Otherwise the old password-only path still
   works against the API.
-- Refusing ADMIN at the trainer login (R3) can ship first, on its own. The web already refuses
-  admins.
+- Refusing ADMIN at the trainer login with the distinct code (R3) deploys **after** the web
+  build that maps that code to `APP_ONLY_MESSAGE`. The web relays any non-OK login answer as is
+  (`vertice-web-react/src/app/api/auth/login/route.ts:25`) and checks the role only after a 200
+  (`:31-36`), so shipping the BFF first would show the BFF's text on www and break R3/E2. As a
+  safety net, the BFF's 403 message is the same text as `APP_ONLY_MESSAGE`, so an unmapped client
+  still shows the right words. Check how the mobile login handles the new 403 before deploying.
 - Old web builds keep working: no existing route changes shape, only additive fields and new
   routes.
 - Update `docs/api-contract.md`, the OpenAPI output and CLAUDE.md per slice.
