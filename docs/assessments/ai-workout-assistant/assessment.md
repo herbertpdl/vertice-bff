@@ -64,7 +64,7 @@ Recommended shape: one trainer-only, stateless, streamed endpoint.
 | R11 | web only | |
 | R12 | new route + existing reads | The workout comes from the request body (F4). The plan and its other workouts come from `GET /training-plans/:id` and `listWorkouts` + `getFullWorkout`, read in the service (F9) |
 | R13 | new route (context building) | Forward the plan's name, description, level and dates, workout content and notes; never the client's id, name or email (F7) |
-| R14 | web only + new route | The web blocks a second send. The BFF also refuses a second message from the same trainer while one is still running (F10) |
+| R14 | web only + new route | The web blocks a second send. On the BFF, a new message from the same trainer supersedes a running one (F10) |
 | R15 | web only | |
 | R16 | new route | The client aborting the request cancels the upstream call (F6) |
 | R17, R18 | new route (stream) | `text` and `stage` events relayed (F3, F8) |
@@ -93,7 +93,8 @@ Recommended shape: one trainer-only, stateless, streamed endpoint.
 | E11 | new route | F2: no candidate fits, so the AI answers in text |
 | E12 | new route | The proposal is capped (F5); the text explanation is the AI's |
 | E13 | new route | `AI_INVALID_PROPOSAL` (F5) |
-| E14, E15, E15a, E15b | new route + web | The web sends the on-screen proposal as `workout` (F4) |
+| E14, E15 | new route + web | The web sends the on-screen proposal as `workout` (F4) |
+| E15a, E15b | web only | Discard and hold are client state |
 | E16 | existing route | 409 path, unchanged |
 | E17–E19, E21, E23–E25 | web only | |
 | E20, E22 | existing routes | Nested create, and last write wins as today |
@@ -109,7 +110,11 @@ Recommended shape: one trainer-only, stateless, streamed endpoint.
   per-call deadline: `src/grpc/call.ts` sets none, and `DEADLINE_EXCEEDED` only appears in
   `call.test.ts:200` as a status mapped to 502.
 - **Config:** `src/config/env.ts` (Zod, fails closed outside development and test) has
-  `JWT_SECRET` with strength guards (`env.ts:147–167`). It has no `vertice-ai` URL or secret.
+  `JWT_SECRET` with strength guards (`env.ts:154–167`). It has no `vertice-ai` URL or secret.
+- **Existing service token:** `serviceToken()` (`src/lib/jwt.ts:114`) mints `sub: "service:bff"`
+  tokens with `aud: "vertice-api"`, signs them with `JWT_SECRET` and caches them for 60
+  seconds. vertice-api accepts them on `SERVICE_TOKEN_RPCS`. It must never be sent to
+  `vertice-ai` (F1, F7).
 - **Reusable pieces:**
   - `workoutExerciseEntrySchema` and `replaceWorkoutExercisesSchema` (`src/modules/workouts/schemas.ts:51–67`), with the 20/10 caps.
   - `assertCanUseExercises` (`src/lib/ownership.ts:79`), which answers "not found" and "not yours" the same way.
@@ -199,8 +204,11 @@ Recommended shape: one trainer-only, stateless, streamed endpoint.
 - **Recommendation:**
   - **Ownership:** `assertOwnsPlan(trainingPlanId)`, and `assertOwnsWorkout(workoutId)` when an id
     is given. Check that the workout belongs to that plan.
-  - **Exercise ids:** run `assertCanUseExercises` on every id in `workout`. History turns carry
-    text only, never proposals, because the current proposal is the on-screen `workout` (R36).
+  - **Exercise ids:** check every id in `workout` against the trainer's visible catalog, which the
+    BFF already loads for the same message (F2a). That is stricter than `assertCanUseExercises` and
+    saves up to 20 `GetExercise` calls. Keep `assertCanUseExercises` only if F2 ends up (b) or (c).
+    History turns carry text only, never proposals, because the current proposal is the on-screen
+    `workout` (R36).
   - **Size:** parse with the existing 20/10 caps and field bounds.
   - **Name and weekday:** never accept either from the body (R28).
 
@@ -214,11 +222,10 @@ Recommended shape: one trainer-only, stateless, streamed endpoint.
   - **Before streaming,** normal statuses apply:
     - 400 `VALIDATION_ERROR`
     - 403 / 404 through the ownership checks
-    - 409 `CONFLICT` for a second message already running (F10)
     - 503 `AI_UNAVAILABLE` when `vertice-ai` can't be reached or the feature is switched off (F7)
   - **In the stream,** `error` events carry `AI_UNAVAILABLE` (503 from upstream), `AI_TIMEOUT` (60
     seconds with no stage or text, R21), `AI_INVALID_PROPOSAL` (R32) or `AI_ERROR` (anything
-    else).
+    else), or `AI_SUPERSEDED` (a newer message from the same trainer took over, F10).
   - **Docs:** add the codes to `docs/api-contract.md`'s common codes and to the `CLAUDE.md`
     mapping list.
 
@@ -237,7 +244,7 @@ Nothing found. Checked:
   proposal comes out (F8).
 - No existing composed endpoint changes.
 - Applying a proposal reuses `PUT /workouts/:id/exercises`, which already re-reads the full
-  workout (`routes.ts:70–103`).
+  workout (`workout-exercises/routes.ts:70–96`).
 
 ### 7. Performance
 
@@ -296,8 +303,12 @@ Nothing found. Checked:
     history or proposal (`grep -rn "console\.\|logger\." src/modules` shows no body logging
     today; keep it that way).
   - **New env vars:** `VERTICE_AI_URL` and `SERVICE_JWT_SECRET`, with the same strength guards as
-    `JWT_SECRET` (`env.ts:147–167`). The secret must differ from `JWT_SECRET`, and the env guard
+    `JWT_SECRET` (`env.ts:154–167`). The secret must differ from `JWT_SECRET`, and the env guard
     should check that.
+  - **Signer:** the `vertice-ai` token comes from a separate signer that only ever uses
+    `SERVICE_JWT_SECRET` and `aud: "vertice-ai"`. It carries `uid` and `role` per request, so it
+    isn't process-cached the way `serviceToken()` is. Reusing `serviceToken()` would hand the
+    service most exposed to untrusted text a live vertice-api credential.
   - **LGPD:** the processor question (consent text, data inventory) is a product and legal
     decision recorded in the PRD's §8, not a BFF one. It blocks turning the flag on, not building
     the feature.
@@ -320,8 +331,11 @@ Nothing found. Checked:
 - **Where:** an in-memory map keyed by trainer id in the new module, like the attempt limiter's
   in-memory buckets (`src/lib/attempt-limiter.ts`).
 - **Recommendation:**
-  - Answer 409 `CONFLICT` when a message is already running for this trainer, and free the slot
-    on `done`, `error` or abort.
+  - **Supersede, don't refuse:** a new message from the same trainer aborts the running upstream
+    call for that trainer (through its `AbortController`) and takes the slot. The superseded
+    stream ends with an `error` event `AI_SUPERSEDED`.
+  - A 409 would break R16 and R22. After "Parar" or "Tentar novamente", the next message can
+    reach the BFF before the old connection's close does.
   - Because it's in memory per task, it only bounds each BFF task, not the whole service. Note
     that in the spec.
 
@@ -331,15 +345,16 @@ Nothing found. Checked:
   keeps generating and the tokens are billed anyway.
 - **Where:** the new route and client.
 - **Recommendation:** wire the abort end to end and test it with a stub upstream that checks it
-  was cancelled. `vertice-ai` must also stop the model call on disconnect; that belongs in its
+  was cancelled. Every error the BFF raises itself (`AI_TIMEOUT`, `AI_INVALID_PROPOSAL`,
+  `AI_ERROR`, `AI_SUPERSEDED`) also aborts the upstream request and ends the response. `vertice-ai` must also stop the model call on disconnect; that belongs in its
   own spec.
 
 ### 9. Testing
 
-What to test is listed in §6. This would be the first streaming test in the repo. Tests today
-(`find src -name "*.test.ts"`) cover schemas, config, plugins and `lib`; routes are not tested
-against a live upstream. The new module follows the same approach, with a stub `vertice-ai`
-served over HTTP.
+What to test is listed in §6. This would be the first streaming test in the repo. Routes are
+already tested against a faked `grpcCall` (`src/modules/*/routes.test.ts` in eight modules, and
+`src/test/route-authorization.test.ts` with `fakeUpstream.ts`). The new module follows that
+approach, plus a stub `vertice-ai` served over HTTP.
 
 ### 10. Documentation
 
@@ -371,7 +386,7 @@ tool that calls back into the BFF, or (c) resolve names. The recommendation is (
 **Ownership:**
 - Another trainer's plan or workout is refused.
 - A `workoutId` from a different plan is refused.
-- An exercise id the trainer can't see is answered like "not found".
+- An exercise id the trainer can't see gets 400 `VALIDATION_ERROR`, the same answer as an unknown one.
 
 **Proposal validation:**
 - An id outside the candidates, 21 exercises, an out-of-range weight, or an extra name field
@@ -385,10 +400,13 @@ tool that calls back into the BFF, or (c) resolve names. The recommendation is (
 - An upstream 503 gives `AI_UNAVAILABLE`.
 - A client abort cancels the upstream request.
 
-**Concurrency:** a second message from the same trainer gets 409, and the slot frees on done,
-error and abort.
+**Concurrency:** a second message from the same trainer aborts the first, the first's upstream
+sees the cancel, and the first stream ends with `AI_SUPERSEDED`. The slot frees on done, error
+and abort.
 
 **Config:**
+- The token sent to the stub `vertice-ai` fails `verifyToken` and was not signed with
+  `JWT_SECRET`.
 - `SERVICE_JWT_SECRET` has the same guards as `JWT_SECRET` and is refused when equal to it.
 - `AI_ASSISTANT_ENABLED` defaults to false.
 - When the flag is off, the route answers 503.
@@ -461,5 +479,5 @@ build and test against a stub.
   logging rule.
 - F8: module, path, event names, and how the events reach the OpenAPI document.
 - F9: what each other workout contributes to the context, and how many upstream calls it costs.
-- F10: one in-flight message per trainer.
+- F10: one in-flight message per trainer; a new message supersedes the running one.
 - F11: new error codes, before and inside the stream.
