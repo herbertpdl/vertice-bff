@@ -8,6 +8,8 @@ import authenticatePlugin from './plugins/authenticate.js'
 import rateLimitPlugin, { type RateLimitSettings } from './plugins/rate-limit.js'
 
 import authRoutes from './modules/auth/routes.js'
+import adminAuthRoutes from './modules/admin-auth/routes.js'
+import adminRoutes from './modules/admin/routes.js'
 import clientRoutes from './modules/clients/routes.js'
 import exerciseRoutes, { muscleGroupRoutes } from './modules/exercises/routes.js'
 import trainingPlanRoutes from './modules/training-plans/routes.js'
@@ -129,6 +131,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await api.register(feedbackRoutes, { prefix: '/feedback' })
       await api.register(dashboardRoutes, { prefix: '/dashboard' })
       await api.register(legalRoutes, { prefix: '/legal' })
+      // Siblings: the sign-in steps are public, everything else under /admin is ADMIN-only (B7).
+      await api.register(adminAuthRoutes, { prefix: '/admin/auth' })
+      await api.register(adminRoutes, { prefix: '/admin' })
     },
     { prefix: '/api' },
   )

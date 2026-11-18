@@ -1,9 +1,23 @@
 import jwt from 'jsonwebtoken'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
-import { MOBILE_SESSION_TTL_SECONDS, serviceToken, signToken, tokenExpiresAt, verifyToken, type AuthUser } from './jwt.js'
+import {
+  ADMIN_CHALLENGE_AUDIENCE,
+  ADMIN_CHALLENGE_TTL_SECONDS,
+  ADMIN_SESSION_MAX_SECONDS,
+  ADMIN_SESSION_TTL_SECONDS,
+  MOBILE_SESSION_TTL_SECONDS,
+  serviceToken,
+  signAdminChallenge,
+  signAdminToken,
+  signToken,
+  tokenExpiresAt,
+  verifyAdminChallenge,
+  verifyToken,
+  type AuthUser,
+} from './jwt.js'
 
-const user: AuthUser = { id: 1, role: 'ADMIN' }
+const user: AuthUser = { id: 1, role: 'TRAINER' }
 const scope = { issuer: 'vertice-bff', audience: 'vertice-api' }
 
 describe('signToken / verifyToken', () => {
@@ -16,7 +30,7 @@ describe('signToken / verifyToken', () => {
   it('carries only the identity, the role and the iss/aud/exp scope (no name, no email)', () => {
     const claims = jwt.decode(signToken(user)) as jwt.JwtPayload
     expect(Object.keys(claims).sort()).toEqual(['aud', 'exp', 'iat', 'iss', 'role', 'sub'])
-    expect(claims).toMatchObject({ sub: '1', role: 'ADMIN', iss: 'vertice-bff', aud: 'vertice-api' })
+    expect(claims).toMatchObject({ sub: '1', role: 'TRAINER', iss: 'vertice-bff', aud: 'vertice-api' })
     expect(claims.exp).toBeGreaterThan(claims.iat!)
   })
 
@@ -149,5 +163,110 @@ describe('serviceToken', () => {
     const second = serviceToken()
     expect(second).not.toBe(first)
     expect((jwt.decode(second) as jwt.JwtPayload).iat).toBe(Date.parse('2030-01-01T00:00:50Z') / 1000)
+  })
+})
+
+describe('admin tokens (admin-panel spec B3, vertice-api D6)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+  const now = () => Math.floor(Date.now() / 1000)
+  const adminScope = { ...scope, subject: '1', algorithm: 'HS256' as const }
+  /** An ADMIN token with these claims, signed by hand (what signAdminToken refuses to make). */
+  const crafted = (claims: Record<string, unknown>) =>
+    jwt.sign({ role: 'ADMIN', amr: ['pwd', 'otp'], auth_time: now() - 1, iat: now() - 1, exp: now() + 1799, ...claims }, env.JWT_SECRET, adminScope)
+
+  it('carry role ADMIN, amr ["pwd","otp"], auth_time = iat, 30 minutes, and verify with authTime', () => {
+    const authTime = now() - 1
+    const token = signAdminToken({ id: 1, authTime, issuedAt: authTime })
+    const claims = jwt.decode(token) as jwt.JwtPayload
+    expect(Object.keys(claims).sort()).toEqual(['amr', 'aud', 'auth_time', 'exp', 'iat', 'iss', 'role', 'sub'])
+    expect(claims).toMatchObject({ sub: '1', role: 'ADMIN', amr: ['pwd', 'otp'], auth_time: authTime, iat: authTime })
+    expect(claims.exp! - claims.iat!).toBe(ADMIN_SESSION_TTL_SECONDS)
+    expect(ADMIN_SESSION_TTL_SECONDS).toBe(1800)
+    expect(verifyToken(token)).toStrictEqual({ id: 1, role: 'ADMIN', authTime })
+  })
+
+  it('never expire after auth_time + 12h: a renewal at 11h50m ends exactly at the cap', () => {
+    const authTime = now() - (11 * 3600 + 50 * 60)
+    const issuedAt = now() - 1
+    const claims = jwt.decode(signAdminToken({ id: 1, authTime, issuedAt })) as jwt.JwtPayload
+    expect(claims.exp).toBe(authTime + ADMIN_SESSION_MAX_SECONDS)
+    expect(claims.exp! - claims.iat!).toBeLessThanOrEqual(ADMIN_SESSION_TTL_SECONDS)
+  })
+
+  it('refuse to sign an iat before auth_time, or past the 12h cap', () => {
+    expect(() => signAdminToken({ id: 1, authTime: now(), issuedAt: now() - 5 })).toThrow(/not before auth_time/)
+    const authTime = now() - ADMIN_SESSION_MAX_SECONDS
+    expect(() => signAdminToken({ id: 1, authTime, issuedAt: authTime + ADMIN_SESSION_MAX_SECONDS })).toThrow(/12h cap/)
+  })
+
+  it.each([
+    ['the plain 8h ADMIN token /auth/login signs', () => signToken({ id: 1, role: 'ADMIN' })],
+    ['no amr', () => crafted({ amr: undefined })],
+    ['amr without "otp"', () => crafted({ amr: ['pwd'] })],
+    ['amr that is not a list', () => crafted({ amr: 'otp' })],
+    ['no auth_time', () => crafted({ auth_time: undefined })],
+    ['auth_time after iat', () => crafted({ auth_time: now(), iat: now() - 10, exp: now() + 1700 })],
+    ['auth_time 12h + 1s ago', () => crafted({ auth_time: now() - ADMIN_SESSION_MAX_SECONDS - 1, iat: now() - 60, exp: now() + 60 })],
+    ['exp - iat of 31 minutes', () => crafted({ exp: now() - 1 + 31 * 60 })],
+    ['a mobile session claim', () => crafted({ session: 'mobile' })],
+  ])('refuse an ADMIN token with %s', (_, token) => {
+    expect(() => verifyToken(token())).toThrow()
+  })
+
+  it('ignore amr/auth_time on other roles', () => {
+    const token = jwt.sign({ role: 'TRAINER', amr: ['pwd'] }, env.JWT_SECRET, { ...adminScope, expiresIn: 60 })
+    expect(verifyToken(token)).toStrictEqual({ id: 1, role: 'TRAINER' })
+  })
+})
+
+describe('admin challenge (admin-panel spec B2)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('has its own audience, token_use, amr ["pwd"], no role, 5 minutes, and round-trips', () => {
+    const token = signAdminChallenge(1)
+    const claims = jwt.decode(token) as jwt.JwtPayload
+    expect(Object.keys(claims).sort()).toEqual(['amr', 'aud', 'exp', 'iat', 'iss', 'sub', 'token_use'])
+    expect(claims).toMatchObject({ sub: '1', aud: ADMIN_CHALLENGE_AUDIENCE, token_use: 'admin_challenge', amr: ['pwd'] })
+    expect(claims.exp! - claims.iat!).toBe(ADMIN_CHALLENGE_TTL_SECONDS)
+    expect(verifyAdminChallenge(token)).toEqual({ id: 1 })
+  })
+
+  it('is refused by verifyToken, so it authenticates no route', () => {
+    expect(() => verifyToken(signAdminChallenge(1))).toThrow(/audience invalid/)
+  })
+
+  it('expires at 5 minutes + 1 second', () => {
+    vi.useFakeTimers({ now: new Date('2030-01-01T00:00:00Z'), toFake: ['Date'] })
+    const token = signAdminChallenge(1)
+    vi.setSystemTime(new Date('2030-01-01T00:04:59Z'))
+    expect(verifyAdminChallenge(token)).toEqual({ id: 1 })
+    vi.setSystemTime(new Date('2030-01-01T00:05:01Z'))
+    expect(() => verifyAdminChallenge(token)).toThrow(/expired/)
+  })
+
+  it.each([
+    ['a user token', () => signToken({ id: 1, role: 'TRAINER' })],
+    ['an admin session token', () => signAdminToken({ id: 1, authTime: Math.floor(Date.now() / 1000), issuedAt: Math.floor(Date.now() / 1000) })],
+    ['the service token', () => serviceToken()],
+    [
+      'the right audience without token_use',
+      () => jwt.sign({}, env.JWT_SECRET, { ...scope, audience: ADMIN_CHALLENGE_AUDIENCE, subject: '1', expiresIn: 60 }),
+    ],
+    [
+      'the right audience with a role',
+      () =>
+        jwt.sign({ token_use: 'admin_challenge', role: 'ADMIN' }, env.JWT_SECRET, {
+          ...scope,
+          audience: ADMIN_CHALLENGE_AUDIENCE,
+          subject: '1',
+          expiresIn: 60,
+        }),
+    ],
+  ])('verifyAdminChallenge refuses %s', (_, token) => {
+    expect(() => verifyAdminChallenge(token())).toThrow()
   })
 })

@@ -106,7 +106,7 @@ describe('issueSetupTokens', () => {
     expect(new Set(upstreamCallers.map((c) => c.caller))).toEqual(new Set(['service:ops']))
   })
 
-  it('mints a scoped, short-lived service:ops token allowed on exactly what the script needs', () => {
+  it('mints a scoped, short-lived service:ops token allowed on exactly what the ops scripts need', () => {
     const claims = jwt.verify(opsToken(), env.JWT_SECRET, {
       algorithms: ['HS256'],
       issuer: 'vertice-bff',
@@ -114,7 +114,13 @@ describe('issueSetupTokens', () => {
     }) as jwt.JwtPayload
     expect(claims).toMatchObject({ sub: 'service:ops', role: 'SERVICE' })
     expect(claims.exp! - claims.iat!).toBe(60)
-    expect([...OPS_TOKEN_RPCS].sort()).toEqual(['CreatePasswordSetupToken', 'ListUsers'])
+    expect([...OPS_TOKEN_RPCS].sort()).toEqual([
+      'CreateAdmin',
+      'CreatePasswordSetupToken',
+      'IssueAdminSetupToken',
+      'ListUsers',
+      'ResetAdminSecondFactor',
+    ])
     expect([...OPS_TOKEN_RPCS].sort()).toEqual([...API_SERVICE_SUBJECT_RPCS['service:ops']!].sort())
   })
 })

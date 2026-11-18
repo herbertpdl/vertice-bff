@@ -58,6 +58,9 @@ describe('OpenAPI document', () => {
         'POST /api/auth/login',
         'POST /api/auth/register',
         'POST /api/auth/password/setup',
+        'POST /api/admin/auth/login',
+        'POST /api/admin/auth/enroll',
+        'POST /api/admin/auth/verify',
       ].sort(),
     )
     expect(operations.filter(({ op }) => op.security === undefined).map(({ key }) => key)).toEqual([])

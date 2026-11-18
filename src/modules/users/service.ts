@@ -219,13 +219,16 @@ export const INVALID_CREDENTIALS_MESSAGE = 'Invalid email or password'
  * Checks an email/password pair upstream (`VerifyCredentials`, bcrypt + a dummy compare for an
  * unknown email). Every refusal becomes the same `UnauthorizedError`. Login has no user yet, so
  * it goes out with the service token; a password change keeps the user's own token.
+ *
+ * `requiredRole` (the admin login's `ADMIN`, admin-panel spec B8) makes vertice-api refuse a user
+ * of any other role exactly like a wrong password; omitted, the field stays unset upstream.
  */
-export async function verifyCredentials(email: string, password: string): Promise<User> {
+export async function verifyCredentials(email: string, password: string, requiredRole?: Role): Promise<User> {
   try {
-    const res = await grpcCall<{ email: string; password: string }, UserResponse>(
+    const res = await grpcCall<{ email: string; password: string; requiredRole?: Role }, UserResponse>(
       userClient,
       'VerifyCredentials',
-      { email, password },
+      requiredRole === undefined ? { email, password } : { email, password, requiredRole },
       { asService: true },
     )
     return toUser(res)

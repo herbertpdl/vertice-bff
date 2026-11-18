@@ -29,8 +29,10 @@ export interface Session {
 export type SessionClient = 'mobile' | 'web'
 
 /**
- * Only trainers and clients use the mobile app (PRD §2). ADMIN has no defined product (P1-02), so it
- * never gets a long-lived token: with the header it still gets a web session.
+ * Only trainers and clients use the mobile app (PRD §2); an admin signs in at `POST
+ * /admin/auth/login` (admin-panel spec). Until VRT-28 refuses it (403 `ADMIN_LOGIN_ELSEWHERE`),
+ * `/auth/login` still signs an ADMIN the plain 8h web token, only so the web can read the role and
+ * drop it; `verifyToken` and vertice-api both refuse that token (no `amr`/`auth_time`).
  */
 const MOBILE_ROLES: readonly Role[] = ['TRAINER', 'CLIENT']
 

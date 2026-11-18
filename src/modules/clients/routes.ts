@@ -16,7 +16,7 @@ import {
 export default async function clientRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
   // TRAINER only: every route here is scoped to "one of *your* clients", which an ADMIN has
-  // none of. ADMIN has no defined product yet (P1-02); it gets a 403 until a PRD defines it.
+  // none of. ADMIN gets a 403: the admin panel reads users through /api/admin (admin-panel spec).
   app.addHook('preHandler', app.requireRole('TRAINER'))
 
   app.get(

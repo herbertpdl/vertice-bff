@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package vertice.admin.v1;
+
+option java_package = "com.vertice.api.generated.grpc.admin.v1";
+option java_multiple_files = true;
+
+// Second factor for admin sign-in (admin-panel spec D5, D8): TOTP per RFC 6238 (SHA-1, 6 digits,
+// 30-second period). service:bff only: the BFF calls these while the admin holds only its challenge
+// token, and signs the admin token (with amr ["otp"] and auth_time) only after VerifySecondFactor
+// succeeds. Any other caller is PERMISSION_DENIED (no token: UNAUTHENTICATED). The user_id must be a
+// non-deleted ADMIN, else PERMISSION_DENIED.
+service AdminAuthService {
+  // Whether the admin has a confirmed authenticator.
+  rpc GetSecondFactorState(GetSecondFactorStateRequest) returns (GetSecondFactorStateResponse);
+  // Starts (or restarts) enrolment: a new secret replaces any unconfirmed one. FAILED_PRECONDITION
+  // "Second factor already enrolled" once confirmed. The URI is the only time the secret leaves the
+  // API; it is never logged.
+  rpc StartSecondFactorEnrollment(StartSecondFactorEnrollmentRequest) returns (StartSecondFactorEnrollmentResponse);
+  // Checks a code against the confirmed secret, or the pending one (which confirms enrolment).
+  // Codes of the current 30-second step and the one before and after are accepted, each step once.
+  // UNAUTHENTICATED "Invalid second-factor code" (wrong, reused or outside the window);
+  // FAILED_PRECONDITION "Second factor not enrolled"; RESOURCE_EXHAUSTED
+  // "Too many second-factor attempts; retry after N seconds" while locked. Five consecutive
+  // failures lock the factor for 15 minutes; a code sent during a lock is refused without being
+  // counted.
+  rpc VerifySecondFactor(VerifySecondFactorRequest) returns (VerifySecondFactorResponse);
+}
+
+enum SecondFactorState {
+  SECOND_FACTOR_STATE_UNSPECIFIED = 0;
+  // No authenticator, or enrolment started but not confirmed.
+  SECOND_FACTOR_STATE_NOT_ENROLLED = 1;
+  SECOND_FACTOR_STATE_ENROLLED = 2;
+}
+
+message GetSecondFactorStateRequest {
+  int64 user_id = 1;
+}
+
+message GetSecondFactorStateResponse {
+  SecondFactorState state = 1;
+}
+
+message StartSecondFactorEnrollmentRequest {
+  int64 user_id = 1;
+}
+
+message StartSecondFactorEnrollmentResponse {
+  // otpauth://totp/Vertice%20Admin:<email>?secret=<base32>&issuer=Vertice%20Admin&algorithm=SHA1&digits=6&period=30
+  string provisioning_uri = 1;
+}
+
+message VerifySecondFactorRequest {
+  int64 user_id = 1;
+  // Exactly 6 ASCII digits, else INVALID_ARGUMENT.
+  string code = 2;
+}
+
+message VerifySecondFactorResponse {
+  // True when this code confirmed a pending enrolment.
+  bool enrolled_now = 1;
+}

@@ -15,6 +15,104 @@
       }
     },
     "schemas": {
+      "AdminChallenge": {
+        "type": "object",
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "description": "Opaque. Send it in the body of `POST /api/admin/auth/enroll` and `/verify` only, never as a bearer (it is a 401 there). Reusable until it expires."
+          },
+          "challengeExpiresAt": {
+            "type": "string",
+            "description": "When `challenge` expires: 5 minutes after the password step."
+          },
+          "secondFactor": {
+            "type": "string",
+            "enum": [
+              "ENROLLED",
+              "NOT_ENROLLED"
+            ],
+            "description": "`NOT_ENROLLED`: enroll, then verify. `ENROLLED`: go straight to the code step."
+          }
+        },
+        "required": [
+          "challenge",
+          "challengeExpiresAt",
+          "secondFactor"
+        ],
+        "additionalProperties": false
+      },
+      "AdminEnrollRequest": {
+        "type": "object",
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "challenge"
+        ]
+      },
+      "AdminEnrollment": {
+        "type": "object",
+        "properties": {
+          "provisioningUri": {
+            "type": "string",
+            "description": "The `otpauth://totp/...` URI with the new secret. Render it as a QR code in-process (never through a third-party service), never log or store it. Each enroll call replaces it with a new secret."
+          }
+        },
+        "required": [
+          "provisioningUri"
+        ],
+        "additionalProperties": false
+      },
+      "AdminSession": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The admin bearer token. Send it only from the admin host."
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "When `token` expires: 30 minutes after it was issued, never after `sessionEndsAt`. Renew before this with `POST /api/admin/auth/renew`."
+          },
+          "sessionEndsAt": {
+            "type": "string",
+            "description": "The sign-in’s hard cap, 12 hours after the code step. Renewal never moves it."
+          },
+          "user": {
+            "$ref": "#/components/schemas/SessionUser"
+          }
+        },
+        "required": [
+          "token",
+          "expiresAt",
+          "sessionEndsAt",
+          "user"
+        ],
+        "additionalProperties": false
+      },
+      "AdminVerifyRequest": {
+        "type": "object",
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$"
+          }
+        },
+        "required": [
+          "challenge",
+          "code"
+        ]
+      },
       "AuthSession": {
         "type": "object",
         "properties": {
@@ -779,7 +877,9 @@
           "INVALID_CURRENT_PASSWORD",
           "INVALID_SETUP_TOKEN",
           "ACTIVE_CLIENTS",
-          "SESSION_NOT_RENEWABLE"
+          "SESSION_NOT_RENEWABLE",
+          "CHALLENGE_INVALID",
+          "INVALID_SECOND_FACTOR_CODE"
         ]
       },
       "ErrorResponse": {
@@ -2408,7 +2508,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Public: no token needed. The password is checked by vertice-api. A wrong password, an unknown email and an account with no password yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited. With `X-Vertice-Client: mobile` a TRAINER or CLIENT gets a 90-day mobile session, renewable with `POST /auth/session/renew`; without it (and for ADMIN) the 8h web session.",
+        "description": "Public: no token needed. The password is checked by vertice-api. A wrong password, an unknown email and an account with no password yet all get the same 401 `UNAUTHORIZED` “Invalid email or password”. Failed attempts are rate limited. With `X-Vertice-Client: mobile` a TRAINER or CLIENT gets a 90-day mobile session, renewable with `POST /auth/session/renew`; without it (and for ADMIN) the 8h web session. An admin signs in at `POST /admin/auth/login` instead: the token this route signs an ADMIN is refused everywhere.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2456,7 +2556,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2598,7 +2698,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2655,7 +2755,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2672,7 +2772,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Any authenticated role. LGPD art. 18 III. Every field is optional and an omitted one keeps the stored value. The role cannot change. `cpf`: a string sets it (the mask `GET /auth/me` returns is refused), `null` removes it (a trainer’s CPF is required). `cref` is a trainer’s only. No email verification yet.",
+        "description": "Roles: TRAINER, CLIENT. LGPD art. 18 III. Every field is optional and an omitted one keeps the stored value. The role cannot change. `cpf`: a string sets it (the mask `GET /auth/me` returns is refused), `null` removes it (a trainer’s CPF is required). `cref` is a trainer’s only. No email verification yet.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2687,6 +2787,10 @@
           {
             "bearerAuth": []
           }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
         ],
         "responses": {
           "200": {
@@ -2710,7 +2814,17 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2737,7 +2851,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Any authenticated role. LGPD art. 18 VI. Re-checks `password` first (a wrong one is 400 `INVALID_CURRENT_PASSWORD`, not a 401). A trainer with active clients gets 409 `ACTIVE_CLIENTS`. Every token of the account stops working afterwards.",
+        "description": "Roles: TRAINER, CLIENT. LGPD art. 18 VI. Re-checks `password` first (a wrong one is 400 `INVALID_CURRENT_PASSWORD`, not a 401). A trainer with active clients gets 409 `ACTIVE_CLIENTS`. Every token of the account stops working afterwards.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2752,6 +2866,10 @@
           {
             "bearerAuth": []
           }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
         ],
         "responses": {
           "204": {
@@ -2768,7 +2886,17 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2828,7 +2956,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2857,11 +2985,15 @@
         "tags": [
           "Auth"
         ],
-        "description": "Any authenticated role. LGPD art. 18 II and V. vertice-api’s export document, passed through as a file download (`Content-Disposition: attachment; filename=\"vertice-dados-YYYY-MM-DD.json\"`). Over the export bounds it is 413 `TOO_LARGE` rather than a truncated file. 3 per hour per user.",
+        "description": "Roles: TRAINER, CLIENT. LGPD art. 18 II and V. vertice-api’s export document, passed through as a file download (`Content-Disposition: attachment; filename=\"vertice-dados-YYYY-MM-DD.json\"`). Over the export bounds it is 413 `TOO_LARGE` rather than a truncated file. 3 per hour per user.",
         "security": [
           {
             "bearerAuth": []
           }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
         ],
         "responses": {
           "200": {
@@ -2875,7 +3007,17 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2952,7 +3094,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3002,7 +3144,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3108,7 +3250,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3176,7 +3318,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3269,7 +3411,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3359,7 +3501,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3442,7 +3584,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3524,7 +3666,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3606,7 +3748,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3731,7 +3873,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3809,7 +3951,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3886,7 +4028,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3955,7 +4097,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4045,7 +4187,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4118,7 +4260,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4225,7 +4367,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4275,7 +4417,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4342,7 +4484,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4410,7 +4552,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4493,7 +4635,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4583,7 +4725,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4656,7 +4798,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4752,7 +4894,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4842,7 +4984,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4928,7 +5070,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5001,7 +5143,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5091,7 +5233,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5164,7 +5306,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5257,7 +5399,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5349,7 +5491,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5435,7 +5577,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5525,7 +5667,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5615,7 +5757,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5717,7 +5859,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5790,7 +5932,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5886,7 +6028,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5976,7 +6118,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6068,7 +6210,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6141,7 +6283,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6243,7 +6385,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6345,7 +6487,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6463,7 +6605,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6555,7 +6697,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6657,7 +6799,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6742,7 +6884,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6837,7 +6979,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6929,7 +7071,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6992,7 +7134,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7042,7 +7184,7 @@
             }
           },
           "401": {
-            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).",
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7086,6 +7228,275 @@
           }
         }
       }
+    },
+    "/api/admin/auth/login": {
+      "post": {
+        "operationId": "adminLogin",
+        "summary": "Admin sign-in: the password step",
+        "tags": [
+          "Admin auth"
+        ],
+        "description": "Public: no token needed. Checks the password of an ADMIN account and answers a short-lived challenge, never a session. A wrong password, an unknown email, an account with no password and a trainer’s or client’s correct password all get the same 401 `UNAUTHORIZED` “Invalid email or password”. `secondFactor` says whether to enroll an authenticator first. Failed attempts are rate limited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The challenge for the code step.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminChallenge"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/auth/enroll": {
+      "post": {
+        "operationId": "adminEnroll",
+        "summary": "Admin sign-in: start authenticator enrolment",
+        "tags": [
+          "Admin auth"
+        ],
+        "description": "Public: no token needed. With the challenge of an admin who has no authenticator yet, answers the `otpauth://` provisioning URI (it contains a new secret; each call replaces it). Enrolment completes at `POST /api/admin/auth/verify` with a code from that secret. An invalid or expired challenge is 401 `CHALLENGE_INVALID` (sign in again); an admin already enrolled is 409 `PRECONDITION_FAILED` (go to the code step). Every call is rate limited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminEnrollRequest"
+              }
+            }
+          }
+        },
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The provisioning URI, to show as a QR code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminEnrollment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/auth/verify": {
+      "post": {
+        "operationId": "adminVerify",
+        "summary": "Admin sign-in: the code step",
+        "tags": [
+          "Admin auth"
+        ],
+        "description": "Public: no token needed. Checks the 6-digit authenticator code and answers the admin session: a 30-minute token, renewable up to `sessionEndsAt` (12 hours). A wrong, reused or expired code is 400 `INVALID_SECOND_FACTOR_CODE` (same challenge, try again). An invalid or expired challenge is 401 `CHALLENGE_INVALID` and no authenticator on record is 409 `PRECONDITION_FAILED`: sign in again from the password. After 5 wrong codes the authenticator is locked for 15 minutes: 429 `RATE_LIMITED` with `Retry-After`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminVerifyRequest"
+              }
+            }
+          }
+        },
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The admin session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/auth/renew": {
+      "post": {
+        "operationId": "adminRenew",
+        "summary": "Renew the admin session",
+        "tags": [
+          "Admin auth"
+        ],
+        "description": "Roles: ADMIN. Trades a valid admin token for a new one that expires 30 minutes from now, never after `sessionEndsAt` (which does not move). The old token stays valid until its own expiry. vertice-api is asked first, so a suspended, re-roled or reset admin, or one whose password changed, is 401 `UNAUTHENTICATED` and gets no new token. Renew on the admin’s own activity, throttled, never on a timer. No body.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "200": {
+            "description": "The new admin session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "servers": [
@@ -7098,6 +7509,10 @@
     {
       "name": "Auth",
       "description": "Login, registration, passwords and the caller’s own account (`/auth/me`, LGPD data-subject rights)."
+    },
+    {
+      "name": "Admin auth",
+      "description": "Admin sign-in for the admin panel: password, then the authenticator code, then a 30-minute token renewed up to 12 hours."
     },
     {
       "name": "Legal",

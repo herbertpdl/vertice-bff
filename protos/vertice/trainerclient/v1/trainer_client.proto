@@ -9,8 +9,10 @@ option java_package = "com.vertice.api.generated.grpc.trainerclient.v1";
 option java_multiple_files = true;
 
 service TrainerClientService {
-  // TRAINER for their own trainer_id, or ADMIN (any trainer). Returns the new client in the detail
-  // view: the caller is now their active trainer.
+  // TRAINER for their own trainer_id. Returns the new client in the detail
+  // view: the caller is now their active trainer. Once the client is saved, emails them their
+  // first-access link (three tries); first_access.send_result says how it went, and a failed send
+  // still keeps the client.
   rpc CreateClientForTrainer(CreateClientForTrainerRequest) returns (vertice.user.v1.UserResponse);
   // The trainer's active clients in the summary view (id, name, role): never email, cpf or cref
   // (P1-03).
@@ -25,7 +27,7 @@ service TrainerClientService {
   // they wrote: the client keeps reading them too.
   rpc EndTrainerClientRelationship(EndTrainerClientRelationshipRequest) returns (google.protobuf.Empty);
   // A CLIENT's active trainer, with only the contacts the trainer chose to show (and filled in):
-  // the client as themself, or ADMIN. NOT_FOUND when the client has no active trainer.
+  // the client as themself. NOT_FOUND when the client has no active trainer.
   rpc GetClientTrainer(GetClientTrainerRequest) returns (ClientTrainerResponse);
 }
 
@@ -46,8 +48,8 @@ message CreateClientForTrainerRequest {
   int64 trainer_id = 1;
   string name = 2;
   string email = 3;
-  // Optional. Empty creates the client without a password; they set one with a password setup
-  // token (UserService.CreatePasswordSetupToken).
+  // Must be empty (INVALID_ARGUMENT otherwise): the client chooses their own password through the
+  // first-access email, so nobody else ever knows it.
   string password = 4;
   // Optional (P1-04): empty creates the client without a CPF. Validated when set.
   string cpf = 5;

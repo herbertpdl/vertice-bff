@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package vertice.admin.v1;
+
+option java_package = "com.vertice.api.generated.grpc.admin.v1";
+option java_multiple_files = true;
+
+// Platform-team operations (admin-panel spec D9; PRD R10, R14). service:ops only: any other caller
+// is PERMISSION_DENIED (no token: UNAUTHENTICATED). Not written to the admin action history; each
+// call logs one INFO line with ids only. A user_id that is missing, deleted or not an ADMIN is
+// NOT_FOUND "User with id <id> not found".
+service AdminOpsService {
+  // Creates an ADMIN with no password and returns a setup token for it, which ops hands to the
+  // admin out of band; the admin sets the password on the "Definir senha" page and enrols the
+  // authenticator at the first sign-in. ALREADY_EXISTS "Email already in use".
+  rpc CreateAdmin(CreateAdminRequest) returns (CreateAdminResponse);
+  // A new setup token for an existing admin (forgotten password). Replaces the admin's unused ones.
+  rpc IssueAdminSetupToken(IssueAdminSetupTokenRequest) returns (IssueAdminSetupTokenResponse);
+  // Deletes the admin's second factor and ends every session of theirs (R10, E10); they enrol again
+  // at the next sign-in. Succeeds when there was no factor to delete.
+  rpc ResetAdminSecondFactor(ResetAdminSecondFactorRequest) returns (ResetAdminSecondFactorResponse);
+}
+
+message CreateAdminRequest {
+  // Not blank, at most 255 characters.
+  string name = 1;
+  // Normalized (trimmed, lower-cased), at most 255 characters.
+  string email = 2;
+}
+
+message CreateAdminResponse {
+  int64 user_id = 1;
+  // Raw, single use; only its hash is stored.
+  string setup_token = 2;
+  // Instant, ISO-8601 UTC.
+  string expires_at = 3;
+}
+
+message IssueAdminSetupTokenRequest {
+  int64 user_id = 1;
+}
+
+message IssueAdminSetupTokenResponse {
+  string setup_token = 1;
+  string expires_at = 2;
+}
+
+message ResetAdminSecondFactorRequest {
+  int64 user_id = 1;
+}
+
+message ResetAdminSecondFactorResponse {}

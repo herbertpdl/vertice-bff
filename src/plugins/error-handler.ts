@@ -1,11 +1,14 @@
 import type { FastifyInstance, FastifyError } from 'fastify'
 import fp from 'fastify-plugin'
 import { ZodError } from 'zod'
-import { HttpError } from '../lib/errors.js'
+import { HttpError, TooManyRequestsError } from '../lib/errors.js'
 
 export default fp(async function errorHandler(app: FastifyInstance) {
   app.setErrorHandler((error: FastifyError, request, reply) => {
     if (error instanceof HttpError) {
+      if (error instanceof TooManyRequestsError && error.retryAfterSeconds !== undefined) {
+        reply.header('retry-after', error.retryAfterSeconds)
+      }
       reply.status(error.statusCode).send({
         error: { code: error.code, message: error.message, details: error.details },
       })

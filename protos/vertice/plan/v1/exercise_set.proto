@@ -9,18 +9,18 @@ option java_multiple_files = true;
 
 service ExerciseSetService {
   // Authorization (P1-01, matrix in vertice-api CLAUDE.md): needs a user token. The plan's trainer
-  // reads and writes it and everything under it, its client only reads, ADMIN bypasses. To anyone
-  // else a missing id and someone else's id are the same PERMISSION_DENIED; ADMIN gets NOT_FOUND.
+  // reads and writes it and everything under it, its client only reads; ADMIN is refused. To anyone
+  // else a missing id and someone else's id are the same PERMISSION_DENIED.
 
-  // The plan's trainer or client, ADMIN.
+  // The plan's trainer or client.
   rpc ListExerciseSets(ListExerciseSetsRequest) returns (ListExerciseSetsResponse);
-  // The plan's trainer or client, ADMIN.
+  // The plan's trainer or client.
   rpc GetExerciseSet(GetExerciseSetRequest) returns (ExerciseSetResponse);
-  // The plan's trainer or ADMIN.
+  // The plan's trainer.
   rpc CreateExerciseSet(ExerciseSetCreateRequest) returns (ExerciseSetResponse);
-  // The plan's trainer or ADMIN.
+  // The plan's trainer.
   rpc UpdateExerciseSet(UpdateExerciseSetRequest) returns (ExerciseSetResponse);
-  // The plan's trainer or ADMIN.
+  // The plan's trainer.
   rpc DeleteExerciseSet(DeleteExerciseSetRequest) returns (google.protobuf.Empty);
 }
 

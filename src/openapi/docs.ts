@@ -13,6 +13,11 @@ import { errorResponseSchema } from './responses.js'
 /** Tag order is the order of the generated reference. */
 export const TAGS = [
   { name: 'Auth', description: 'Login, registration, passwords and the caller’s own account (`/auth/me`, LGPD data-subject rights).' },
+  {
+    name: 'Admin auth',
+    description:
+      'Admin sign-in for the admin panel: password, then the authenticator code, then a 30-minute token renewed up to 12 hours.',
+  },
   { name: 'Legal', description: 'Versions of the legal texts, for the consent flow.' },
   { name: 'Clients', description: 'A trainer’s roster of clients (TRAINER only).' },
   { name: 'Exercises', description: 'The exercise catalog (shared starter set plus each trainer’s own) and muscle groups.' },
@@ -30,7 +35,7 @@ type Tag = (typeof TAGS)[number]['name']
 
 const ERROR_DESCRIPTIONS = {
   400: 'A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.',
-  401: 'Missing, invalid or expired token (`UNAUTHORIZED`), or the account no longer exists (`UNAUTHENTICATED`).',
+  401: 'Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.',
   403: 'The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code.',
   404: 'Not found (`NOT_FOUND`).',
   409: 'Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).',

@@ -9,18 +9,18 @@ option java_multiple_files = true;
 
 service TrainingPlanService {
   // Authorization (P1-01, matrix in vertice-api CLAUDE.md): needs a user token. The plan's trainer
-  // reads and writes it and everything under it, its client only reads, ADMIN bypasses. To anyone
-  // else a missing id and someone else's id are the same PERMISSION_DENIED; ADMIN gets NOT_FOUND.
+  // reads and writes it and everything under it, its client only reads; ADMIN is refused. To anyone
+  // else a missing id and someone else's id are the same PERMISSION_DENIED.
 
-  // TRAINER: their own plans; CLIENT: the plans written for them; ADMIN: as filtered.
+  // TRAINER: their own plans; CLIENT: the plans written for them.
   rpc ListTrainingPlans(ListTrainingPlansRequest) returns (ListTrainingPlansResponse);
-  // The plan's trainer or client, ADMIN.
+  // The plan's trainer or client.
   rpc GetTrainingPlan(GetTrainingPlanRequest) returns (TrainingPlanResponse);
-  // TRAINER (as themself) or ADMIN; the client must be the trainer's active client.
+  // TRAINER (as themself); the client must be the trainer's active client.
   rpc CreateTrainingPlan(TrainingPlanCreateRequest) returns (TrainingPlanResponse);
-  // The plan's trainer or ADMIN; the client can't change and must still be an active client.
+  // The plan's trainer; the client can't change and must still be an active client.
   rpc UpdateTrainingPlan(UpdateTrainingPlanRequest) returns (TrainingPlanResponse);
-  // The plan's trainer or ADMIN.
+  // The plan's trainer.
   rpc DeleteTrainingPlan(DeleteTrainingPlanRequest) returns (google.protobuf.Empty);
 }
 
@@ -54,7 +54,7 @@ message TrainingPlanRequest {
 message TrainingPlanCreateRequest {
   string name = 1;
   string description = 2;
-  // A TRAINER caller: 0 or their own id (anything else is PERMISSION_DENIED). ADMIN: the trainer.
+  // A TRAINER caller: 0 or their own id (anything else is PERMISSION_DENIED).
   int64 trainer_id = 3;
   int64 client_id = 4;
   string start_date = 5;
