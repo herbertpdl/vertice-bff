@@ -172,8 +172,9 @@ Recommended shape: one trainer-only, stateless, streamed endpoint.
     contract, for example by publishing a schema per event under `components.schemas` so
     `api:types` picks them up.
   - **History:** the BFF keeps no conversation (R5: lost on leaving), so the web sends it every
-    time. Cap it, for example at the last 20 turns and 40,000 characters, and reject anything
-    over the cap.
+    time, as text-only turns (role and text). Cap it, for example at the last 20 turns and
+    40,000 characters, and reject anything over the cap. The web trims the oldest turns before
+    sending, so the cap is never hit in normal use (web assessment F9).
 
 **F9 — Medium — Building "the plan's other workouts" costs many upstream calls.**
 - **What:** `getFullWorkout` makes one `GetWorkout`, one `ListWorkoutExercises`, and a
@@ -198,8 +199,8 @@ Recommended shape: one trainer-only, stateless, streamed endpoint.
 - **Recommendation:**
   - **Ownership:** `assertOwnsPlan(trainingPlanId)`, and `assertOwnsWorkout(workoutId)` when an id
     is given. Check that the workout belongs to that plan.
-  - **Exercise ids:** run `assertCanUseExercises` on every id in `workout` and in the history's
-    proposals.
+  - **Exercise ids:** run `assertCanUseExercises` on every id in `workout`. History turns carry
+    text only, never proposals, because the current proposal is the on-screen `workout` (R36).
   - **Size:** parse with the existing 20/10 caps and field bounds.
   - **Name and weekday:** never accept either from the body (R28).
 
