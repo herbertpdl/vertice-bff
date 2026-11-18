@@ -35,7 +35,7 @@ All error responses have the shape:
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "...", "details": {} } }
 ```
-Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `CHALLENGE_INVALID` (401, admin sign-in only), `INVALID_SECOND_FACTOR_CODE` (400, admin sign-in only), `FORBIDDEN` (403), `ACCOUNT_SUSPENDED` (403, the two logins only), `ADMIN_LOGIN_ELSEWHERE` (403, `/auth/login` only), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `TOO_LARGE` (413), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503).
+Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `CHALLENGE_INVALID` (401, admin sign-in only), `INVALID_SECOND_FACTOR_CODE` (400, admin sign-in only), `FORBIDDEN` (403), `ACCOUNT_SUSPENDED` (403, the two logins only), `ADMIN_LOGIN_ELSEWHERE` (403, `/auth/login` only), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `NAME_TAKEN` and `EXERCISE_IN_USE` (409, admin exercise curation only), `TOO_LARGE` (413), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503).
 
 **Key on `code`, not on `message`.** Messages are English and meant for logs and debugging, except the two login refusals `ACCOUNT_SUSPENDED` and `ADMIN_LOGIN_ELSEWHERE`, whose message is the Portuguese text to show. When vertice-api refuses a call, the BFF relays vertice-api's own text only for `INVALID_ARGUMENT`, as a 400 `VALIDATION_ERROR` whose `message` is the field error (`name: must not be blank`). Every other upstream refusal gets a fixed message, and the upstream text goes to the BFF's log only, with emails and CPFs redacted:
 
@@ -45,7 +45,7 @@ Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), 
 | `NOT_FOUND` | 404 | `NOT_FOUND` | `Resource not found` |
 | `PERMISSION_DENIED` | 403 | `FORBIDDEN` | `You do not have access to this resource` |
 | `FAILED_PRECONDITION` | 409 | `PRECONDITION_FAILED` | `The resource's current state does not allow this request` |
-| `ALREADY_EXISTS` | 409 | `CONFLICT` | `Email or CPF already in use` (the same for both, so it never says which one is taken) |
+| `ALREADY_EXISTS` | 409 | `CONFLICT` | `Email or CPF already in use` (the same for both, so it never says which one is taken). The admin catalog and muscle-group writes answer it as `409 NAME_TAKEN` `Name already in use` instead |
 | `UNAUTHENTICATED` | 401 | `UNAUTHENTICATED` | `Session no longer valid` |
 | `UNAVAILABLE` | 503 | `UPSTREAM_UNAVAILABLE` | `vertice-api is unavailable` |
 | `RESOURCE_EXHAUSTED` | 413 | `TOO_LARGE` | `The requested data is too large to return` (`GET /auth/me/export` over vertice-api's export bounds). `POST /admin/auth/verify` answers its second-factor lock as `429 RATE_LIMITED` instead, with `Retry-After` set to the seconds vertice-api names (never in the body) |
@@ -59,11 +59,11 @@ Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), 
 
 Roles: `TRAINER`, `CLIENT`, `ADMIN`. Most write endpoints require `TRAINER`. Every id a route accepts (path, query or body) is checked against the caller: a `CLIENT` only reaches their own plans, workouts and workout logs; a `TRAINER` only their own plans and their own clients (`TrainerClientService.IsTrainersClient`). Another user's id is **403 `FORBIDDEN`**. A `CLIENT`'s `clientId` query parameter is ignored and replaced with their own id. `src/test/route-authorization.test.ts` pins this per route.
 
-**`ADMIN` is the admin panel's role** ([vertice-api admin-panel PRD](https://github.com/herbertpdl/vertice-api/blob/main/docs/prds/admin-panel/prd.md), [BFF spec](./specs/admin-panel/spec.md)). The separation is structural: every route under `/admin` (except the three public sign-in steps) is ADMIN only, by hooks on the `/admin` plugin itself, so a TRAINER or CLIENT token is **403 `FORBIDDEN`** there before any upstream call. Outside `/admin` an ADMIN keeps only `GET /auth/me`, `POST /auth/me/consent`, `POST /auth/password`, `GET /muscle-groups` and, until VRT-31, `GET /exercises` and `GET /exercises/:id` (which vertice-api already refuses to ADMIN, so they answer 403 from upstream). Every other route, `PATCH /auth/me`, `DELETE /auth/me` and `GET /auth/me/export` included (R16b: an admin's account is ops-managed), answers an ADMIN with **403 `FORBIDDEN` `Requires role: …`** before any upstream call; there is no ADMIN bypass in the BFF's ownership checks. `route-authorization.test.ts` pins all three lists. An ADMIN token is only ever the admin session token from `/admin/auth/verify` or `/admin/auth/renew`; any other token with `role: ADMIN` is a 401.
+**`ADMIN` is the admin panel's role** ([vertice-api admin-panel PRD](https://github.com/herbertpdl/vertice-api/blob/main/docs/prds/admin-panel/prd.md), [BFF spec](./specs/admin-panel/spec.md)). The separation is structural: every route under `/admin` (except the three public sign-in steps) is ADMIN only, by hooks on the `/admin` plugin itself, so a TRAINER or CLIENT token is **403 `FORBIDDEN`** there before any upstream call. Outside `/admin` an ADMIN keeps only `GET /auth/me`, `POST /auth/me/consent`, `POST /auth/password` and `GET /muscle-groups`; the catalog is read through `GET /admin/exercises` (VRT-31). Every other route, including `GET /exercises`, `GET /exercises/:id`, `PATCH /auth/me`, `DELETE /auth/me` and `GET /auth/me/export` (R16b: an admin's account is ops-managed), answers an ADMIN with **403 `FORBIDDEN` `Requires role: …`** before any upstream call; there is no ADMIN bypass in the BFF's ownership checks. `route-authorization.test.ts` pins all three lists. An ADMIN token is only ever the admin session token from `/admin/auth/verify` or `/admin/auth/renew`; any other token with `role: ADMIN` is a 401.
 
 **`GET /exercises` is always paged** (spec `docs/specs/lazy-exercise-search/spec.md`): the body is `{ exercises, nextCursor }`, at most `limit` rows (1–50, 30 when absent). For more, send `nextCursor` back as `cursor` with the same `muscleGroupId`/`q`; it is `null` on the last page. The cursor is opaque (today an offset, so a row added or removed between two requests can shift the rest by one); a malformed one is a 400 `VALIDATION_ERROR` from vertice-api. The web and mobile pickers and catalog screens don't call it until the search has 3 or more letters or a muscle group is chosen; that rule is the clients', not the route's.
 
-Which roles each route admits is the `Access` column of the route reference below. It is generated from the route declarations, and `src/test/route-authorization.test.ts` pins it to what the routes actually enforce. Notes: `GET /exercises` still admits ADMIN by role until VRT-31, but vertice-api refuses it (403); `GET /exercises/:id` is open to any role and vertice-api decides visibility; everything scoped to a trainer or a client is checked against the caller's own data on top of the role.
+Which roles each route admits is the `Access` column of the route reference below. It is generated from the route declarations, and `src/test/route-authorization.test.ts` pins it to what the routes actually enforce. Notes: `GET /exercises/:id` admits TRAINER and CLIENT, and vertice-api decides visibility; everything scoped to a trainer or a client is checked against the caller's own data on top of the role.
 
 <!-- BEGIN GENERATED ROUTE REFERENCE (npm run openapi) -->
 <!-- Generated from the routes by `npm run openapi`; CI fails when it is stale. Do not edit by hand. -->
@@ -102,7 +102,7 @@ Admin sign-in for the admin panel: password, then the authenticator code, then a
 
 ### Admin
 
-The admin panel: dashboard, user directory and profiles, action history, suspension, account e-mails and ending relationships (ADMIN only, with the admin session token).
+The admin panel: dashboard, user directory and profiles, action history, suspension, account e-mails, ending relationships and exercise curation (ADMIN only, with the admin session token).
 
 | Method | Path | Access | `operationId` | Summary |
 |---|---|---|---|---|
@@ -116,6 +116,14 @@ The admin panel: dashboard, user directory and profiles, action history, suspens
 | POST | `/api/admin/users/{id}/first-access-email` | ADMIN | `sendAdminFirstAccessEmail` | E-mail a client a new first-access link |
 | POST | `/api/admin/users/{id}/password-reset-email` | ADMIN | `sendAdminPasswordResetEmail` | E-mail a trainer or client a password-reset link |
 | DELETE | `/api/admin/relationships/{trainerId}/{clientId}` | ADMIN | `endAdminRelationship` | End a trainer–client relationship |
+| GET | `/api/admin/exercises` | ADMIN | `listAdminCatalogExercises` | One page of the exercise catalog, starter and private |
+| POST | `/api/admin/exercises` | ADMIN | `createAdminStarterExercise` | Create a starter exercise |
+| GET | `/api/admin/exercises/most-used` | ADMIN | `listAdminMostUsedExercises` | Exercises by how many workouts contain them |
+| PUT | `/api/admin/exercises/{id}` | ADMIN | `updateAdminStarterExercise` | Replace a starter exercise |
+| DELETE | `/api/admin/exercises/{id}` | ADMIN | `deleteAdminStarterExercise` | Delete a starter exercise |
+| POST | `/api/admin/exercises/{id}/promote` | ADMIN | `promoteAdminExercise` | Promote a trainer’s exercise to the starter set |
+| POST | `/api/admin/muscle-groups` | ADMIN | `createAdminMuscleGroup` | Create a muscle group |
+| PATCH | `/api/admin/muscle-groups/{id}` | ADMIN | `renameAdminMuscleGroup` | Rename a muscle group |
 
 ### Legal
 
@@ -145,10 +153,10 @@ The exercise catalog (shared starter set plus each trainer’s own) and muscle g
 
 | Method | Path | Access | `operationId` | Summary |
 |---|---|---|---|---|
-| GET | `/api/exercises` | TRAINER, ADMIN | `listExercises` | One page of the exercise catalog |
+| GET | `/api/exercises` | TRAINER | `listExercises` | One page of the exercise catalog |
 | POST | `/api/exercises` | TRAINER | `createExercise` | Create an exercise |
 | GET | `/api/exercises/with-progress` | TRAINER, CLIENT | `listProgressExercises` | Exercises with progress for a client |
-| GET | `/api/exercises/{id}` | any role | `getExercise` | One exercise |
+| GET | `/api/exercises/{id}` | TRAINER, CLIENT | `getExercise` | One exercise |
 | PATCH | `/api/exercises/{id}` | TRAINER | `updateExercise` | Replace an exercise |
 | DELETE | `/api/exercises/{id}` | TRAINER | `deleteExercise` | Delete an exercise |
 | GET | `/api/exercises/{id}/progress` | TRAINER, CLIENT | `getExerciseProgress` | Weight over time for one exercise |
@@ -302,6 +310,7 @@ Every request body and query string is parsed with Zod before any upstream call;
 | Input | Rule |
 |---|---|
 | user `name`, plan `name`, workout `name`, exercise `name` | not blank, ≤ 255 |
+| muscle-group `name` (admin) | NFC-normalized and trimmed, then 1..50 |
 | `email` | trimmed, lower-cased, valid, ≤ 255 (also on `PATCH /clients/:id`) |
 | `password` (register, setup, change) | ≥ 8 characters, ≤ 72 UTF-8 bytes, not blank. **Login and the current-password re-check** only need 1..1000 characters (no policy, uniform 401) |
 | `cpf` | register: required. Clients (create, PATCH) and `PATCH /me`: optional. When set: exactly 11 digits, no punctuation, valid check digits; `""` means none |
@@ -401,11 +410,11 @@ Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.1 (B1�
 **Ops** (no route): `npm run ops:create-admin`, `ops:issue-admin-setup-token`, `ops:reset-admin-2fa`, `ops:suspend-admin`, `ops:reactivate-admin` (README "Operations"; the panel never suspends an admin, R14). The setup link is the www "Definir senha" page; `POST /auth/password/setup` answers `{role: "ADMIN", email}`, so the web can send the admin on to the admin host.
 
 ## Admin panel — `/admin` (ADMIN only)
-Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.2 (B12, B13, B16). Every route here is behind the `/admin` plugin's hooks: the admin session token (from `/admin/auth/verify` or `/renew`), else `401`; a TRAINER or CLIENT token is **`403 FORBIDDEN`** before any upstream call. Each route is one `vertice.admin.v1.AdminService` RPC with the caller's token; vertice-api re-checks ADMIN and the second-factor claims on every call. **Admins are invisible** in every list and count, and a missing or deleted user, or an admin (the caller included), is **`404 NOT_FOUND`** (one answer, no oracle). Responses are built field by field; enum values carry no upstream prefix (`TRAINER`, `SUSPENDED`, `VIEW_USER_PROFILE`).
+Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.2–§2.4 (B11–B13, B16, B18). Every route here is behind the `/admin` plugin's hooks: the admin session token (from `/admin/auth/verify` or `/renew`), else `401`; a TRAINER or CLIENT token is **`403 FORBIDDEN`** before any upstream call. Each route is one `vertice.admin.v1` RPC (`AdminService`; `AdminCatalogService` for exercise curation) with the caller's token; vertice-api re-checks ADMIN and the second-factor claims on every call. **Admins are invisible** in every list and count, and a missing or deleted user, or an admin (the caller included), is **`404 NOT_FOUND`** (one answer, no oracle). Responses are built field by field; enum values carry no upstream prefix (`TRAINER`, `SUSPENDED`, `VIEW_USER_PROFILE`).
 
 **Paging** (every admin list): query `limit` ∈ {10, 25, 50} (absent or empty = 25, anything else `400 VALIDATION_ERROR` with no upstream call) and `cursor` (the previous page's `nextCursor`, opaque, ≤ 512 characters, sent with the same filters); the response carries `nextCursor: string | null` (`null` on the last page). No page numbers or totals. A cursor vertice-api refuses is `400 VALIDATION_ERROR` with its text. Lists come in upstream order: don't re-sort client-side.
 
-- `GET /dashboard` → `200 AdminDashboard` `{totals: {trainers, clients}, active: {trainers7d, clients7d, trainers30d, clients30d}, completedWorkouts: {last7d, last30d}, weeklySignups: [{weekStart, trainers, clients}] × 12}`. One upstream call, no BFF cache. Windows are business days in America/Sao_Paulo ("7 days" = today and the 6 before); `weekStart` is a Monday (business date), oldest week first, the last one the current partial week. Totals include suspended accounts, sign-ups include deleted ones. The most-used exercises arrive with VRT-31 (`GET /admin/exercises/most-used`).
+- `GET /dashboard` → `200 AdminDashboard` `{totals: {trainers, clients}, active: {trainers7d, clients7d, trainers30d, clients30d}, completedWorkouts: {last7d, last30d}, weeklySignups: [{weekStart, trainers, clients}] × 12}`. One upstream call, no BFF cache. Windows are business days in America/Sao_Paulo ("7 days" = today and the 6 before); `weekStart` is a Monday (business date), oldest week first, the last one the current partial week. Totals include suspended accounts, sign-ups include deleted ones. The most-used exercises are their own list, `GET /admin/exercises/most-used` (below).
 - `GET /users?role=&status=&q=&limit=&cursor=` → `200 AdminDirectoryPage` `{users: AdminDirectoryUser[], nextCursor}`. `role`: `TRAINER` | `CLIENT` (absent = both; `ADMIN` is a 400); `status`: `ACTIVE` | `SUSPENDED` (absent = both); `q`: trimmed, empty = no search, ≤ 100 characters (UTF-16), a case-insensitive substring of name or e-mail. Ordered by name, then id. `AdminDirectoryUser` = `{id, name, email, role, suspended, createdAt, lastActiveOn (business date, null if never active), currentTrainer ({id, name} for a client with one, else null; always null for a trainer), currentClientCount (number for a trainer, null for a client)}`.
 - `GET /users/:id` → `200 AdminUserProfile`, a union on `role`:
   - common: `id`, `name`, `email`, `role`, `cpf` (masked `***.***.***-NN` or `null`, never in full: anything vertice-api sends that isn't that mask becomes `null`, with a WARN line that carries the user id only), `suspended`, `suspendedAt` (null while active), `createdAt`, `lastActiveOn` (null if never);
@@ -433,7 +442,30 @@ On the e-mail routes `409 PRECONDITION_FAILED` has that one meaning: switched of
 
 - `DELETE /relationships/:trainerId/:clientId` → **`204`**. Both ids, from the profile on screen (`EndTrainerClientRelationship`; an admin has no side-effect-free way to look the trainer up). Only the relationship ends: both accounts, the plans and every log stay; the trainer loses the client, the client keeps reading the plans.
 
-ADMIN also keeps `GET /muscle-groups` (filters and, later, the exercise form). Errors beyond the paging and role rows above: `401 UNAUTHENTICATED` when vertice-api no longer accepts the admin (sign in again), `403 FORBIDDEN` if vertice-api refuses the token's second-factor claims.
+**Exercise curation** (spec §2.4, VRT-31), on `vertice.admin.v1.AdminCatalogService`. The starter set is the shared, read-only catalog every trainer sees; a trainer's private exercise is read-only here and can only be promoted (copied) into the starter set. Exercise names are stored NFC-normalized and trimmed, and are unique **within the starter set** ignoring case and accents (a trainer's private exercise may share a starter name); muscle-group names likewise among the muscle groups. Each write records a history entry upstream (`CREATE_STARTER_EXERCISE`, `UPDATE_STARTER_EXERCISE`, `DELETE_STARTER_EXERCISE`, `PROMOTE_EXERCISE`, `CREATE_MUSCLE_GROUP`, `RENAME_MUSCLE_GROUP`, with the name as `subjectLabel`) and one `audit: "admin.catalog.<create|update|delete|promote|muscle_group_create|muscle_group_rename>"` INFO line here (actor id and `exerciseId` / `sourceExerciseId` / `muscleGroupId`; never a name).
+
+`AdminCatalogExercise` = the `Exercise` shape (`{id, name, description, videoUrl, muscleGroups, isStarter}`) plus `owner`: `{id, name}` of the trainer for a private exercise ("Usuário removido" for a deleted account), `null` for a starter one.
+
+- `GET /exercises?scope=&muscleGroupId=&ownerId=&q=&limit=&cursor=` → `200 AdminCatalogPage` `{exercises: AdminCatalogExercise[], nextCursor}`, starter exercises first, then by name, then id. `scope`: `STARTER` | `PRIVATE` (absent or empty = both); `muscleGroupId`, `ownerId`: positive integers (absent = any; `ownerId` narrows to that trainer's private exercises); `q`: as the directory's (trimmed, empty = none, ≤ 100, case-insensitive name substring). A group or owner that doesn't exist is an empty page, not a 404. Not recorded in the history.
+- `GET /exercises/most-used?muscleGroupId=&limit=&cursor=` → `200 AdminMostUsedPage` `{exercises: [{exercise: AdminCatalogExercise, workoutCount}], nextCursor}`: exercises in at least one workout, by the number of distinct workouts that currently contain them (descending), then id. The dashboard's most-used table. Not recorded in the history.
+- `POST /exercises` → **`201 AdminCatalogExercise`**, a new starter exercise. Body: the trainer's `ExerciseRequest` `{name, description?, videoUrl?, muscleGroupIds}`, same bounds (name not blank ≤ 255, description ≤ 255, `videoUrl` `""` or a YouTube link ≤ 500, at least one group; duplicate ids dropped).
+- `PUT /exercises/:id` → `200 AdminCatalogExercise`. A **full replacement** with the same body (send every field: an omitted description or video becomes empty). The edit shows everywhere the exercise is used, past workout logs included.
+- `DELETE /exercises/:id` → **`204`**, only while no workout contains the exercise.
+- `POST /exercises/:id/promote` → **`201 AdminCatalogExercise`**, the new starter row. `:id` is the trainer's private exercise (read, never changed; the trainer is not told); the body is the starter copy as the admin edited it, same schema as create.
+- `POST /muscle-groups` `{name}` → **`201 MuscleGroup`** `{id, name}`, listed last by `GET /muscle-groups`. `PATCH /muscle-groups/:id` `{name}` → `200 MuscleGroup`; the new name shows everywhere. `name`: NFC-normalized and trimmed here as upstream, then 1 to 50 characters (UTF-16). There is no delete.
+
+| Route(s) | Situation | Answer |
+|---|---|---|
+| create, update, promote, muscle groups | Name taken, ignoring case and accents | **`409 NAME_TAKEN`** |
+| `DELETE /exercises/:id` | A workout contains it (also when one adds it during the delete) | **`409 EXERCISE_IN_USE`**: edit it instead |
+| update, delete | A trainer's private exercise | `403 FORBIDDEN` (read-only here; promote it instead) |
+| promote | The source is already a starter exercise | `409 PRECONDITION_FAILED` (refetch the list) |
+| update, delete, promote, rename | Missing exercise or muscle group | `404 NOT_FOUND` |
+| create, update, promote | An unknown muscle group id, or a bound vertice-api refuses | `400 VALIDATION_ERROR` with vertice-api's field text |
+
+Every other `FAILED_PRECONDITION` on these writes (a muscle group removed under a create, which can't happen while there is no group delete) stays the generic `409 PRECONDITION_FAILED`.
+
+ADMIN also keeps `GET /muscle-groups` (filters and the exercise form). Errors beyond the paging and role rows above: `401 UNAUTHENTICATED` when vertice-api no longer accepts the admin (sign in again), `403 FORBIDDEN` if vertice-api refuses the token's second-factor claims.
 
 ## Legal — `/legal`
 - `GET /versions` (public) → `{terms, healthData}`: the current version of the Terms of Use / Privacy Policy and of the health-data consent notice (env `TERMS_VERSION`, `HEALTH_DATA_CONSENT_VERSION`, default `2026-10-draft`; the texts are drafts pending legal review). The web shows the matching texts, sends `terms` as `acceptedTermsVersion` on register and the versions to `POST /auth/me/consent`, and compares them with `GET /auth/me`'s `consent` to tell whether a stored consent is outdated. No upstream call. Cacheable: `Cache-Control: public, max-age=300` (errors stay `no-store`). A version changes only on a BFF deploy that bumps the env var.
@@ -490,7 +522,7 @@ The detail page renders whatever `cpf` string it gets (now the mask). The web PR
 5. **Caching**: set `Cache-Control: no-store` and `Vary: Cookie` on the web's own `/api/bff` and `/api/auth` route responses (plan step 3), whatever `relayBffResponse` copies from the BFF. The proxy already forwards the query string, so `?reveal=cpf` reaches the BFF.
 
 ## Exercises (catalog) — `/exercises`, `/muscle-groups`
-The catalog is the shared **starter set** (`isStarter: true`, read-only for everyone) plus each trainer's own exercises. **Trainer-created exercises are private; the starter set is shared.** A trainer sees the starter set and their own exercises only; vertice-api refuses the catalog reads to ADMIN (the admin panel gets its own listing in VRT-31). Visibility, ordering and search are decided by vertice-api from the caller's identity — the BFF has no exercise-ownership check of its own and returns lists in upstream order.
+The catalog is the shared **starter set** (`isStarter: true`, read-only for everyone) plus each trainer's own exercises. **Trainer-created exercises are private; the starter set is shared.** A trainer sees the starter set and their own exercises only; ADMIN reads and curates the catalog through `/admin/exercises` (above) and gets a 403 by role here. Visibility, ordering and search are decided by vertice-api from the caller's identity — the BFF has no exercise-ownership check of its own and returns lists in upstream order.
 
 ```ts
 MuscleGroup = { id: number, name: string }
@@ -501,12 +533,12 @@ Exercise    = { id: number, name: string, description: string, videoUrl: string,
 There is no `muscleGroup` field any more (the old `CHEST | BACK | …` enum is gone) — anywhere an `Exercise` is embedded, too.
 
 - `GET /muscle-groups` (any role) → `MuscleGroup[]` in id order — 14 rows (Peito … Cardio). Use it to populate filters/pickers; ids are database-generated, don't hardcode them.
-- `GET /exercises?muscleGroupId=&q=` (TRAINER/ADMIN) → `Exercise[]` **in upstream order**: own exercises first (name asc), then starter exercises (with a group filter: primary-group matches in catalog order, then secondary matches by name; without: name asc). Don't re-sort client-side.
+- `GET /exercises?muscleGroupId=&q=` (TRAINER) → `Exercise[]` **in upstream order**: own exercises first (name asc), then starter exercises (with a group filter: primary-group matches in catalog order, then secondary matches by name; without: name asc). Don't re-sort client-side.
   - `muscleGroupId` — optional positive integer; exercises with that group as primary or secondary. Empty (`?muscleGroupId=`) = no filter.
   - `q` — optional name search (case-insensitive substring), trimmed, ≤100 chars. Empty = no filter.
-  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or ADMIN` (CLIENT); 400 `VALIDATION_ERROR` for a non-numeric/0/negative/repeated `muscleGroupId` or `q` >100 chars (field `details`); 404 `NOT_FOUND` for an unknown `muscleGroupId`.
-- `GET /exercises/:id` (any role, upstream decides) → `Exercise`. TRAINER: starter or own; ADMIN: refused by vertice-api (403) since its admin-panel VRT-20, dropped here in VRT-31; CLIENT: only an exercise used by a workout in one of their own plans.
-  - Errors: 403 `FORBIDDEN` (not visible to you; vertice-api's refusal, fixed message); 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
+  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER` (CLIENT, ADMIN); 400 `VALIDATION_ERROR` for a non-numeric/0/negative/repeated `muscleGroupId` or `q` >100 chars (field `details`); 404 `NOT_FOUND` for an unknown `muscleGroupId`.
+- `GET /exercises/:id` (TRAINER, CLIENT; upstream decides visibility) → `Exercise`. TRAINER: starter or own; CLIENT: only an exercise used by a workout in one of their own plans.
+  - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or CLIENT` (ADMIN); 403 `FORBIDDEN` (not visible to you; vertice-api's refusal, fixed message); 404 `NOT_FOUND` for a non-existent id (existence is not hidden).
 - `GET /exercises/with-progress?clientId=` (TRAINER, CLIENT) → `{id, name}[]`: the options for the progress graph, i.e. exercises with at least one weighted set in a completed session, most recently trained first. A TRAINER only gets exercises their catalog shows them (starter set and their own); not paged, since it is bounded by the client's history rather than the catalog. Same `clientId` rule as below.
 - `GET /exercises/:id/progress?clientId=` (TRAINER, CLIENT) → `{weekStartDate, weight}[]` (weight-over-time for a graph). **`weight` here is a JSON number**, the one exception to the decimals-are-strings rule below: it is a chart value, converted from the upstream decimal string (`Number(...)`), so it can lose precision. Everywhere else a decimal (`ExerciseSet.weight`, `SetLog.weight`) stays a string. CLIENT role ignores `clientId` and uses their own id; TRAINER must pass it.
   - Errors: 403 `FORBIDDEN` `Requires role: TRAINER or CLIENT` (ADMIN); 400 `VALIDATION_ERROR` `clientId is required` (TRAINER, absent) or field `details` on `clientId` (malformed); 403 `FORBIDDEN` `This client is not one of your clients` (TRAINER).

@@ -35,3 +35,5 @@ export const adminAuthClient = new grpcProto.vertice.admin.v1.AdminAuthService(g
 export const adminOpsClient = new grpcProto.vertice.admin.v1.AdminOpsService(grpcTarget, credentials)
 /** The admin panel (`modules/admin/service.ts`), always with the caller's admin token. */
 export const adminClient = new grpcProto.vertice.admin.v1.AdminService(grpcTarget, credentials)
+/** Starter-catalog curation and the most-used list (`modules/admin/service.ts`), with the caller's admin token. */
+export const adminCatalogClient = new grpcProto.vertice.admin.v1.AdminCatalogService(grpcTarget, credentials)

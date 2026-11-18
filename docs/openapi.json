@@ -169,6 +169,97 @@
         ],
         "additionalProperties": false
       },
+      "AdminCatalogExercise": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "videoUrl": {
+            "type": "string"
+          },
+          "muscleGroups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MuscleGroup"
+            },
+            "description": "Upstream order: primary group first, then the others by id."
+          },
+          "isStarter": {
+            "type": "boolean",
+            "description": "Part of the shared, read-only starter set."
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "“Usuário removido” for a deleted account."
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The trainer who owns a private exercise; null for a starter one."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "videoUrl",
+          "muscleGroups",
+          "isStarter",
+          "owner"
+        ],
+        "additionalProperties": false
+      },
+      "AdminCatalogPage": {
+        "type": "object",
+        "properties": {
+          "exercises": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminCatalogExercise"
+            },
+            "description": "Starter exercises first, then by name, then id, in upstream order: do not re-sort client-side."
+          },
+          "nextCursor": {
+            "description": "Send back as `cursor` (same filters) for the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "exercises",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      },
       "AdminChallenge": {
         "type": "object",
         "properties": {
@@ -585,6 +676,49 @@
         },
         "required": [
           "provisioningUri"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMostUsedExercise": {
+        "type": "object",
+        "properties": {
+          "exercise": {
+            "$ref": "#/components/schemas/AdminCatalogExercise"
+          },
+          "workoutCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "Distinct workouts that currently contain the exercise."
+          }
+        },
+        "required": [
+          "exercise",
+          "workoutCount"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMostUsedPage": {
+        "type": "object",
+        "properties": {
+          "exercises": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMostUsedExercise"
+            },
+            "description": "`workoutCount` descending, then id; only exercises in at least one workout."
+          },
+          "nextCursor": {
+            "description": "Send back as `cursor` (same filters) for the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "exercises",
+          "nextCursor"
         ],
         "additionalProperties": false
       },
@@ -1615,7 +1749,9 @@
           "CHALLENGE_INVALID",
           "INVALID_SECOND_FACTOR_CODE",
           "ADMIN_LOGIN_ELSEWHERE",
-          "ACCOUNT_SUSPENDED"
+          "ACCOUNT_SUSPENDED",
+          "NAME_TAKEN",
+          "EXERCISE_IN_USE"
         ]
       },
       "ErrorResponse": {
@@ -2151,6 +2287,20 @@
           "name"
         ],
         "additionalProperties": false
+      },
+      "MuscleGroupNameRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "maxLength": 50,
+            "description": "Normalized to Unicode NFC and trimmed, then 1-50 characters. Unique ignoring case and accents.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
       },
       "PasswordSetupRequest": {
         "type": "object",
@@ -3379,7 +3529,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3580,7 +3730,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3652,7 +3802,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4084,7 +4234,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4277,7 +4427,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4524,7 +4674,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4543,7 +4693,7 @@
         "tags": [
           "Exercises"
         ],
-        "description": "Roles: TRAINER, ADMIN. A trainer sees the starter set and their own exercises; an ADMIN the starter set only. In upstream order: do not re-sort client-side. An empty `muscleGroupId` or `q` means no filter. Always paged (30 by default, at most 50): follow `nextCursor` with the same filter for more.",
+        "description": "Roles: TRAINER. The starter set and the caller’s own exercises. In upstream order: do not re-sort client-side. An empty `muscleGroupId` or `q` means no filter. Always paged (30 by default, at most 50): follow `nextCursor` with the same filter for more.",
         "parameters": [
           {
             "schema": {
@@ -4594,8 +4744,7 @@
           }
         ],
         "x-roles": [
-          "TRAINER",
-          "ADMIN"
+          "TRAINER"
         ],
         "responses": {
           "200": {
@@ -4803,7 +4952,7 @@
         "tags": [
           "Exercises"
         ],
-        "description": "Any authenticated role. Vertice-api decides visibility. A TRAINER sees the starter set and their own, an ADMIN the starter set, a CLIENT only an exercise used by a workout in one of their plans.",
+        "description": "Roles: TRAINER, CLIENT. Vertice-api decides visibility. A TRAINER sees the starter set and their own, a CLIENT only an exercise used by a workout in one of their plans.",
         "parameters": [
           {
             "schema": {
@@ -4820,6 +4969,10 @@
           {
             "bearerAuth": []
           }
+        ],
+        "x-roles": [
+          "TRAINER",
+          "CLIENT"
         ],
         "responses": {
           "200": {
@@ -5036,7 +5189,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5318,7 +5471,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5574,7 +5727,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6082,7 +6235,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6533,7 +6686,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6708,7 +6861,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7059,7 +7212,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7161,7 +7314,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7263,7 +7416,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7473,7 +7626,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7575,7 +7728,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7660,7 +7813,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7755,7 +7908,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8099,7 +8252,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8172,7 +8325,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8819,7 +8972,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8932,7 +9085,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9017,7 +9170,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9112,7 +9265,7 @@
             }
           },
           "409": {
-            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).",
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9218,6 +9371,809 @@
           }
         }
       }
+    },
+    "/api/admin/exercises": {
+      "get": {
+        "operationId": "listAdminCatalogExercises",
+        "summary": "One page of the exercise catalog, starter and private",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. Starter exercises first, then by name, then id, in upstream order: do not re-sort client-side. A private exercise carries its `owner`; a starter one has `owner: null`. Empty filters mean any; a group or owner that does not exist is an empty page, not a 404. Follow `nextCursor` with the same filters. Not recorded in the history.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "STARTER",
+                "PRIVATE"
+              ]
+            },
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "description": "Absent: starter and private."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "muscleGroupId",
+            "required": false,
+            "description": "Exercises with this group (primary or secondary)."
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "ownerId",
+            "required": false,
+            "description": "Only this trainer’s private exercises."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "description": "Case-insensitive substring of the name, trimmed; at most 100 characters."
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "enum": [
+                    10
+                  ]
+                },
+                {
+                  "type": "number",
+                  "enum": [
+                    25
+                  ]
+                },
+                {
+                  "type": "number",
+                  "enum": [
+                    50
+                  ]
+                }
+              ]
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Page size: 10, 25 or 50; 25 when absent. Anything else is a 400."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "`nextCursor` of the previous page, sent with the same filters. Opaque; a malformed one is a 400."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of exercises.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCatalogPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAdminStarterExercise",
+        "summary": "Create a starter exercise",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. Shared with every trainer, read-only to them. Same body and bounds as a trainer’s exercise; the name is stored NFC-normalized and trimmed, and must be unique in the starter set ignoring case and accents (409 `NAME_TAKEN`). Writes a `CREATE_STARTER_EXERCISE` history entry.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExerciseRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "201": {
+            "description": "The new starter exercise.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCatalogExercise"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/exercises/most-used": {
+      "get": {
+        "operationId": "listAdminMostUsedExercises",
+        "summary": "Exercises by how many workouts contain them",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. Only exercises in at least one workout, `workoutCount` descending, then id. The dashboard’s most-used table (R22–R25). Follow `nextCursor` with the same filter. Not recorded in the history.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "muscleGroupId",
+            "required": false,
+            "description": "Exercises with this group (primary or secondary)."
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "enum": [
+                    10
+                  ]
+                },
+                {
+                  "type": "number",
+                  "enum": [
+                    25
+                  ]
+                },
+                {
+                  "type": "number",
+                  "enum": [
+                    50
+                  ]
+                }
+              ]
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Page size: 10, 25 or 50; 25 when absent. Anything else is a 400."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "`nextCursor` of the previous page, sent with the same filters. Opaque; a malformed one is a 400."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of exercises with their workout counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMostUsedPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/exercises/{id}": {
+      "put": {
+        "operationId": "updateAdminStarterExercise",
+        "summary": "Replace a starter exercise",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. Full replacement of name, description, video URL and the whole group list (send every field). The change shows everywhere the exercise is used, past workout logs included. A trainer’s private exercise is 403 (read-only here); a missing one 404; a duplicate starter name 409 `NAME_TAKEN`. Writes an `UPDATE_STARTER_EXERCISE` history entry.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExerciseRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "200": {
+            "description": "The starter exercise after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCatalogExercise"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAdminStarterExercise",
+        "summary": "Delete a starter exercise",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. Only while no workout contains it: otherwise 409 `EXERCISE_IN_USE` (edit it instead). A trainer’s private exercise is 403; a missing one 404. Writes a `DELETE_STARTER_EXERCISE` history entry.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; no body."
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/exercises/{id}/promote": {
+      "post": {
+        "operationId": "promoteAdminExercise",
+        "summary": "Promote a trainer’s exercise to the starter set",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. Creates a new starter exercise from the body (the copy as the admin edited it, same schema as create); the trainer’s private exercise `:id` is left untouched and the trainer is not notified. A source that is already a starter exercise is 409 `PRECONDITION_FAILED`; a duplicate starter name 409 `NAME_TAKEN`; a missing source 404. Writes a `PROMOTE_EXERCISE` history entry.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExerciseRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "201": {
+            "description": "The new starter exercise.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCatalogExercise"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/muscle-groups": {
+      "post": {
+        "operationId": "createAdminMuscleGroup",
+        "summary": "Create a muscle group",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. Listed last by `GET /api/muscle-groups`. The name must be unique ignoring case and accents (409 `NAME_TAKEN`). There is no delete. Writes a `CREATE_MUSCLE_GROUP` history entry.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MuscleGroupNameRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "201": {
+            "description": "The new muscle group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MuscleGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/muscle-groups/{id}": {
+      "patch": {
+        "operationId": "renameAdminMuscleGroup",
+        "summary": "Rename a muscle group",
+        "tags": [
+          "Admin"
+        ],
+        "description": "Roles: ADMIN. The new name shows everywhere the group is used. Missing: 404; a duplicate name 409 `NAME_TAKEN`. Writes a `RENAME_MUSCLE_GROUP` history entry.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MuscleGroupNameRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "200": {
+            "description": "The muscle group after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MuscleGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "servers": [
@@ -9237,7 +10193,7 @@
     },
     {
       "name": "Admin",
-      "description": "The admin panel: dashboard, user directory and profiles, action history, suspension, account e-mails and ending relationships (ADMIN only, with the admin session token)."
+      "description": "The admin panel: dashboard, user directory and profiles, action history, suspension, account e-mails, ending relationships and exercise curation (ADMIN only, with the admin session token)."
     },
     {
       "name": "Legal",

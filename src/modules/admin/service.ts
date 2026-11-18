@@ -1,9 +1,32 @@
-import { adminClient, trainerClientClient, userClient } from '../../grpc/clients.js'
+import { adminCatalogClient, adminClient, trainerClientClient, userClient } from '../../grpc/clients.js'
 import { grpcCall, UPSTREAM_MESSAGES } from '../../grpc/call.js'
-import { HttpError, TooManyRequestsError, UpstreamExhaustedError } from '../../lib/errors.js'
+import {
+  ConflictError,
+  HttpError,
+  PreconditionFailedError,
+  TooManyRequestsError,
+  UpstreamExhaustedError,
+} from '../../lib/errors.js'
 import { requestContext } from '../../lib/request-context.js'
+import {
+  toExercise,
+  toExerciseRequest,
+  toMuscleGroup,
+  type Exercise,
+  type ExerciseInput,
+  type ExerciseRequest,
+  type ExerciseResponse,
+  type MuscleGroup,
+  type MuscleGroupResponse,
+} from '../exercises/service.js'
 import type { Role } from '../users/service.js'
-import type { AdminAction, AdminActionsQuery, AdminDirectoryQuery } from './schemas.js'
+import type {
+  AdminAction,
+  AdminActionsQuery,
+  AdminCatalogQuery,
+  AdminDirectoryQuery,
+  AdminMostUsedQuery,
+} from './schemas.js'
 
 /**
  * The admin panel's reads (admin-panel spec §2.2, B12, B13, B16): one `AdminService` RPC per route,
@@ -453,4 +476,193 @@ export async function sendPasswordResetEmail(userId: number): Promise<void> {
  */
 export async function endRelationship(trainerId: number, clientId: number): Promise<void> {
   await grpcCall(trainerClientClient, 'EndTrainerClientRelationship', { trainerId, clientId })
+}
+
+// ---- exercise curation (VRT-31, spec §2.4, B11, B18) -----------------------------------------------
+
+interface CatalogExerciseResponse {
+  exercise: ExerciseResponse | null
+  owner: UserRefResponse | null
+}
+
+/**
+ * A catalog row as the panel shows it: the trainer's `Exercise` shape plus the owner of a private
+ * exercise (R23, R56). `owner` is null for a starter exercise; a deleted trainer reads
+ * "Usuário removido" (R72).
+ */
+export interface AdminCatalogExercise extends Exercise {
+  owner: { id: number; name: string } | null
+}
+
+export interface AdminCatalogPage {
+  exercises: AdminCatalogExercise[]
+  nextCursor: string | null
+}
+
+export interface AdminMostUsedExercise {
+  exercise: AdminCatalogExercise
+  /** Distinct workouts that currently contain the exercise; at least 1. */
+  workoutCount: number
+}
+
+export interface AdminMostUsedPage {
+  exercises: AdminMostUsedExercise[]
+  nextCursor: string | null
+}
+
+export const NAME_TAKEN_MESSAGE = 'Name already in use'
+export const EXERCISE_IN_USE_MESSAGE = 'The exercise is used by a workout and cannot be deleted'
+
+/** An unset `exercise` in a catalog answer is not a shape vertice-api sends: a 502, as `GetUserProfile`'s. */
+function missingExercise(rpc: string): never {
+  requestContext.getStore()?.log?.warn({ rpc }, 'Answered no exercise')
+  throw new HttpError(502, UPSTREAM_MESSAGES.upstreamError, 'UPSTREAM_ERROR')
+}
+
+export function toCatalogExercise(r: CatalogExerciseResponse | null, rpc: string): AdminCatalogExercise {
+  if (!r?.exercise) missingExercise(rpc)
+  const exercise = toExercise(r.exercise)
+  return {
+    ...exercise,
+    owner: !exercise.isStarter && r.owner ? { id: Number(r.owner.id), name: r.owner.name } : null,
+  }
+}
+
+/**
+ * The catalog writes' one per-route mapping (B11): ALREADY_EXISTS is a duplicate name ignoring case
+ * and accents (the only unique key these RPCs touch; also its constraint-race fallback), 409
+ * `NAME_TAKEN` instead of the global `CONFLICT` "Email or CPF already in use".
+ */
+async function catalogWrite<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call()
+  } catch (err) {
+    if (err instanceof ConflictError) throw new HttpError(409, NAME_TAKEN_MESSAGE, 'NAME_TAKEN')
+    throw err
+  }
+}
+
+/** `ListCatalogExercises`: starter first, then by name, then id, in upstream order. */
+export async function listCatalogExercises(query: AdminCatalogQuery): Promise<AdminCatalogPage> {
+  const res = await grpcCall<
+    { scope: string; muscleGroupId: number; ownerId: number; search: string; pageSize: number; pageToken: string },
+    { exercises: CatalogExerciseResponse[]; nextPageToken: string }
+  >(adminCatalogClient, 'ListCatalogExercises', {
+    scope: `CATALOG_SCOPE_${query.scope ?? 'UNSPECIFIED'}`,
+    muscleGroupId: query.muscleGroupId ?? 0,
+    ownerId: query.ownerId ?? 0,
+    search: query.q ?? '',
+    pageSize: query.limit,
+    pageToken: query.cursor ?? '',
+  })
+  return {
+    exercises: res.exercises.map((e) => toCatalogExercise(e, 'ListCatalogExercises')),
+    nextCursor: res.nextPageToken || null,
+  }
+}
+
+/** `ListMostUsedExercises`: workout count descending, then id (R22-R25). */
+export async function listMostUsedExercises(query: AdminMostUsedQuery): Promise<AdminMostUsedPage> {
+  const res = await grpcCall<
+    { muscleGroupId: number; pageSize: number; pageToken: string },
+    { exercises: { exercise: CatalogExerciseResponse | null; workoutCount: string }[]; nextPageToken: string }
+  >(adminCatalogClient, 'ListMostUsedExercises', {
+    muscleGroupId: query.muscleGroupId ?? 0,
+    pageSize: query.limit,
+    pageToken: query.cursor ?? '',
+  })
+  return {
+    exercises: res.exercises.map((e) => ({
+      exercise: toCatalogExercise(e.exercise, 'ListMostUsedExercises'),
+      workoutCount: Number(e.workoutCount),
+    })),
+    nextCursor: res.nextPageToken || null,
+  }
+}
+
+/** `CreateStarterExercise` (R52). Duplicate starter name: 409 `NAME_TAKEN`. */
+export async function createStarterExercise(input: ExerciseInput): Promise<AdminCatalogExercise> {
+  const res = await catalogWrite(() =>
+    grpcCall<{ exercise: ExerciseRequest }, { exercise: CatalogExerciseResponse | null }>(
+      adminCatalogClient,
+      'CreateStarterExercise',
+      { exercise: toExerciseRequest(input) },
+    ),
+  )
+  return toCatalogExercise(res.exercise, 'CreateStarterExercise')
+}
+
+/**
+ * `UpdateStarterExercise`, a full replace (B18, R53): the edit shows everywhere the exercise is
+ * used. A private exercise is PERMISSION_DENIED upstream, the global 403 (R57); missing, 404.
+ */
+export async function updateStarterExercise(id: number, input: ExerciseInput): Promise<AdminCatalogExercise> {
+  const res = await catalogWrite(() =>
+    grpcCall<{ id: number; exercise: ExerciseRequest }, { exercise: CatalogExerciseResponse | null }>(
+      adminCatalogClient,
+      'UpdateStarterExercise',
+      { id, exercise: toExerciseRequest(input) },
+    ),
+  )
+  return toCatalogExercise(res.exercise, 'UpdateStarterExercise')
+}
+
+/**
+ * `DeleteStarterExercise` (R55). Every FAILED_PRECONDITION this RPC sends means "a workout uses
+ * it": vertice-api's check ("Exercise <id> is used by a workout…") and, when a workout added it
+ * between that check and the delete, the foreign-key fallback ("…the record is still in use…").
+ * Both are 409 `EXERCISE_IN_USE`, so the web says the same thing for the same situation. A private
+ * exercise is the global 403, a missing one 404.
+ */
+export async function deleteStarterExercise(id: number): Promise<void> {
+  try {
+    await grpcCall(adminCatalogClient, 'DeleteStarterExercise', { id })
+  } catch (err) {
+    if (err instanceof PreconditionFailedError) throw new HttpError(409, EXERCISE_IN_USE_MESSAGE, 'EXERCISE_IN_USE')
+    throw err
+  }
+}
+
+/**
+ * `PromoteExercise` (R58-R60): a starter copy of a trainer's private exercise, with the admin's
+ * edits; the trainer's row is untouched. A source that is already a starter exercise is
+ * FAILED_PRECONDITION, kept as the generic 409 `PRECONDITION_FAILED`; a duplicate name `NAME_TAKEN`.
+ */
+export async function promoteExercise(sourceExerciseId: number, input: ExerciseInput): Promise<AdminCatalogExercise> {
+  const res = await catalogWrite(() =>
+    grpcCall<{ sourceExerciseId: number; exercise: ExerciseRequest }, { exercise: CatalogExerciseResponse | null }>(
+      adminCatalogClient,
+      'PromoteExercise',
+      { sourceExerciseId, exercise: toExerciseRequest(input) },
+    ),
+  )
+  return toCatalogExercise(res.exercise, 'PromoteExercise')
+}
+
+function toMuscleGroupResult(res: { muscleGroup: MuscleGroupResponse | null }, rpc: string): MuscleGroup {
+  if (!res.muscleGroup) {
+    requestContext.getStore()?.log?.warn({ rpc }, 'Answered no muscle group')
+    throw new HttpError(502, UPSTREAM_MESSAGES.upstreamError, 'UPSTREAM_ERROR')
+  }
+  return toMuscleGroup(res.muscleGroup)
+}
+
+/** `CreateMuscleGroup` (R61): listed last by `GET /muscle-groups`. Duplicate name: `NAME_TAKEN` (R65). */
+export async function createMuscleGroup(name: string): Promise<MuscleGroup> {
+  const res = await catalogWrite(() =>
+    grpcCall<{ name: string }, { muscleGroup: MuscleGroupResponse | null }>(adminCatalogClient, 'CreateMuscleGroup', { name }),
+  )
+  return toMuscleGroupResult(res, 'CreateMuscleGroup')
+}
+
+/** `RenameMuscleGroup` (R62): shown everywhere at once. Missing: 404; duplicate name: `NAME_TAKEN`. */
+export async function renameMuscleGroup(id: number, name: string): Promise<MuscleGroup> {
+  const res = await catalogWrite(() =>
+    grpcCall<{ id: number; name: string }, { muscleGroup: MuscleGroupResponse | null }>(
+      adminCatalogClient,
+      'RenameMuscleGroup',
+      { id, name },
+    ),
+  )
+  return toMuscleGroupResult(res, 'RenameMuscleGroup')
 }

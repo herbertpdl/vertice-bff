@@ -90,3 +90,60 @@ export const adminReasonSchema = z.object({
     .describe('Why, for the action history (not shown to the user). Trimmed; 1-500 characters.'),
 })
 export type AdminReason = z.infer<typeof adminReasonSchema>
+
+// ---- exercise curation (VRT-31, spec §2.4) ---------------------------------------------------------
+
+/** `GET /admin/exercises` `scope`: absent is both (vertice-api's `CATALOG_SCOPE_UNSPECIFIED`). */
+export const CATALOG_SCOPES = ['STARTER', 'PRIVATE'] as const
+export type CatalogScope = (typeof CATALOG_SCOPES)[number]
+
+/** The catalog search: trimmed, empty means no filter, at most 100 UTF-16 units (as the directory's). */
+const searchQuery = z.preprocess(
+  (value) => (typeof value === 'string' ? emptyAsAbsent(value.trim()) : value),
+  utf16String(ADMIN_SEARCH_MAX).min(1).optional(),
+)
+
+/** `GET /admin/exercises` query. A group or owner that doesn't exist is an empty page upstream, not a 404. */
+export const adminCatalogQuerySchema = z.object({
+  scope: z.preprocess(emptyAsAbsent, z.enum(CATALOG_SCOPES).optional()),
+  muscleGroupId: optionalIdQuery,
+  ownerId: optionalIdQuery,
+  q: searchQuery,
+  limit: limitQuery,
+  cursor: cursorQuery,
+})
+export type AdminCatalogQuery = z.infer<typeof adminCatalogQuerySchema>
+
+/** `GET /admin/exercises/most-used` query (R22-R25). */
+export const adminMostUsedQuerySchema = z.object({
+  muscleGroupId: optionalIdQuery,
+  limit: limitQuery,
+  cursor: cursorQuery,
+})
+export type AdminMostUsedQuery = z.infer<typeof adminMostUsedQuerySchema>
+
+/** vertice-api's `muscle_groups.name` bound (`VARCHAR(50)`), on the NFC-normalized, trimmed name. */
+export const MUSCLE_GROUP_NAME_MAX = 50
+
+/**
+ * Body of `POST /admin/muscle-groups` and `PATCH /admin/muscle-groups/:id`. vertice-api normalizes
+ * to NFC and trims before it checks 1-50 (D21), so the same steps run here first: a name a Mac
+ * keyboard sends decomposed is not refused here for a length upstream would accept.
+ */
+export const muscleGroupNameSchema = z.object({
+  name: z
+    .string()
+    .transform((value) => value.normalize('NFC').trim())
+    .pipe(
+      z
+        .string()
+        .min(1, 'must not be blank')
+        .refine(
+          (value) => value.length <= MUSCLE_GROUP_NAME_MAX,
+          `Too big: expected string to have <=${MUSCLE_GROUP_NAME_MAX} characters`,
+        ),
+    )
+    .meta({ minLength: 1, maxLength: MUSCLE_GROUP_NAME_MAX })
+    .describe('Normalized to Unicode NFC and trimmed, then 1-50 characters. Unique ignoring case and accents.'),
+}).meta({ id: 'MuscleGroupNameRequest' })
+export type MuscleGroupName = z.infer<typeof muscleGroupNameSchema>

@@ -259,7 +259,7 @@ Global mapping (`mapGrpcError`) unless a row says otherwise. Zod failures are 40
 | e-mail routes | Every try failed | `UNAVAILABLE` | 503 `UPSTREAM_UNAVAILABLE` (retry later) |
 | relationships | No active relationship for the pair | `NOT_FOUND` / `PERMISSION_DENIED` | 404 `NOT_FOUND` / 403 `FORBIDDEN` (as the API answers) |
 | catalog create / update / promote, muscle groups | Duplicate name ignoring case and accents | `ALREADY_EXISTS` | 409 `NAME_TAKEN` |
-| `DELETE /admin/exercises/:id` | Used by a workout | `FAILED_PRECONDITION` | 409 `EXERCISE_IN_USE` |
+| `DELETE /admin/exercises/:id` | Used by a workout (the check, or the foreign-key fallback when a workout adds it during the delete: both mean the same, VRT-31) | `FAILED_PRECONDITION` | 409 `EXERCISE_IN_USE` |
 | update / delete | A private exercise | `PERMISSION_DENIED` | 403 `FORBIDDEN` |
 | promote | Source is already a starter exercise | `FAILED_PRECONDITION` | 409 `PRECONDITION_FAILED` |
 

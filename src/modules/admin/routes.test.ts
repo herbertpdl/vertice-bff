@@ -22,7 +22,7 @@ import {
   type Actor,
 } from '../../test/fakeUpstream.js'
 import { LOG_SERIALIZERS, requestSerializer } from '../../lib/log-serializers.js'
-import { toActionEntry, toDirectoryUser, toUserProfile } from './service.js'
+import { toActionEntry, toCatalogExercise, toDirectoryUser, toUserProfile } from './service.js'
 
 // Keep the real mapGrpcError: the fake upstream raises its errors through it.
 vi.mock('../../grpc/call.js', async (importOriginal) => ({
@@ -576,6 +576,211 @@ describe('admin write routes (VRT-28)', () => {
       expect(auditLines()).toEqual([
         expect.objectContaining({ audit: 'admin.relationship.end', actorId: ids.admin, trainerId: ids.trainerA, clientId: ids.clientA }),
       ])
+    })
+  })
+})
+
+describe('admin exercise curation routes (VRT-31)', () => {
+  let app: FastifyInstance
+  const logLines: string[] = []
+
+  beforeAll(async () => {
+    const sink = new Writable({
+      write(chunk, _encoding, done) {
+        logLines.push(String(chunk))
+        done()
+      },
+    })
+    app = await buildApp({
+      rateLimits: { globalMax: 1_000_000 },
+      loggerInstance: pino({ level: 'trace', serializers: LOG_SERIALIZERS }, sink),
+    })
+    await app.ready()
+  })
+  afterAll(() => app.close())
+  beforeEach(() => {
+    logLines.length = 0
+  })
+
+  const send = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, body?: object) =>
+    app.inject({ method, url, headers: bearer('admin'), ...(body ? { payload: body } : {}) })
+  const auditLines = () => logLines.map((l) => JSON.parse(l)).filter((l) => l.audit)
+
+  describe('GET /admin/exercises', () => {
+    it('sends the prefixed scope, the filters and the paging, and tags private rows with their owner', async () => {
+      const res = await send('GET', `/api/admin/exercises?scope=PRIVATE&ownerId=${ids.trainerA}&q=%20exer%20&limit=10&cursor=`)
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('ListCatalogExercises')).toEqual({
+        scope: 'CATALOG_SCOPE_PRIVATE',
+        muscleGroupId: 0,
+        ownerId: ids.trainerA,
+        search: 'exer',
+        pageSize: 10,
+        pageToken: '',
+      })
+      const body = res.json()
+      expect(body.nextCursor).toBeNull()
+      expect(body.exercises.map((e: { id: number }) => e.id)).toEqual([ids.privateExerciseA, ids.inUseExerciseA])
+      expect(body.exercises[0]).toEqual({
+        id: ids.privateExerciseA,
+        name: `Exercise ${ids.privateExerciseA}`,
+        description: '',
+        videoUrl: '',
+        muscleGroups: [{ id: 1, name: 'Peito' }],
+        isStarter: false,
+        owner: { id: ids.trainerA, name: expect.any(String) },
+      })
+    })
+
+    it('defaults to both scopes and 25 per page; starter rows have no owner', async () => {
+      const res = await send('GET', '/api/admin/exercises')
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('ListCatalogExercises')).toMatchObject({ scope: 'CATALOG_SCOPE_UNSPECIFIED', pageSize: 25, search: '' })
+      const starters = res.json().exercises.filter((e: { isStarter: boolean }) => e.isStarter)
+      expect(starters.length).toBeGreaterThan(0)
+      for (const e of starters) expect(e.owner).toBeNull()
+    })
+
+    it('relays the next page token as nextCursor', async () => {
+      grpcCallMock.mockResolvedValueOnce({ exercises: [], nextPageToken: 'offset-10' } as never)
+      const res = await send('GET', '/api/admin/exercises?limit=10')
+      expect(res.json()).toEqual({ exercises: [], nextCursor: 'offset-10' })
+    })
+
+    it('refuses a TRAINER by role before any upstream call', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/admin/exercises', headers: bearer('trainerA') })
+      expect(res.statusCode).toBe(403)
+      expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('GET /admin/exercises/most-used', () => {
+    it('answers the rows in upstream order with numeric workout counts', async () => {
+      const res = await send('GET', '/api/admin/exercises/most-used?limit=10')
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('ListMostUsedExercises')).toEqual({ muscleGroupId: 0, pageSize: 10, pageToken: '' })
+      const body = res.json()
+      expect(body.exercises.map((e: { exercise: { id: number }; workoutCount: number }) => [e.exercise.id, e.workoutCount])).toEqual([
+        [ids.exercise, 3],
+        [ids.inUseStarterExercise, 2],
+        [ids.inUseExerciseA, 1],
+      ])
+      expect(body.exercises[2].exercise.owner).toEqual({ id: ids.trainerA, name: expect.any(String) })
+      expect(body.nextCursor).toBeNull()
+    })
+  })
+
+  describe('writes', () => {
+    it('creates a starter exercise (201) with the trainer body rules, and audits its id', async () => {
+      const res = await send('POST', '/api/admin/exercises', {
+        name: '  Supino  ',
+        muscleGroupIds: [1, 1],
+        videoUrl: 'https://youtu.be/dQw4w9WgXcQ',
+      })
+      expect(res.statusCode, res.body).toBe(201)
+      expect(upstreamRequest('CreateStarterExercise')).toEqual({
+        exercise: { name: 'Supino', description: '', videoUrl: 'https://youtu.be/dQw4w9WgXcQ', muscleGroupIds: [1] },
+      })
+      expect(res.json()).toMatchObject({ id: 900, name: 'Supino', isStarter: true, owner: null })
+      expect(auditLines()).toEqual([expect.objectContaining({ audit: 'admin.catalog.create', actorId: ids.admin, exerciseId: 900 })])
+      expect(logLines.join('\n')).not.toContain('Supino')
+    })
+
+    it('replaces a starter exercise with PUT and audits it', async () => {
+      const res = await send('PUT', `/api/admin/exercises/${ids.exercise}`, { name: 'Agachamento', muscleGroupIds: [1] })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('UpdateStarterExercise')).toEqual({
+        id: ids.exercise,
+        exercise: { name: 'Agachamento', description: '', videoUrl: '', muscleGroupIds: [1] },
+      })
+      expect(auditLines()).toEqual([expect.objectContaining({ audit: 'admin.catalog.update', exerciseId: ids.exercise })])
+    })
+
+    it('deletes with 204 and audits it', async () => {
+      const res = await send('DELETE', `/api/admin/exercises/${ids.exercise}`)
+      expect(res.statusCode, res.body).toBe(204)
+      expect(auditLines()).toEqual([expect.objectContaining({ audit: 'admin.catalog.delete', exerciseId: ids.exercise })])
+    })
+
+    it.each([
+      ['the in-use check', `Exercise ${ids.exercise} is used by a workout and cannot be deleted`],
+      ['the foreign-key race', 'The change conflicts with related data: the record is still in use, or refers to one that does not exist'],
+    ])('answers 409 EXERCISE_IN_USE for %s, and writes no audit line', async (_, details) => {
+      grpcCallMock.mockRejectedValueOnce(mapGrpcError({ code: status.FAILED_PRECONDITION, details }))
+      const res = await send('DELETE', `/api/admin/exercises/${ids.exercise}`)
+      expect(res.statusCode).toBe(409)
+      expect(res.json().error).toEqual({ code: 'EXERCISE_IN_USE', message: 'The exercise is used by a workout and cannot be deleted' })
+      expect(auditLines()).toEqual([])
+    })
+
+    it('promotes a private exercise with the edited copy (201), auditing source and new ids', async () => {
+      const res = await send('POST', `/api/admin/exercises/${ids.privateExerciseB}/promote`, {
+        name: 'Remada curvada',
+        description: 'Costas retas',
+        muscleGroupIds: [1],
+      })
+      expect(res.statusCode, res.body).toBe(201)
+      expect(upstreamRequest('PromoteExercise')).toEqual({
+        sourceExerciseId: ids.privateExerciseB,
+        exercise: { name: 'Remada curvada', description: 'Costas retas', videoUrl: '', muscleGroupIds: [1] },
+      })
+      expect(res.json()).toMatchObject({ id: 900, isStarter: true, owner: null })
+      expect(auditLines()).toEqual([
+        expect.objectContaining({ audit: 'admin.catalog.promote', sourceExerciseId: ids.privateExerciseB, exerciseId: 900 }),
+      ])
+    })
+
+    it('answers a taken name with 409 NAME_TAKEN, never the global "Email or CPF" conflict', async () => {
+      for (const [method, url, body] of [
+        ['POST', '/api/admin/exercises', { name: 'exercise 1', muscleGroupIds: [1] }],
+        ['POST', '/api/admin/muscle-groups', { name: 'péito' }],
+        ['PATCH', `/api/admin/muscle-groups/${ids.muscleGroup}`, { name: 'Peito' }],
+      ] as const) {
+        grpcCallMock.mockRejectedValueOnce(mapGrpcError({ code: status.ALREADY_EXISTS, details: 'Muscle group name already in use' }))
+        const res = await send(method, url, body)
+        expect(res.statusCode, url).toBe(409)
+        expect(res.json().error).toEqual({ code: 'NAME_TAKEN', message: 'Name already in use' })
+      }
+    })
+
+    it('normalizes a muscle-group name to NFC and trims it before the 1-50 bound, as vertice-api does', async () => {
+      // 49 letters + "e" and a combining acute: 51 UTF-16 units decomposed, 50 once composed.
+      const decomposed = `  ${'a'.repeat(49)}e\u0301  `
+      const res = await send('POST', '/api/admin/muscle-groups', { name: decomposed })
+      expect(res.statusCode, res.body).toBe(201)
+      expect(upstreamRequest('CreateMuscleGroup')).toEqual({ name: `${'a'.repeat(49)}\u00e9` })
+      expect(res.json()).toEqual({ id: 9, name: `${'a'.repeat(49)}\u00e9` })
+      expect(auditLines()).toEqual([expect.objectContaining({ audit: 'admin.catalog.muscle_group_create', muscleGroupId: 9 })])
+    })
+
+    it('renames a muscle group and audits it', async () => {
+      const res = await send('PATCH', `/api/admin/muscle-groups/${ids.muscleGroup}`, { name: 'Peitoral' })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json()).toEqual({ id: ids.muscleGroup, name: 'Peitoral' })
+      expect(upstreamRequest('RenameMuscleGroup')).toEqual({ id: ids.muscleGroup, name: 'Peitoral' })
+      expect(auditLines()).toEqual([expect.objectContaining({ audit: 'admin.catalog.muscle_group_rename', muscleGroupId: ids.muscleGroup })])
+    })
+
+    it('relays INVALID_ARGUMENT text from upstream as a 400 (e.g. an unknown muscle group)', async () => {
+      const res = await send('POST', '/api/admin/exercises', { name: 'Remada', muscleGroupIds: [77] })
+      expect(res.statusCode).toBe(400)
+      expect(res.json().error).toMatchObject({ code: 'VALIDATION_ERROR', message: 'muscleGroupIds: unknown muscle group' })
+    })
+
+    it('answers 502 when upstream sends no exercise', async () => {
+      grpcCallMock.mockResolvedValueOnce({ exercise: null } as never)
+      const res = await send('POST', '/api/admin/exercises', { name: 'Remada', muscleGroupIds: [1] })
+      expect(res.statusCode).toBe(502)
+      expect(res.json().error.code).toBe('UPSTREAM_ERROR')
+    })
+  })
+
+  it('drops an owner on a starter row, whatever upstream sends', () => {
+    const exercise = { id: '1', name: 'n', description: '', videoUrl: '', muscleGroups: [], isStarter: true }
+    expect(toCatalogExercise({ exercise, owner: { id: '10', name: 'T', role: 'TRAINER' } }, 'rpc').owner).toBeNull()
+    expect(toCatalogExercise({ exercise: { ...exercise, isStarter: false }, owner: { id: '10', name: 'T', role: 'TRAINER' } }, 'rpc').owner).toEqual({
+      id: 10,
+      name: 'T',
     })
   })
 })

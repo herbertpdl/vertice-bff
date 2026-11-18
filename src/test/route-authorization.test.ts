@@ -86,6 +86,8 @@ interface Denied extends Call {
    * ownership), so it is the one write call allowed to reach upstream.
    */
   byUpstream?: string
+  /** A route-specific code instead of the status's generic one (e.g. 409 `NAME_TAKEN`). */
+  code?: string
 }
 
 interface Scoped extends Call {
@@ -190,6 +192,153 @@ const routes: RouteCase[] = [
     ],
   },
   { route: 'GET /api/admin/actions/admins', roles: ['ADMIN'], ok: { as: 'admin', url: '/api/admin/actions/admins' } },
+
+  // exercise curation (admin-panel spec §2.4, VRT-31). The catalog's rules are vertice-api's
+  // (`byUpstream`): the BFF has no exercise-ownership check of its own.
+  {
+    route: 'GET /api/admin/exercises',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/exercises?scope=PRIVATE&ownerId=${ids.trainerA}&q=exer&limit=10` },
+    denied: [
+      { as: 'admin', url: '/api/admin/exercises?scope=CATALOG_SCOPE_STARTER', why: 'query: the prefixed enum name', status: 400 },
+      { as: 'admin', url: '/api/admin/exercises?ownerId=0', why: 'query: a non-positive owner id', status: 400 },
+      { as: 'admin', url: '/api/admin/exercises?limit=100', why: 'query: limit outside 10/25/50', status: 400 },
+      { as: 'admin', url: `/api/admin/exercises?q=${'x'.repeat(101)}`, why: 'query: a 101-character search', status: 400 },
+    ],
+  },
+  {
+    route: 'GET /api/admin/exercises/most-used',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/exercises/most-used?muscleGroupId=${ids.muscleGroup}&limit=50` },
+    denied: [
+      { as: 'admin', url: '/api/admin/exercises/most-used?limit=0', why: 'query: limit 0 (upstream reads it as 25)', status: 400 },
+      { as: 'admin', url: '/api/admin/exercises/most-used?muscleGroupId=x', why: 'query: a malformed group id', status: 400 },
+    ],
+  },
+  {
+    route: 'POST /api/admin/exercises',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: '/api/admin/exercises', body: { name: 'Supino inclinado', muscleGroupIds: [ids.muscleGroup] } },
+    denied: [
+      { as: 'admin', url: '/api/admin/exercises', body: { name: '  ', muscleGroupIds: [1] }, why: 'body: a blank name', status: 400 },
+      { as: 'admin', url: '/api/admin/exercises', body: { name: 'Remada', muscleGroupIds: [] }, why: 'body: no muscle group', status: 400 },
+      {
+        as: 'admin',
+        url: '/api/admin/exercises',
+        body: { name: 'Remada', muscleGroupIds: [1], videoUrl: 'https://vimeo.com/1' },
+        why: 'body: a video that is not YouTube',
+        status: 400,
+      },
+      {
+        as: 'admin',
+        url: '/api/admin/exercises',
+        body: { name: ' EXERCÍSE 1 ', muscleGroupIds: [1] },
+        why: 'body: a starter name taken, ignoring case and accents (R64)',
+        status: 409,
+        code: 'NAME_TAKEN',
+        byUpstream: 'CreateStarterExercise',
+      },
+    ],
+  },
+  {
+    route: 'PUT /api/admin/exercises/:id',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/exercises/${ids.exercise}`, body: { name: 'Exercise 1', description: 'd', muscleGroupIds: [1] } },
+    denied: [
+      {
+        as: 'admin',
+        url: `/api/admin/exercises/${ids.privateExerciseA}`,
+        body: exerciseBody,
+        why: "path: a trainer's private exercise is read-only (R57)",
+        byUpstream: 'UpdateStarterExercise',
+      },
+      { as: 'admin', url: '/api/admin/exercises/9999', body: exerciseBody, why: 'path: a missing exercise', status: 404, byUpstream: 'UpdateStarterExercise' },
+      {
+        as: 'admin',
+        url: `/api/admin/exercises/${ids.exercise}`,
+        body: { name: `Exercise ${ids.inUseStarterExercise}`, muscleGroupIds: [1] },
+        why: "body: another starter exercise's name",
+        status: 409,
+        code: 'NAME_TAKEN',
+        byUpstream: 'UpdateStarterExercise',
+      },
+      { as: 'admin', url: `/api/admin/exercises/${ids.exercise}`, body: { name: 'Remada' }, why: 'body: not a full replacement', status: 400 },
+    ],
+  },
+  {
+    route: 'DELETE /api/admin/exercises/:id',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/exercises/${ids.exercise}` },
+    denied: [
+      {
+        as: 'admin',
+        url: `/api/admin/exercises/${ids.inUseStarterExercise}`,
+        why: 'state: a workout uses it (R55)',
+        status: 409,
+        code: 'EXERCISE_IN_USE',
+        byUpstream: 'DeleteStarterExercise',
+      },
+      {
+        as: 'admin',
+        url: `/api/admin/exercises/${ids.privateExerciseB}`,
+        why: "path: a trainer's private exercise (R57)",
+        byUpstream: 'DeleteStarterExercise',
+      },
+      { as: 'admin', url: '/api/admin/exercises/9999', why: 'path: a missing exercise', status: 404, byUpstream: 'DeleteStarterExercise' },
+    ],
+  },
+  {
+    route: 'POST /api/admin/exercises/:id/promote',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/exercises/${ids.privateExerciseB}/promote`, body: { name: 'Remada curvada', muscleGroupIds: [1] } },
+    denied: [
+      {
+        as: 'admin',
+        url: `/api/admin/exercises/${ids.exercise}/promote`,
+        body: exerciseBody,
+        why: 'state: the source is already a starter exercise',
+        status: 409,
+        byUpstream: 'PromoteExercise',
+      },
+      {
+        as: 'admin',
+        url: `/api/admin/exercises/${ids.privateExerciseB}/promote`,
+        body: { name: 'exercise 1', muscleGroupIds: [1] },
+        why: 'body: a starter name taken',
+        status: 409,
+        code: 'NAME_TAKEN',
+        byUpstream: 'PromoteExercise',
+      },
+      { as: 'admin', url: '/api/admin/exercises/9999/promote', body: exerciseBody, why: 'path: a missing source', status: 404, byUpstream: 'PromoteExercise' },
+    ],
+  },
+  {
+    route: 'POST /api/admin/muscle-groups',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: '/api/admin/muscle-groups', body: { name: 'Antebraço' } },
+    denied: [
+      { as: 'admin', url: '/api/admin/muscle-groups', body: { name: '   ' }, why: 'body: a blank name', status: 400 },
+      { as: 'admin', url: '/api/admin/muscle-groups', body: { name: 'x'.repeat(51) }, why: 'body: a 51-character name', status: 400 },
+      {
+        as: 'admin',
+        url: '/api/admin/muscle-groups',
+        body: { name: 'PEITO' },
+        why: 'body: a name taken, ignoring case (R65)',
+        status: 409,
+        code: 'NAME_TAKEN',
+        byUpstream: 'CreateMuscleGroup',
+      },
+    ],
+  },
+  {
+    route: 'PATCH /api/admin/muscle-groups/:id',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/muscle-groups/${ids.muscleGroup}`, body: { name: 'Peitoral' } },
+    denied: [
+      { as: 'admin', url: '/api/admin/muscle-groups/9999', body: { name: 'Costas' }, why: 'path: a missing group', status: 404, byUpstream: 'RenameMuscleGroup' },
+      { as: 'admin', url: '/api/admin/muscle-groups/0', body: { name: 'Costas' }, why: 'path: a malformed id', status: 400 },
+    ],
+  },
 
   // admin panel writes (admin-panel spec §2.3, VRT-28). Client A2 starts suspended (see beforeEach).
   {
@@ -434,9 +583,10 @@ const routes: RouteCase[] = [
     denied: [{ as: 'trainerA', url: `/api/clients/${ids.clientB}`, why: "path: another trainer's client" }],
   },
 
-  // exercises (global catalog; per-exercise visibility is enforced upstream, spec D10)
-  { route: 'GET /api/exercises', roles: ['TRAINER', 'ADMIN'], ok: { as: 'trainerA', url: '/api/exercises' } },
-  { route: 'GET /api/exercises/:id', ok: { as: 'clientA', url: `/api/exercises/${ids.exercise}` } },
+  // exercises (global catalog; per-exercise visibility is enforced upstream, spec D10). Not ADMIN
+  // since VRT-31: the admin panel reads the catalog through /api/admin/exercises.
+  { route: 'GET /api/exercises', roles: ['TRAINER'], ok: { as: 'trainerA', url: '/api/exercises' } },
+  { route: 'GET /api/exercises/:id', roles: ['TRAINER', 'CLIENT'], ok: { as: 'clientA', url: `/api/exercises/${ids.exercise}` } },
   {
     route: 'GET /api/exercises/with-progress',
     roles: ['TRAINER', 'CLIENT'],
@@ -1191,22 +1341,20 @@ describe('route authorization', () => {
   })
 
   // Role separation (admin-panel spec B7). Outside /api/admin, ADMIN keeps only its own account's
-  // read, consent and password change, and the catalog reads the admin screens use (VRT-31 drops
-  // the two exercise reads). Under /api/admin, only the sign-in steps are public and everything
+  // read, consent and password change, and the muscle-group list the admin screens use (VRT-31
+  // dropped the two exercise reads). Under /api/admin, only the sign-in steps are public and everything
   // else is ADMIN only. Widening any of these lists needs the PRD to say so.
   const ADMIN_SELF_ROUTES = [
     'GET /api/auth/me',
     'POST /api/auth/me/consent',
     'POST /api/auth/password',
-    'GET /api/exercises',
-    'GET /api/exercises/:id',
     'GET /api/muscle-groups',
   ]
   const PUBLIC_ADMIN_AUTH_ROUTES = ['POST /api/admin/auth/login', 'POST /api/admin/auth/enroll', 'POST /api/admin/auth/verify']
   const underAdmin = (r: RouteCase) => r.route.split(' ')[1]!.startsWith('/api/admin/')
   const admitsAdmin = (r: RouteCase) => !r.public && (!r.roles || r.roles.includes('ADMIN'))
 
-  it('admits ADMIN outside /api/admin on its own account and the catalog reads only', () => {
+  it('admits ADMIN outside /api/admin on its own account and the muscle-group list only', () => {
     const admitted = routes.filter((r) => !underAdmin(r) && admitsAdmin(r)).map((r) => r.route)
     expect(admitted.sort()).toEqual([...ADMIN_SELF_ROUTES].sort())
   })
@@ -1293,12 +1441,7 @@ describe('route authorization', () => {
     expect([...cacheable].sort()).toEqual([...CACHEABLE_ROUTES].sort())
   })
 
-  it.each([
-    '/api/auth/me',
-    '/api/exercises',
-    `/api/exercises/${ids.exercise}`,
-    '/api/muscle-groups',
-  ])('lets ADMIN read GET %s', async (url) => {
+  it.each(['/api/auth/me', '/api/muscle-groups'])('lets ADMIN read GET %s', async (url) => {
     const res = await send('GET', { as: 'admin', url })
     expect(res.statusCode, res.body).toBe(200)
   })
@@ -1373,7 +1516,7 @@ describe('route authorization', () => {
       const status = d.status ?? 403
       const res = await send(method, d)
       expect(res.statusCode, res.body).toBe(status)
-      expect(res.json().error.code).toBe(errorCodeFor[status])
+      expect(res.json().error.code).toBe(d.code ?? errorCodeFor[status])
       expect(upstreamMethods().filter(isWriteRpc)).toEqual(d.byUpstream ? [d.byUpstream] : [])
     })
 
