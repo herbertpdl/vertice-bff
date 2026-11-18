@@ -17,12 +17,12 @@ export interface Exercise {
   isStarter: boolean
 }
 
-interface MuscleGroupResponse {
+export interface MuscleGroupResponse {
   id: string
   name: string
 }
 
-interface ExerciseResponse {
+export interface ExerciseResponse {
   id: string
   name: string
   description: string
@@ -69,8 +69,8 @@ export interface ExerciseListFilter {
 }
 
 /**
- * One page, never the whole catalog. Upstream scopes the list to the caller (TRAINER: starter
- * set + own; ADMIN: starter set) and owns the ordering, search semantics and page bounds — the
+ * One page, never the whole catalog. Upstream scopes the list to the caller (the starter set
+ * and the TRAINER's own) and owns the ordering, search semantics and page bounds — the
  * page is returned as-is, never re-sorted or re-filtered here.
  */
 export async function listExercises(filter: ExerciseListFilter = {}): Promise<ExercisePage> {
@@ -98,14 +98,14 @@ export interface ExerciseInput {
   muscleGroupIds: number[]
 }
 
-interface ExerciseRequest {
+export interface ExerciseRequest {
   name: string
   description: string
   videoUrl: string
   muscleGroupIds: number[]
 }
 
-function toExerciseRequest(input: ExerciseInput): ExerciseRequest {
+export function toExerciseRequest(input: ExerciseInput): ExerciseRequest {
   return {
     name: input.name,
     description: input.description,

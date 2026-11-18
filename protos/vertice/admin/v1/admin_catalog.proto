@@ -1,0 +1,168 @@
+syntax = "proto3";
+
+package vertice.admin.v1;
+
+import "vertice/admin/v1/admin.proto";
+import "vertice/exercise/v1/exercise.proto";
+
+option java_package = "com.vertice.api.generated.grpc.admin.v1";
+option java_multiple_files = true;
+
+// Starter-catalog curation (R52-R66) and the most-used list (R22-R26); admin-panel spec D20-D24,
+// D28, §3.3. ADMIN only, with the second-factor claim (D6): any other user is PERMISSION_DENIED, a
+// service token PERMISSION_DENIED, no token UNAUTHENTICATED.
+//
+// Every write records one history entry in its own transaction (R67), with the starter exercise's
+// or muscle group's name as its label. A trainer's private exercise is read-only here (R57).
+//
+// Names (exercise and muscle group) are stored in Unicode NFC, trimmed, and are unique within the
+// starter catalog and within the muscle groups ignoring case and accents (R64, R65); a trainer's
+// private exercise may share a starter name (R66). A starter edit shows everywhere the exercise is
+// used, past workout logs included (R54).
+//
+// Lists take page_size 10, 25 or 50 (0 means 25) and the opaque next_page_token of the previous
+// page, sent with the same filters; any other page_size or a malformed page_token is
+// INVALID_ARGUMENT.
+service AdminCatalogService {
+  // Starter and private exercises, private ones tagged with their owner (R23, R56): starter first,
+  // then by name, then id. Not recorded in the history.
+  rpc ListCatalogExercises(ListCatalogExercisesRequest) returns (ListCatalogExercisesResponse);
+  // Exercises by the number of distinct workouts that currently contain them (R22-R26): only
+  // exercises in at least one workout, workout_count descending, ties by id. Not recorded in the
+  // history.
+  rpc ListMostUsedExercises(ListMostUsedExercisesRequest) returns (ListMostUsedExercisesResponse);
+  // A new starter exercise (R52). No primary group and no catalog order, so in a trainer's grouped
+  // list it comes after the seeded rows, by name. ALREADY_EXISTS "Exercise name already in use".
+  rpc CreateStarterExercise(CreateStarterExerciseRequest) returns (CreateStarterExerciseResponse);
+  // Replaces a starter exercise's fields and muscle groups (R53, R54). NOT_FOUND for a missing id;
+  // PERMISSION_DENIED "Exercise <id> is not a starter exercise" for a private one (R57);
+  // ALREADY_EXISTS "Exercise name already in use".
+  rpc UpdateStarterExercise(UpdateStarterExerciseRequest) returns (UpdateStarterExerciseResponse);
+  // NOT_FOUND for a missing id; PERMISSION_DENIED "Exercise <id> is not a starter exercise" for a
+  // private one; FAILED_PRECONDITION "Exercise <id> is used by a workout and cannot be deleted"
+  // while any workout contains it (R55).
+  rpc DeleteStarterExercise(DeleteStarterExerciseRequest) returns (DeleteStarterExerciseResponse);
+  // Copies a trainer's private exercise into the starter set with the admin's edits (R58-R60). The
+  // trainer's exercise is left untouched and the trainer is not notified. NOT_FOUND for a missing
+  // source; FAILED_PRECONDITION "Exercise <id> is already a starter exercise"; ALREADY_EXISTS
+  // "Exercise name already in use".
+  rpc PromoteExercise(PromoteExerciseRequest) returns (PromoteExerciseResponse);
+  // A new muscle group, listed last by ListMuscleGroups (R61). ALREADY_EXISTS "Muscle group name
+  // already in use" (R65). There is no delete (R63).
+  rpc CreateMuscleGroup(CreateMuscleGroupRequest) returns (CreateMuscleGroupResponse);
+  // Renames a muscle group everywhere it is shown (R62). NOT_FOUND for a missing id;
+  // ALREADY_EXISTS "Muscle group name already in use".
+  rpc RenameMuscleGroup(RenameMuscleGroupRequest) returns (RenameMuscleGroupResponse);
+}
+
+enum CatalogScope {
+  // Starter and private.
+  CATALOG_SCOPE_UNSPECIFIED = 0;
+  CATALOG_SCOPE_STARTER = 1;
+  CATALOG_SCOPE_PRIVATE = 2;
+}
+
+message CatalogExercise {
+  vertice.exercise.v1.ExerciseResponse exercise = 1;
+  // The trainer who owns a private exercise (R23, R56); unset for a starter one. The name is
+  // "Usuário removido" for a deleted account.
+  UserRef owner = 2;
+}
+
+message ListCatalogExercisesRequest {
+  CatalogScope scope = 1;
+  // 0 = any group.
+  int64 muscle_group_id = 2;
+  // 0 = any owner; another id narrows to that trainer's private exercises.
+  int64 owner_id = 3;
+  // Case-insensitive substring of the name; empty = no filter; at most 100 characters.
+  string search = 4;
+  // 10, 25 or 50; 0 means 25.
+  int32 page_size = 5;
+  string page_token = 6;
+}
+
+message ListCatalogExercisesResponse {
+  // Starter first, then by name, then id.
+  repeated CatalogExercise exercises = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+}
+
+message ListMostUsedExercisesRequest {
+  // 0 = any group (R24).
+  int64 muscle_group_id = 1;
+  // 10, 25 or 50; 0 means 25 (R25).
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListMostUsedExercisesResponse {
+  // workout_count descending, then id ascending.
+  repeated MostUsedExercise exercises = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+}
+
+message MostUsedExercise {
+  CatalogExercise exercise = 1;
+  // Distinct workouts that currently contain the exercise; at least 1.
+  int64 workout_count = 2;
+}
+
+// The exercise fields have the trainer's ExerciseRequest bounds: name not blank and at most 255
+// characters, description at most 255, video_url a YouTube URL of at most 500, at least one muscle
+// group (unknown ids are INVALID_ARGUMENT). An unset exercise is INVALID_ARGUMENT.
+message CreateStarterExerciseRequest {
+  vertice.exercise.v1.ExerciseRequest exercise = 1;
+}
+
+message CreateStarterExerciseResponse {
+  CatalogExercise exercise = 1;
+}
+
+message UpdateStarterExerciseRequest {
+  int64 id = 1;
+  vertice.exercise.v1.ExerciseRequest exercise = 2;
+}
+
+message UpdateStarterExerciseResponse {
+  CatalogExercise exercise = 1;
+}
+
+message DeleteStarterExerciseRequest {
+  int64 id = 1;
+}
+
+message DeleteStarterExerciseResponse {}
+
+message PromoteExerciseRequest {
+  // The trainer's private exercise; it is read, never changed.
+  int64 source_exercise_id = 1;
+  // The starter copy as the admin edited it.
+  vertice.exercise.v1.ExerciseRequest exercise = 2;
+}
+
+message PromoteExerciseResponse {
+  // The new starter exercise.
+  CatalogExercise exercise = 1;
+}
+
+message CreateMuscleGroupRequest {
+  // Trimmed; 1-50 characters.
+  string name = 1;
+}
+
+message CreateMuscleGroupResponse {
+  vertice.exercise.v1.MuscleGroupResponse muscle_group = 1;
+}
+
+message RenameMuscleGroupRequest {
+  int64 id = 1;
+  // Trimmed; 1-50 characters.
+  string name = 2;
+}
+
+message RenameMuscleGroupResponse {
+  vertice.exercise.v1.MuscleGroupResponse muscle_group = 1;
+}

@@ -21,7 +21,7 @@ export const TAGS = [
   {
     name: 'Admin',
     description:
-      'The admin panel: dashboard, user directory and profiles, action history, suspension, account e-mails and ending relationships (ADMIN only, with the admin session token).',
+      'The admin panel: dashboard, user directory and profiles, action history, suspension, account e-mails, ending relationships and exercise curation (ADMIN only, with the admin session token).',
   },
   { name: 'Legal', description: 'Versions of the legal texts, for the consent flow.' },
   { name: 'Clients', description: 'A trainer’s roster of clients (TRAINER only).' },
@@ -43,7 +43,7 @@ const ERROR_DESCRIPTIONS = {
   401: 'Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.',
   403: 'The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).',
   404: 'Not found (`NOT_FOUND`).',
-  409: 'Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, `ACTIVE_CLIENTS`).',
+  409: 'Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).',
   413: 'The requested data is too large to return (`TOO_LARGE`).',
   429: 'Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.',
 } as const

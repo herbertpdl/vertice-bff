@@ -20,21 +20,21 @@ import {
 export default async function exerciseRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
 
-  // The catalog read stays open to ADMIN (upstream returns the starter set): it is generic,
-  // not trainer-scoped.
+  // TRAINER only: an ADMIN curates the catalog through `GET /admin/exercises` (admin-panel spec
+  // B7, VRT-31), and vertice-api refuses this read to ADMIN anyway.
   app.get(
     '/',
     {
-      preHandler: app.requireRole('TRAINER', 'ADMIN'),
+      preHandler: app.requireRole('TRAINER'),
       schema: routeDoc({
         operationId: 'listExercises',
         summary: 'One page of the exercise catalog',
         description:
-          'A trainer sees the starter set and their own exercises; an ADMIN the starter set only. ' +
+          'The starter set and the caller’s own exercises. ' +
           'In upstream order: do not re-sort client-side. An empty `muscleGroupId` or `q` means no filter. ' +
           'Always paged (30 by default, at most 50): follow `nextCursor` with the same filter for more.',
         tag: 'Exercises',
-        roles: ['TRAINER', 'ADMIN'],
+        roles: ['TRAINER'],
         query: z.object({
           muscleGroupId: idQuery('Exercises with this group as primary or secondary.'),
           q: z.string().max(100).optional().describe('Case-insensitive name search, trimmed.'),
@@ -86,18 +86,20 @@ export default async function exerciseRoutes(app: FastifyInstance) {
     },
   )
 
-  // No role gate on purpose: a CLIENT may read an exercise inside one of their own
-  // workouts, and only upstream can tell.
+  // TRAINER and CLIENT: a CLIENT may read an exercise inside one of their own workouts, and only
+  // upstream can tell. Not ADMIN (admin-panel spec B7, VRT-31; vertice-api refuses it too).
   app.get<{ Params: { id: string } }>(
     '/:id',
     {
+      preHandler: app.requireRole('TRAINER', 'CLIENT'),
       schema: routeDoc({
         operationId: 'getExercise',
         summary: 'One exercise',
         description:
-          'Vertice-api decides visibility. A TRAINER sees the starter set and their own, an ADMIN the starter set, ' +
+          'Vertice-api decides visibility. A TRAINER sees the starter set and their own, ' +
           'a CLIENT only an exercise used by a workout in one of their plans.',
         tag: 'Exercises',
+        roles: ['TRAINER', 'CLIENT'],
         params: idParams('id'),
         ok: { status: 200, description: 'The exercise.', schema: exerciseSchema },
         errors: [403, 404],
@@ -106,7 +108,7 @@ export default async function exerciseRoutes(app: FastifyInstance) {
     async (req) => exerciseService.getExercise(parseId(req.params.id)),
   )
 
-  // Client history is trainer-scoped: ADMIN (no defined product yet, P1-02) gets a 403.
+  // Client history is trainer-scoped: ADMIN gets a 403.
   app.get<{ Params: { id: string }; Querystring: { clientId?: string } }>(
     '/:id/progress',
     {

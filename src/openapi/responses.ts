@@ -77,6 +77,8 @@ export const ERROR_CODES = [
   'INVALID_SECOND_FACTOR_CODE',
   'ADMIN_LOGIN_ELSEWHERE',
   'ACCOUNT_SUSPENDED',
+  'NAME_TAKEN',
+  'EXERCISE_IN_USE',
 ] as const
 
 export const errorCodeSchema = named('ErrorCode', z.enum(ERROR_CODES))
@@ -491,6 +493,46 @@ export const exercisePageSchema = named(
   }),
 )
 
+// ---- admin exercise curation (admin-panel spec §2.4, VRT-31) ------------------------------------
+
+export const adminCatalogExerciseSchema = named(
+  'AdminCatalogExercise',
+  exerciseSchema.extend({
+    owner: z
+      .object({ id, name: z.string().describe('“Usuário removido” for a deleted account.') })
+      .nullable()
+      .describe('The trainer who owns a private exercise; null for a starter one.'),
+  }),
+)
+
+export const adminCatalogPageSchema = named(
+  'AdminCatalogPage',
+  z.object({
+    exercises: z
+      .array(adminCatalogExerciseSchema)
+      .describe('Starter exercises first, then by name, then id, in upstream order: do not re-sort client-side.'),
+    nextCursor,
+  }),
+)
+
+export const adminMostUsedExerciseSchema = named(
+  'AdminMostUsedExercise',
+  z.object({
+    exercise: adminCatalogExerciseSchema,
+    workoutCount: z.number().int().min(1).describe('Distinct workouts that currently contain the exercise.'),
+  }),
+)
+
+export const adminMostUsedPageSchema = named(
+  'AdminMostUsedPage',
+  z.object({
+    exercises: z
+      .array(adminMostUsedExerciseSchema)
+      .describe('`workoutCount` descending, then id; only exercises in at least one workout.'),
+    nextCursor,
+  }),
+)
+
 export const progressExerciseSchema = named(
   'ProgressExercise',
   z.object({ id, name: z.string() }),
@@ -714,6 +756,9 @@ export type ResponseSchemasMatchServices = [
   Assert<SameShape<Out<typeof adminUserProfileSchema>, adminService.AdminUserProfile>>,
   Assert<SameShape<Out<typeof adminActionPageSchema>, adminService.AdminActionPage>>,
   Assert<SameShape<Out<typeof adminActionAdminsSchema>, adminService.AdminActionAdmins>>,
+  Assert<SameShape<Out<typeof adminCatalogExerciseSchema>, adminService.AdminCatalogExercise>>,
+  Assert<SameShape<Out<typeof adminCatalogPageSchema>, adminService.AdminCatalogPage>>,
+  Assert<SameShape<Out<typeof adminMostUsedPageSchema>, adminService.AdminMostUsedPage>>,
   Assert<SameShape<Out<typeof passwordSetupResultSchema>, userService.RedeemedSetup>>,
   Assert<SameShape<Out<typeof consentSchema>, userService.Consent>>,
   Assert<SameShape<Out<typeof meSchema>, userService.Me>>,

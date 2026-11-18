@@ -75,6 +75,10 @@ export const ids = {
   privateExerciseA: 3,
   /** Trainer A's private exercise that a workout uses (the fake has no row for that workout). */
   inUseExerciseA: 4,
+  /** A starter exercise that a workout uses: `DeleteStarterExerciseRequest` refuses it. */
+  inUseStarterExercise: 5,
+  /** The fixture's one muscle group (`ListMuscleGroups`). */
+  muscleGroup: 1,
 } as const
 
 export type Actor = 'admin' | 'trainerA' | 'trainerB' | 'clientA' | 'clientB'
@@ -305,6 +309,7 @@ const exercises: { id: number; ownerId: number | null; inUse?: true }[] = [
   { id: ids.privateExerciseB, ownerId: ids.trainerB },
   { id: ids.privateExerciseA, ownerId: ids.trainerA },
   { id: ids.inUseExerciseA, ownerId: ids.trainerA, inUse: true },
+  { id: ids.inUseStarterExercise, ownerId: null, inUse: true },
 ]
 const exerciseRes = (e: (typeof exercises)[number] = exercises[0]!) => ({
   id: str(e.id),
@@ -783,6 +788,125 @@ const adminHandlers: Record<string, (req: Req) => unknown> = {
 
 const byNumber = (value: unknown, actual: number) => !Number(value) || Number(value) === actual
 
+/**
+ * Mirrors vertice-api's `AdminCatalogService` (admin-panel D20-D24, D28): ADMIN only, the trainer's
+ * `ExerciseRequest` bounds, names unique ignoring case within the starter set and within the muscle
+ * groups, a private exercise read-only. Stateless: writes answer as if they happened and change no
+ * fixture, so tests stay independent.
+ */
+const FAKE_MUSCLE_GROUPS = [{ id: ids.muscleGroup, name: 'Peito' }]
+const nameKey = (name: unknown) => String(name ?? '').normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
+function catalogRow(e: (typeof exercises)[number]) {
+  return { exercise: exerciseRes(e), owner: e.ownerId === null ? null : userRef(find(users, e.ownerId, 'User')) }
+}
+function requireCatalogId(value: unknown, field = 'id') {
+  if (!(Number(value) >= 1)) upstreamError(status.INVALID_ARGUMENT, `${field}: must be greater than or equal to 1`)
+}
+function requireExerciseRequest(r: Req, exceptId?: number) {
+  const exercise = r.exercise as Req | null | undefined
+  if (!exercise) upstreamError(status.INVALID_ARGUMENT, 'exercise: must be set')
+  const name = String(exercise.name ?? '').normalize('NFC').trim()
+  if (name.length < 1 || name.length > 255) upstreamError(status.INVALID_ARGUMENT, 'name: size must be between 1 and 255')
+  const groupIds = (exercise.muscleGroupIds as number[] | undefined) ?? []
+  if (groupIds.length === 0) upstreamError(status.INVALID_ARGUMENT, 'muscleGroupIds: must contain at least one muscle group')
+  if (groupIds.some((g) => !FAKE_MUSCLE_GROUPS.some((m) => m.id === Number(g)))) {
+    upstreamError(status.INVALID_ARGUMENT, 'muscleGroupIds: unknown muscle group')
+  }
+  const taken = exercises.some(
+    (e) => e.ownerId === null && e.id !== exceptId && nameKey(exerciseRes(e).name) === nameKey(name),
+  )
+  if (taken) upstreamError(status.ALREADY_EXISTS, 'Exercise name already in use')
+  return name
+}
+function starterTarget(id: unknown) {
+  requireCatalogId(id)
+  const exercise = find(exercises, id, `Exercise with id ${Number(id)} not found`)
+  if (exercise.ownerId !== null) upstreamError(status.PERMISSION_DENIED, `Exercise ${exercise.id} is not a starter exercise`)
+  return exercise
+}
+function requireMuscleGroupName(r: Req, exceptId?: number) {
+  const name = String(r.name ?? '').normalize('NFC').trim()
+  if (name.length < 1 || name.length > 50) upstreamError(status.INVALID_ARGUMENT, 'name: size must be between 1 and 50')
+  if (FAKE_MUSCLE_GROUPS.some((m) => m.id !== exceptId && nameKey(m.name) === nameKey(name))) {
+    upstreamError(status.ALREADY_EXISTS, 'Muscle group name already in use')
+  }
+  return name
+}
+const FAKE_NEW_EXERCISE_ID = 900
+const FAKE_NEW_MUSCLE_GROUP_ID = 9
+const createdStarter = (name: string) => ({
+  exercise: { ...exerciseRes({ id: FAKE_NEW_EXERCISE_ID, ownerId: null }), name },
+  owner: null,
+})
+
+const adminCatalogHandlers: Record<string, (req: Req) => unknown> = {
+  ListCatalogExercises: (r) => {
+    requireAdminCaller()
+    const search = String(r.search ?? '').trim().toLowerCase()
+    if (search.length > 100) upstreamError(status.INVALID_ARGUMENT, 'search: size must be between 0 and 100')
+    if (!['CATALOG_SCOPE_UNSPECIFIED', 'CATALOG_SCOPE_STARTER', 'CATALOG_SCOPE_PRIVATE'].includes(String(r.scope))) {
+      upstreamError(status.INVALID_ARGUMENT, 'scope: unknown catalog scope')
+    }
+    const rows = exercises
+      .filter((e) => r.scope !== 'CATALOG_SCOPE_STARTER' || e.ownerId === null)
+      .filter((e) => r.scope !== 'CATALOG_SCOPE_PRIVATE' || e.ownerId !== null)
+      .filter((e) => byNumber(r.ownerId, e.ownerId ?? -1))
+      // Every fixture exercise has the one fixture group: another group id is an empty page.
+      .filter(() => byNumber(r.muscleGroupId, ids.muscleGroup))
+      .filter((e) => !search || exerciseRes(e).name.toLowerCase().includes(search))
+      .sort((a, b) => Number(b.ownerId === null) - Number(a.ownerId === null) || a.id - b.id)
+    const { page, nextPageToken } = adminPage(rows, r)
+    return { exercises: page.map(catalogRow), nextPageToken }
+  },
+  ListMostUsedExercises: (r) => {
+    requireAdminCaller()
+    const counts = new Map<number, number>([
+      [ids.exercise, 3],
+      [ids.inUseStarterExercise, 2],
+      [ids.inUseExerciseA, 1],
+    ])
+    const rows = exercises
+      .filter((e) => counts.has(e.id) && byNumber(r.muscleGroupId, ids.muscleGroup))
+      .sort((a, b) => counts.get(b.id)! - counts.get(a.id)! || a.id - b.id)
+    const { page, nextPageToken } = adminPage(rows, r)
+    return { exercises: page.map((e) => ({ exercise: catalogRow(e), workoutCount: str(counts.get(e.id)!) })), nextPageToken }
+  },
+  CreateStarterExercise: (r) => {
+    requireAdminCaller()
+    return { exercise: createdStarter(requireExerciseRequest(r)) }
+  },
+  UpdateStarterExercise: (r) => {
+    requireAdminCaller()
+    const target = starterTarget(r.id)
+    const name = requireExerciseRequest(r, target.id)
+    return { exercise: { exercise: { ...exerciseRes(target), name }, owner: null } }
+  },
+  DeleteStarterExercise: (r) => {
+    requireAdminCaller()
+    const target = starterTarget(r.id)
+    if (target.inUse) upstreamError(status.FAILED_PRECONDITION, `Exercise ${target.id} is used by a workout and cannot be deleted`)
+    return {}
+  },
+  PromoteExercise: (r) => {
+    requireAdminCaller()
+    requireCatalogId(r.sourceExerciseId, 'sourceExerciseId')
+    const source = find(exercises, r.sourceExerciseId, `Exercise with id ${Number(r.sourceExerciseId)} not found`)
+    if (source.ownerId === null) upstreamError(status.FAILED_PRECONDITION, `Exercise ${source.id} is already a starter exercise`)
+    return { exercise: createdStarter(requireExerciseRequest(r)) }
+  },
+  CreateMuscleGroup: (r) => {
+    requireAdminCaller()
+    return { muscleGroup: { id: str(FAKE_NEW_MUSCLE_GROUP_ID), name: requireMuscleGroupName(r) } }
+  },
+  RenameMuscleGroup: (r) => {
+    requireAdminCaller()
+    requireCatalogId(r.id)
+    const group = find(FAKE_MUSCLE_GROUPS, r.id, `Muscle group with id ${Number(r.id)} not found`)
+    return { muscleGroup: { id: str(group.id), name: requireMuscleGroupName(r, group.id) } }
+  },
+}
+
+
 const handlers: Record<string, (req: Req) => unknown> = {
   // UserService
   ListUsers: (r) => listUsers(r),
@@ -933,7 +1057,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
   }),
 
   // ExerciseService
-  ListMuscleGroups: () => ({ muscleGroups: [{ id: '1', name: 'Peito' }] }),
+  ListMuscleGroups: () => ({ muscleGroups: FAKE_MUSCLE_GROUPS.map((m) => ({ id: str(m.id), name: m.name })) }),
   ListExercises: () => ({ exercises: [exerciseRes()], nextPageToken: '' }),
   GetExercise: (r) => getVisibleExercise(r.id),
   CreateExercise: () => exerciseRes(),
@@ -1049,6 +1173,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
 
   // AdminService
   ...adminHandlers,
+  ...adminCatalogHandlers,
 
   // TrainerClientService
   CreateClientForTrainer: (r) => ({ ...userRes(users[3]!, 'detail'), id: '99', email: r.email, cpf: r.cpf }),
@@ -1085,7 +1210,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
 
 /** RPCs that change upstream state. A refused request must never reach one. */
 export const isWriteRpc = (method: string) =>
-  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard|Start|Verify|Issue|Reset|Suspend|Reactivate|Send)/.test(method) &&
+  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard|Start|Verify|Issue|Reset|Suspend|Reactivate|Send|Promote|Rename)/.test(method) &&
   method !== 'VerifyCredentials'
 
 /**

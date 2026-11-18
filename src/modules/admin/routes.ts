@@ -1,14 +1,19 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { parseId } from '../../lib/net.js'
 import { idParams, idQuery, routeDoc } from '../../openapi/docs.js'
+import { exerciseInputSchema } from '../exercises/schemas.js'
 import {
   adminActionAdminsSchema,
   adminActionPageSchema,
+  adminCatalogExerciseSchema,
+  adminCatalogPageSchema,
   adminDashboardSchema,
   adminDirectoryPageSchema,
+  adminMostUsedPageSchema,
   adminUserProfileSchema,
   adminUserResultSchema,
+  muscleGroupSchema,
 } from '../../openapi/responses.js'
 import {
   ADMIN_ACTIONS,
@@ -16,10 +21,14 @@ import {
   ADMIN_PAGE_SIZES,
   ADMIN_SEARCH_MAX,
   adminActionsQuerySchema,
+  adminCatalogQuerySchema,
   adminDirectoryQuerySchema,
+  adminMostUsedQuerySchema,
   adminReasonSchema,
+  CATALOG_SCOPES,
   DIRECTORY_ROLES,
   DIRECTORY_STATUSES,
+  muscleGroupNameSchema,
 } from './schemas.js'
 import * as adminService from './service.js'
 
@@ -44,6 +53,8 @@ const cursorDoc = z
  * VRT-24: the read routes (spec §2.2), one `AdminService` RPC each, with the caller's admin token.
  * VRT-28: suspension, account e-mails and ending a relationship (spec §2.3), each with an
  * `audit: "admin.<action>"` line (actor and target ids; never the reason, B15).
+ * VRT-31: exercise curation and the most-used list (spec §2.4), on `AdminCatalogService`; each
+ * write logs `audit: "admin.catalog.<action>"` (actor and target ids; never a name, B15).
  * vertice-api re-checks ADMIN and the second-factor claims (D6) on every call.
  */
 export default async function adminRoutes(app: FastifyInstance) {
@@ -260,6 +271,224 @@ export default async function adminRoutes(app: FastifyInstance) {
         'Relationship ended by an admin',
       )
       reply.status(204)
+    },
+  )
+
+  // ---- exercise curation (VRT-31, spec §2.4) -----------------------------------------------------
+
+  const audit = (req: FastifyRequest, action: string, target: Record<string, number>) =>
+    req.log.info({ audit: `admin.catalog.${action}`, actorId: req.user!.id, ...target }, 'Exercise catalog changed by an admin')
+
+  app.get(
+    '/exercises',
+    {
+      schema: routeDoc({
+        operationId: 'listAdminCatalogExercises',
+        summary: 'One page of the exercise catalog, starter and private',
+        description:
+          'Starter exercises first, then by name, then id, in upstream order: do not re-sort client-side. A private ' +
+          'exercise carries its `owner`; a starter one has `owner: null`. Empty filters mean any; a group or owner that ' +
+          'does not exist is an empty page, not a 404. Follow `nextCursor` with the same filters. Not recorded in the history.',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        query: z.object({
+          scope: z.enum(CATALOG_SCOPES).optional().describe('Absent: starter and private.'),
+          muscleGroupId: idQuery('Exercises with this group (primary or secondary).'),
+          ownerId: idQuery('Only this trainer’s private exercises.'),
+          q: z
+            .string()
+            .max(ADMIN_SEARCH_MAX)
+            .optional()
+            .describe('Case-insensitive substring of the name, trimmed; at most 100 characters.'),
+          limit: limitDoc,
+          cursor: cursorDoc,
+        }),
+        ok: { status: 200, description: 'One page of exercises.', schema: adminCatalogPageSchema },
+        errors: [403],
+      }),
+    },
+    async (req) => adminService.listCatalogExercises(adminCatalogQuerySchema.parse(req.query)),
+  )
+
+  // Static segment: find-my-way prefers it over `/exercises/:id` (which has no GET anyway).
+  app.get(
+    '/exercises/most-used',
+    {
+      schema: routeDoc({
+        operationId: 'listAdminMostUsedExercises',
+        summary: 'Exercises by how many workouts contain them',
+        description:
+          'Only exercises in at least one workout, `workoutCount` descending, then id. The dashboard’s most-used table ' +
+          '(R22–R25). Follow `nextCursor` with the same filter. Not recorded in the history.',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        query: z.object({
+          muscleGroupId: idQuery('Exercises with this group (primary or secondary).'),
+          limit: limitDoc,
+          cursor: cursorDoc,
+        }),
+        ok: { status: 200, description: 'One page of exercises with their workout counts.', schema: adminMostUsedPageSchema },
+        errors: [403],
+      }),
+    },
+    async (req) => adminService.listMostUsedExercises(adminMostUsedQuerySchema.parse(req.query)),
+  )
+
+  app.post(
+    '/exercises',
+    {
+      schema: routeDoc({
+        operationId: 'createAdminStarterExercise',
+        summary: 'Create a starter exercise',
+        description:
+          'Shared with every trainer, read-only to them. Same body and bounds as a trainer’s exercise; the name is ' +
+          'stored NFC-normalized and trimmed, and must be unique in the starter set ignoring case and accents (409 ' +
+          '`NAME_TAKEN`). Writes a `CREATE_STARTER_EXERCISE` history entry.',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        body: exerciseInputSchema,
+        ok: { status: 201, description: 'The new starter exercise.', schema: adminCatalogExerciseSchema },
+        errors: [403, 409],
+      }),
+    },
+    async (req, reply) => {
+      const body = exerciseInputSchema.parse(req.body)
+      const created = await adminService.createStarterExercise(body)
+      audit(req, 'create', { exerciseId: created.id })
+      reply.status(201)
+      return created
+    },
+  )
+
+  app.put<{ Params: { id: string } }>(
+    '/exercises/:id',
+    {
+      schema: routeDoc({
+        operationId: 'updateAdminStarterExercise',
+        summary: 'Replace a starter exercise',
+        description:
+          'Full replacement of name, description, video URL and the whole group list (send every field). The change ' +
+          'shows everywhere the exercise is used, past workout logs included. A trainer’s private exercise is 403 ' +
+          '(read-only here); a missing one 404; a duplicate starter name 409 `NAME_TAKEN`. Writes an ' +
+          '`UPDATE_STARTER_EXERCISE` history entry.',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        params: idParams('id'),
+        body: exerciseInputSchema,
+        ok: { status: 200, description: 'The starter exercise after the change.', schema: adminCatalogExerciseSchema },
+        errors: [403, 404, 409],
+      }),
+    },
+    async (req) => {
+      const id = parseId(req.params.id)
+      const body = exerciseInputSchema.parse(req.body)
+      const updated = await adminService.updateStarterExercise(id, body)
+      audit(req, 'update', { exerciseId: id })
+      return updated
+    },
+  )
+
+  app.delete<{ Params: { id: string } }>(
+    '/exercises/:id',
+    {
+      schema: routeDoc({
+        operationId: 'deleteAdminStarterExercise',
+        summary: 'Delete a starter exercise',
+        description:
+          'Only while no workout contains it: otherwise 409 `EXERCISE_IN_USE` (edit it instead). A trainer’s private ' +
+          'exercise is 403; a missing one 404. Writes a `DELETE_STARTER_EXERCISE` history entry.',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        params: idParams('id'),
+        ok: { status: 204, description: 'Deleted; no body.' },
+        errors: [403, 404, 409],
+      }),
+    },
+    async (req, reply) => {
+      const id = parseId(req.params.id)
+      await adminService.deleteStarterExercise(id)
+      audit(req, 'delete', { exerciseId: id })
+      reply.status(204)
+    },
+  )
+
+  app.post<{ Params: { id: string } }>(
+    '/exercises/:id/promote',
+    {
+      schema: routeDoc({
+        operationId: 'promoteAdminExercise',
+        summary: 'Promote a trainer’s exercise to the starter set',
+        description:
+          'Creates a new starter exercise from the body (the copy as the admin edited it, same schema as create); the ' +
+          'trainer’s private exercise `:id` is left untouched and the trainer is not notified. A source that is already ' +
+          'a starter exercise is 409 `PRECONDITION_FAILED`; a duplicate starter name 409 `NAME_TAKEN`; a missing source ' +
+          '404. Writes a `PROMOTE_EXERCISE` history entry.',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        params: idParams('id'),
+        body: exerciseInputSchema,
+        ok: { status: 201, description: 'The new starter exercise.', schema: adminCatalogExerciseSchema },
+        errors: [403, 404, 409],
+      }),
+    },
+    async (req, reply) => {
+      const sourceExerciseId = parseId(req.params.id)
+      const body = exerciseInputSchema.parse(req.body)
+      const promoted = await adminService.promoteExercise(sourceExerciseId, body)
+      audit(req, 'promote', { sourceExerciseId, exerciseId: promoted.id })
+      reply.status(201)
+      return promoted
+    },
+  )
+
+  app.post(
+    '/muscle-groups',
+    {
+      schema: routeDoc({
+        operationId: 'createAdminMuscleGroup',
+        summary: 'Create a muscle group',
+        description:
+          'Listed last by `GET /api/muscle-groups`. The name must be unique ignoring case and accents (409 `NAME_TAKEN`). ' +
+          'There is no delete. Writes a `CREATE_MUSCLE_GROUP` history entry.',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        body: muscleGroupNameSchema,
+        ok: { status: 201, description: 'The new muscle group.', schema: muscleGroupSchema },
+        errors: [403, 409],
+      }),
+    },
+    async (req, reply) => {
+      const { name } = muscleGroupNameSchema.parse(req.body)
+      const created = await adminService.createMuscleGroup(name)
+      audit(req, 'muscle_group_create', { muscleGroupId: created.id })
+      reply.status(201)
+      return created
+    },
+  )
+
+  app.patch<{ Params: { id: string } }>(
+    '/muscle-groups/:id',
+    {
+      schema: routeDoc({
+        operationId: 'renameAdminMuscleGroup',
+        summary: 'Rename a muscle group',
+        description:
+          'The new name shows everywhere the group is used. Missing: 404; a duplicate name 409 `NAME_TAKEN`. Writes a ' +
+          '`RENAME_MUSCLE_GROUP` history entry.',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        params: idParams('id'),
+        body: muscleGroupNameSchema,
+        ok: { status: 200, description: 'The muscle group after the change.', schema: muscleGroupSchema },
+        errors: [403, 404, 409],
+      }),
+    },
+    async (req) => {
+      const id = parseId(req.params.id)
+      const { name } = muscleGroupNameSchema.parse(req.body)
+      const renamed = await adminService.renameMuscleGroup(id, name)
+      audit(req, 'muscle_group_rename', { muscleGroupId: id })
+      return renamed
     },
   )
 }

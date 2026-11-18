@@ -20,10 +20,19 @@ describe('exercise routes', () => {
 
   afterAll(() => app.close())
 
-  it('GET /api/exercises with a CLIENT token is refused with 403 FORBIDDEN before any upstream call', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/exercises', headers: bearer('CLIENT') })
+  it.each(['CLIENT', 'ADMIN'] as const)(
+    'GET /api/exercises with a %s token is refused with 403 FORBIDDEN before any upstream call',
+    async (role) => {
+      const res = await app.inject({ method: 'GET', url: '/api/exercises', headers: bearer(role) })
+      expect(res.statusCode).toBe(403)
+      expect(res.json().error).toMatchObject({ code: 'FORBIDDEN', message: 'Requires role: TRAINER' })
+    },
+  )
+
+  it('GET /api/exercises/:id with an ADMIN token is refused with 403 FORBIDDEN (admin-panel B7, VRT-31)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/exercises/1', headers: bearer('ADMIN') })
     expect(res.statusCode).toBe(403)
-    expect(res.json().error).toMatchObject({ code: 'FORBIDDEN', message: 'Requires role: TRAINER or ADMIN' })
+    expect(res.json().error).toMatchObject({ code: 'FORBIDDEN', message: 'Requires role: TRAINER or CLIENT' })
   })
 
   it('GET /api/exercises without a token is 401 UNAUTHORIZED', async () => {
