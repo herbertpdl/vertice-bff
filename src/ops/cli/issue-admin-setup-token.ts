@@ -6,7 +6,7 @@
  *
  * In production it runs compiled inside the BFF task, through ECS Exec (README "Admin accounts"):
  *
- *   node dist/ops/cli/issue-admin-setup-token.js --user-id 42
+ *   node /app/dist/ops/cli/issue-admin-setup-token.js --user-id 42
  *
  * The link goes to stdout only (a credential); progress and errors go to stderr.
  */

@@ -7,7 +7,7 @@
  *
  * In production it runs compiled inside the BFF task, through ECS Exec (README "Admin accounts"):
  *
- *   node dist/ops/cli/reactivate-admin.js --user-id 42
+ *   node /app/dist/ops/cli/reactivate-admin.js --user-id 42
  */
 import { reactivateAdmin, parseUserIdArgs } from '../admin-ops.js'
 import { opsToken } from '../ops-token.js'

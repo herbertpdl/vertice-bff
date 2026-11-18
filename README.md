@@ -269,6 +269,20 @@ scripts run inside the running BFF task. The image ships them compiled as
 `ecs:ExecuteCommand` on the cluster, and the Session Manager plugin
 (`brew install --cask session-manager-plugin`; check with `session-manager-plugin --version`).
 
+**One-time setup.** ECS Exec is a setting of the service, not of the task definition, and AWS
+refuses to turn it on until the running task definition has a task role (`vertice-bff-task`, in
+`.aws/task-definition.json`). So once a deploy with that role is live, run once:
+
+```sh
+aws ecs update-service --region us-east-2 --cluster vertice --service vertice-bff \
+  --enable-execute-command --force-new-deployment
+aws ecs wait services-stable --region us-east-2 --cluster vertice --services vertice-bff
+```
+
+Only tasks started after it carry the exec agent (hence `--force-new-deployment`); later CI
+deploys keep the flag, since the deploy action never sends it. If the readiness check below shows
+`exec: false`, this step is missing.
+
 ```sh
 TASK=$(aws ecs list-tasks --region us-east-2 --cluster vertice --service-name vertice-bff \
   --desired-status RUNNING --query 'taskArns[0]' --output text)
@@ -279,11 +293,11 @@ aws ecs describe-tasks --region us-east-2 --cluster vertice --tasks "$TASK" \
 umask 077
 aws ecs execute-command --region us-east-2 --cluster vertice --task "$TASK" \
   --container vertice-bff --interactive \
-  --command "node dist/ops/cli/create-admin.js --name 'Ana Souza' --email ana@vertice.fit" \
+  --command "node /app/dist/ops/cli/create-admin.js --name 'Ana Souza' --email ana@vertice.fit" \
   > admin-setup.txt
 ```
 
-- The other scripts work the same way: `node dist/ops/cli/issue-admin-setup-token.js --user-id 42`,
+- The other scripts work the same way: `node /app/dist/ops/cli/issue-admin-setup-token.js --user-id 42`,
   `reset-admin-2fa.js`, `suspend-admin.js`, `reactivate-admin.js`. Run one with no arguments to
   check access: it prints the usage and exits 2 without calling vertice-api.
 - Read `setupLink` from `admin-setup.txt`, hand it to the admin out of band, then delete the file.

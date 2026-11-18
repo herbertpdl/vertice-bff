@@ -5,7 +5,7 @@
  *
  * In production it runs compiled inside the BFF task, through ECS Exec (README "Admin accounts"):
  *
- *   node dist/ops/cli/create-admin.js --name "Ana Souza" --email ana@vertice.fit
+ *   node /app/dist/ops/cli/create-admin.js --name "Ana Souza" --email ana@vertice.fit
  *
  * Prints the new user id and a single-use "Definir senha" link on stdout (a credential: hand it to
  * the admin out of band); progress and errors go to stderr. See the README's "Operations".
