@@ -346,7 +346,13 @@ Nothing found beyond F4's deadline. Checked:
     no client. Status then answers `enabled: false` (the `&& client !== undefined` at `:55`
     already does this), and chat answers 503 `AI_UNAVAILABLE` (`:84`). That is consistent with
     R22, but silent: the admin sees the flag on and no trainer sees the icon.
-  - Prod has both values set (`task-definition.json:59-72`), so nothing breaks on day one.
+  - Prod has both values set (`task-definition.json:59-72`), but it has never run `secretProblem`
+    or the "differs from `JWT_SECRET`" check against `vertice/prod/ai-service-jwt-secret`, because
+    `AI_ASSISTANT_ENABLED` has always been `false` there. Keying the checks on `VERTICE_AI_URL`
+    runs them on the next deploy. The BFF starts only if that secret passes them: at least
+    32 bytes, no leading or trailing whitespace, not a placeholder, and different from
+    `JWT_SECRET`. Otherwise the deploy fails to start (the ECS circuit breaker rolls it back).
+    §7 has the pre-release check.
 - **Recommendation:**
   - Key the guards on `VERTICE_AI_URL` being set, not on a switch. When the URL is set, apply the
     secret's strength check (outside development/test) and the "differs from `JWT_SECRET`" check.
@@ -480,6 +486,12 @@ string map to `UNKNOWN` and the page is 200.
 `npm run openapi`.
 
 ## 7. Rollout
+
+**Before the BFF release (F2):** check that `vertice/prod/ai-service-jwt-secret` passes the checks
+that will now run on it: at least 32 bytes, no leading or trailing whitespace, not a placeholder
+(`PLACEHOLDER_SERVICE_JWT_SECRETS`), and not equal to `vertice/prod/jwt-secret`. Compare the
+values without printing them, for example by their length and a hash. If it fails, rotate it in
+both the BFF and vertice-ai before the release, since the two must stay equal.
 
 Order (API §7):
 1. **vertice-api** ships the tables, the seeded flags (off), the RPCs, and the first-access reads
