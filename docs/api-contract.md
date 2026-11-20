@@ -35,7 +35,7 @@ All error responses have the shape:
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "...", "details": {} } }
 ```
-Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `CHALLENGE_INVALID` (401, admin sign-in only), `INVALID_SECOND_FACTOR_CODE` (400, admin sign-in only), `FORBIDDEN` (403), `ACCOUNT_SUSPENDED` (403, the two logins only), `ADMIN_LOGIN_ELSEWHERE` (403, `/auth/login` only), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `NAME_TAKEN` and `EXERCISE_IN_USE` (409, admin exercise curation only), `TOO_LARGE` (413), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503).
+Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED`/`UNAUTHENTICATED` (401), `CHALLENGE_INVALID` (401, admin sign-in only), `INVALID_SECOND_FACTOR_CODE` (400, admin sign-in only), `FORBIDDEN` (403), `ACCOUNT_SUSPENDED` (403, the two logins only), `ADMIN_LOGIN_ELSEWHERE` (403, `/auth/login` only), `NOT_FOUND` (404), `CONFLICT` (409), `PRECONDITION_FAILED` (409), `NAME_TAKEN` and `EXERCISE_IN_USE` (409, admin exercise curation only), `TOO_LARGE` (413), `RATE_LIMITED` (429, with a `Retry-After` header in seconds), `UPSTREAM_ERROR` (502), `UPSTREAM_UNAVAILABLE` (503). The AI assistant adds `AI_CATALOG_TOO_LARGE` (413) and `AI_UNAVAILABLE` (503) before its stream, and `AI_UNAVAILABLE`, `AI_TIMEOUT`, `AI_INVALID_PROPOSAL`, `AI_ERROR`, `AI_SUPERSEDED` as stream `error` events (see "AI workout assistant").
 
 **Key on `code`, not on `message`.** Messages are English and meant for logs and debugging, except the two login refusals `ACCOUNT_SUSPENDED` and `ADMIN_LOGIN_ELSEWHERE`, whose message is the Portuguese text to show. When vertice-api refuses a call, the BFF relays vertice-api's own text only for `INVALID_ARGUMENT`, as a 400 `VALIDATION_ERROR` whose `message` is the field error (`name: must not be blank`). Every other upstream refusal gets a fixed message, and the upstream text goes to the BFF's log only, with emails and CPFs redacted:
 
@@ -243,6 +243,15 @@ The trainer’s landing page in one call.
 |---|---|---|---|---|
 | GET | `/api/dashboard` | TRAINER | `getDashboard` | The trainer dashboard |
 
+### Assistant
+
+The AI workout assistant in the workout editor (TRAINER only, off unless `AI_ASSISTANT_ENABLED`).
+
+| Method | Path | Access | `operationId` | Summary |
+|---|---|---|---|---|
+| GET | `/api/assistant/status` | TRAINER | `getAssistantStatus` | Whether the AI workout assistant is switched on |
+| POST | `/api/assistant/workout-chat` | TRAINER | `workoutChat` | Send a message to the AI workout assistant (server-sent events) |
+
 ### Health
 
 Liveness.
@@ -325,7 +334,10 @@ Every request body and query string is parsed with Zod before any upstream call;
 | `restSeconds`, `restSecondsBetweenSets` | integer 0..3600 |
 | `weight` | `^\d{1,4}(\.\d{1,2})?$` (`""` = unset on a set; required on a set log) |
 | `loadPercentage` | `^\d{1,3}(\.\d{1,2})?$` (`""` = unset) |
-| exercises per workout / sets per exercise | ≤ 20 / ≤ 10 in the nested bodies (`POST /training-plans/:planId/workouts`, `PUT /workouts/:workoutId/exercises`). The per-item creates are capped by vertice-api, which answers `400 VALIDATION_ERROR` `exercises: must not exceed 20 entries` / `sets: must not exceed 10 entries` |
+| assistant `message` | not blank, ≤ 2000 |
+| assistant `history` | ≤ 20 turns, each text 1..40000, ≤ 40000 in total; `role` `user` or `assistant` |
+| assistant `workout.exercises[].key` | `^[A-Za-z0-9_-]{1,64}$`, unique |
+| exercises per workout / sets per exercise | ≤ 20 / ≤ 10 in the nested bodies and the assistant's `workout` (`POST /training-plans/:planId/workouts`, `PUT /workouts/:workoutId/exercises`). The per-item creates are capped by vertice-api, which answers `400 VALIDATION_ERROR` `exercises: must not exceed 20 entries` / `sets: must not exceed 10 entries` |
 | feedback entries per workout log | ≤ 10, enforced by vertice-api |
 | query ids (`clientId`, `trainingPlanId`) | positive integers; a malformed one is a 400 (a CLIENT's `clientId` is still ignored once it parses) |
 
@@ -643,6 +655,41 @@ Every route here is TRAINER or CLIENT; ADMIN gets 403 `Requires role: …`.
 - **`time`** is **deprecated**. It is the `HH:MM` wall clock of the completion in `America/Sao_Paulo` — a pre-formatted local time with the zone implicit, which is why it is going away. It used to be `completedAt.slice(11, 16)`, the UTC clock presented as a local one, which displayed an evening workout about three hours early (audit REL-API-008, plan item P2-02); it now reads correctly. It is kept so clients can migrate without a simultaneous deploy, and **will be removed in a follow-up PR once vertice-web-react reads `completedAt`**.
 
 Both fields describe the same completion, so this release is additive: a client reading `time` keeps working, and a client reading `completedAt` gets the instant.
+
+## AI workout assistant — `/assistant` (TRAINER only)
+
+Spec: [`docs/specs/ai-workout-assistant/spec.md`](./specs/ai-workout-assistant/spec.md). Off unless `AI_ASSISTANT_ENABLED` is true.
+
+- `GET /assistant/status` → `{ "enabled": boolean }`. No upstream call. The web shows the AI icon only when `enabled`.
+- `POST /assistant/workout-chat` → `text/event-stream`. Body:
+```json
+{
+  "trainingPlanId": 100,
+  "workoutId": 200,
+  "workout": { "exercises": [ { "key": "e1", "exerciseId": 1, "restSecondsBetweenSets": 90, "sets": [ { "reps": 10, "weight": "40" } ] } ] },
+  "history": [ { "role": "user", "text": "..." }, { "role": "assistant", "text": "..." } ],
+  "message": "Adicione um finalizador para pernas"
+}
+```
+  `workoutId` is absent on a workout not created yet. `workout` is the workout as it stands on screen (a proposal in review and the trainer's edits included); each entry is a `WorkoutExerciseEntry` plus the editor's opaque `key`. A `name` or `dayOfWeek` is ignored. `history` is earlier turns, text only, oldest first; the web trims it to the caps above.
+
+**Before the stream** (normal JSON errors): `400 VALIDATION_ERROR` (body; a `workoutId` from another of the trainer's plans; an on-screen `exerciseId` outside the trainer's catalog, the same answer for a missing id and another trainer's private one), `403 FORBIDDEN` (another trainer's plan or workout, CLIENT, ADMIN), `413 AI_CATALOG_TOO_LARGE` (more than 1,000 visible exercises), `503 AI_UNAVAILABLE` (switched off).
+
+**The stream** (`Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: no-store`, `X-Accel-Buffering: no`). Each event is `event: <type>`, one `data: <JSON>` line and a blank line. `: keep-alive` comment lines arrive every 10 seconds; ignore them.
+
+| `event` | `data` |
+|---|---|
+| `stage` | `{ "stage": "analyzing" \| "choosing_exercises" \| "building_sets" \| "checking" }`: a change is being built; show your own label |
+| `text` | `{ "delta": "..." }`: append to the answer |
+| `proposal` | `{ "exercises": [ { "key": "e1" \| null, "exerciseId", "restSecondsBetweenSets"?, "notes"?, "sets": [ExerciseSetEntry], "exercise": Exercise } ] }`: the complete new list, in order; `key` is the on-screen exercise it changes or `null` for a new one; an on-screen key missing from the list is removed. Without `key` and `exercise`, each entry is a `WorkoutExerciseEntry` for `PUT /workouts/:workoutId/exercises` or the nested create |
+| `done` | `{}` |
+| `error` | `{ "code", "message" }` |
+
+A question is `text… done`; a change is `stage… proposal [text] done` (the optional `text` is the one "left out" line, R51). One `done` or `error` ends every stream. `error` codes: `AI_UNAVAILABLE` (vertice-ai down or off), `AI_TIMEOUT` (60 seconds with no stage, text or proposal; keep-alives don't count), `AI_INVALID_PROPOSAL` (the proposal failed validation: an exercise outside the catalog, over 20/10, a field out of bounds, a name or weekday, a key not sent; nothing to show), `AI_ERROR` (anything else), `AI_SUPERSEDED` (a newer message from the same trainer took over; show it as stopped).
+
+Closing the request ("Parar", leaving) cancels the work upstream. A new message from the same trainer supersedes a running one rather than being refused, so "Parar" then a new message, or "Tentar novamente", always goes through. Nothing is stored: the conversation lives in the web.
+
+What reaches vertice-ai: the message and history, the plan's name, description, level and dates, the workout on screen, the plan's other workouts (exercise names, muscle groups, set counts) and the trainer's catalog (ids, names, muscle groups). Never the client's id, name or e-mail, recorded weights, logs or feedback (PRD R13). No message text is logged.
 
 ---
 

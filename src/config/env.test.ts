@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_CORS_ORIGIN, DEFAULT_LEGAL_VERSION, DEV_JWT_SECRET, parseCorsOrigins, parseEnv, parseTrustProxy } from './env.js'
+import {
+  DEFAULT_CORS_ORIGIN,
+  DEFAULT_LEGAL_VERSION,
+  DEV_JWT_SECRET,
+  DEV_SERVICE_JWT_SECRET,
+  parseCorsOrigins,
+  parseEnv,
+  parseTrustProxy,
+} from './env.js'
 
 const STRONG_SECRET = 'q7Vx2mP9rT4wZ8kL1nB6cF3hJ5sD0gYa'
 
@@ -184,5 +192,63 @@ describe('parseEnv legal versions', () => {
   it.each(['', 'v 1', '2026/10', 'v'.repeat(33)])('refuses %j, which vertice-api would reject', (value) => {
     expect(() => parseEnv({ TERMS_VERSION: value })).toThrow(/TERMS_VERSION/)
     expect(() => parseEnv({ HEALTH_DATA_CONSENT_VERSION: value })).toThrow(/HEALTH_DATA_CONSENT_VERSION/)
+  })
+})
+
+describe('parseEnv AI assistant', () => {
+  const SERVICE_SECRET = 'm3Kq8Zr1Tx6Wv0Lp4Hn9Bc2Fj7Gd5SyE'
+  const prod = { NODE_ENV: 'production', JWT_SECRET: STRONG_SECRET }
+  const on = { AI_ASSISTANT_ENABLED: 'true', VERTICE_AI_URL: 'http://vertice-ai:8000' }
+
+  it('is off by default and then needs neither the URL nor the secret, also in production', () => {
+    const parsed = parseEnv(prod)
+    expect(parsed.AI_ASSISTANT_ENABLED).toBe(false)
+    expect(parsed.VERTICE_AI_URL).toBeUndefined()
+  })
+
+  it('requires VERTICE_AI_URL when on', () => {
+    expect(() => parseEnv({ AI_ASSISTANT_ENABLED: 'true' })).toThrow(/VERTICE_AI_URL: is required when AI_ASSISTANT_ENABLED/)
+  })
+
+  it.each(['vertice-ai:8000', 'ftp://vertice-ai', 'http://vertice-ai:8000/?x=1', 'http://u:p@vertice-ai'])(
+    'refuses VERTICE_AI_URL=%s',
+    (url) => {
+      expect(() => parseEnv({ VERTICE_AI_URL: url })).toThrow(/VERTICE_AI_URL/)
+    },
+  )
+
+  it('drops a trailing slash from VERTICE_AI_URL', () => {
+    expect(parseEnv({ VERTICE_AI_URL: 'http://vertice-ai:8000/' }).VERTICE_AI_URL).toBe('http://vertice-ai:8000')
+  })
+
+  it('falls back to the shared dev secret in development and test', () => {
+    expect(parseEnv(on).SERVICE_JWT_SECRET).toBe(DEV_SERVICE_JWT_SECRET)
+  })
+
+  it.each([
+    [undefined, /SERVICE_JWT_SECRET: is required/],
+    ['short', /SERVICE_JWT_SECRET: must be at least 32 bytes/],
+    [` ${SERVICE_SECRET}`, /SERVICE_JWT_SECRET: must not have leading or trailing whitespace/],
+    [DEV_SERVICE_JWT_SECRET, /SERVICE_JWT_SECRET: is a publicly known placeholder/],
+  ])('when on in production, refuses SERVICE_JWT_SECRET=%j', (secret, error) => {
+    expect(() => parseEnv({ ...prod, ...on, ...(secret === undefined ? {} : { SERVICE_JWT_SECRET: secret }) })).toThrow(error)
+  })
+
+  it('refuses SERVICE_JWT_SECRET equal to JWT_SECRET, without printing either', () => {
+    expect(() => parseEnv({ ...prod, ...on, SERVICE_JWT_SECRET: STRONG_SECRET })).toThrow(
+      expect.objectContaining({ message: expect.stringMatching(/SERVICE_JWT_SECRET: must differ from JWT_SECRET/) }),
+    )
+    expect(() => parseEnv({ ...prod, ...on, SERVICE_JWT_SECRET: STRONG_SECRET })).toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining(STRONG_SECRET) }),
+    )
+  })
+
+  it('accepts a strong, distinct secret in production', () => {
+    const parsed = parseEnv({ ...prod, ...on, SERVICE_JWT_SECRET: SERVICE_SECRET })
+    expect(parsed).toMatchObject({ AI_ASSISTANT_ENABLED: true, SERVICE_JWT_SECRET: SERVICE_SECRET })
+  })
+
+  it('refuses a flag that is not a boolean', () => {
+    expect(() => parseEnv({ AI_ASSISTANT_ENABLED: 'yes' })).toThrow(/AI_ASSISTANT_ENABLED: must be true or false/)
   })
 })

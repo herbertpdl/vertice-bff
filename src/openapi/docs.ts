@@ -33,6 +33,10 @@ export const TAGS = [
   { name: 'Workout sessions', description: 'The client’s “do a workout” flow: the session aggregate, set logs and workout logs.' },
   { name: 'Feedback', description: 'Client feedback on a workout log, read by the trainer.' },
   { name: 'Dashboard', description: 'The trainer’s landing page in one call.' },
+  {
+    name: 'Assistant',
+    description: 'The AI workout assistant in the workout editor (TRAINER only, off unless `AI_ASSISTANT_ENABLED`).',
+  },
   { name: 'Health', description: 'Liveness.' },
 ] as const
 
@@ -44,8 +48,9 @@ const ERROR_DESCRIPTIONS = {
   403: 'The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).',
   404: 'Not found (`NOT_FOUND`).',
   409: 'Conflict with the current state (`CONFLICT`, `PRECONDITION_FAILED`, or a route-specific 409 code: `ACTIVE_CLIENTS`, `NAME_TAKEN`, `EXERCISE_IN_USE` on the routes that say so).',
-  413: 'The requested data is too large to return (`TOO_LARGE`).',
+  413: 'The requested data is too large to return (`TOO_LARGE`, or `AI_CATALOG_TOO_LARGE` on the routes that say so).',
   429: 'Rate limited (`RATE_LIMITED`); `Retry-After` carries the seconds to wait.',
+  503: 'A dependency is unavailable or switched off (`UPSTREAM_UNAVAILABLE`, or `AI_UNAVAILABLE` on the routes that say so).',
 } as const
 
 type ErrorStatus = keyof typeof ERROR_DESCRIPTIONS

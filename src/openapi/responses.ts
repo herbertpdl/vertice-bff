@@ -1,6 +1,9 @@
 import { z } from 'zod'
 import { FEEDBACK_RATINGS } from '../modules/feedback/schemas.js'
-import { dayOfWeekSchema } from '../modules/workouts/schemas.js'
+import { dayOfWeekSchema, exerciseSetEntrySchema } from '../modules/workouts/schemas.js'
+import { ASSISTANT_STAGES } from '../ai/contract.js'
+import type { AssistantStatus } from '../modules/assistant/routes.js'
+import type * as proposalService from '../modules/assistant/proposal.js'
 import { setStrategySchema } from '../modules/exercise-sets/schemas.js'
 import { planLevelSchema } from '../modules/training-plans/schemas.js'
 import type * as adminAuthService from '../modules/admin-auth/service.js'
@@ -79,6 +82,12 @@ export const ERROR_CODES = [
   'ACCOUNT_SUSPENDED',
   'NAME_TAKEN',
   'EXERCISE_IN_USE',
+  'AI_UNAVAILABLE',
+  'AI_CATALOG_TOO_LARGE',
+  'AI_TIMEOUT',
+  'AI_INVALID_PROPOSAL',
+  'AI_ERROR',
+  'AI_SUPERSEDED',
 ] as const
 
 export const errorCodeSchema = named('ErrorCode', z.enum(ERROR_CODES))
@@ -737,6 +746,79 @@ export const dashboardSchema = named(
 
 // ---- compile-time drift check -------------------------------------------------------------------
 
+// ---- AI workout assistant ----------------------------------------------------------------------
+
+export const assistantStatusSchema = named(
+  'AssistantStatus',
+  z.object({ enabled: z.boolean().describe('Whether the web shows the AI icon in the workout editor.') }),
+)
+
+export const assistantStageSchema = named('AssistantStage', z.enum(ASSISTANT_STAGES))
+
+export const assistantStageEventSchema = named(
+  'AssistantStageEvent',
+  z.object({ stage: assistantStageSchema.describe('A stage key; the web shows its own pt-BR label for it.') }),
+)
+
+export const assistantTextEventSchema = named(
+  'AssistantTextEvent',
+  z.object({ delta: z.string().describe('The next piece of the answer; append it to what came before.') }),
+)
+
+export const assistantProposalEntrySchema = named(
+  'AssistantProposalEntry',
+  z.object({
+    key: z
+      .string()
+      .nullable()
+      .describe('The `key` of the on-screen exercise this entry modifies (one the request sent), or `null` when it is new.'),
+    exerciseId: id,
+    restSecondsBetweenSets: z.number().int().optional(),
+    notes: z.string().optional(),
+    sets: z
+      .array(named('AssistantProposalSet', z.object(exerciseSetEntrySchema.shape)))
+      .describe('In order; at most 10. Each is an `ExerciseSetEntry`.'),
+    exercise: exerciseSchema.describe('The catalog exercise, to render the card.'),
+  }),
+)
+
+export const assistantProposalEventSchema = named(
+  'AssistantProposalEvent',
+  z.object({
+    exercises: z
+      .array(assistantProposalEntrySchema)
+      .describe(
+        'The whole proposed exercise list, in order, at most 20. Without `key` and `exercise` each entry is a ' +
+          '`WorkoutExerciseEntry` for `PUT /workouts/{workoutId}/exercises` or the nested create. Never a name or weekday.',
+      ),
+  }),
+)
+
+export const assistantDoneEventSchema = named('AssistantDoneEvent', z.object({}))
+
+export const assistantErrorEventSchema = named(
+  'AssistantErrorEvent',
+  z.object({
+    code: z.enum(['AI_UNAVAILABLE', 'AI_TIMEOUT', 'AI_INVALID_PROPOSAL', 'AI_ERROR', 'AI_SUPERSEDED']),
+    message: z.string().describe('English, for logs; show the web’s own copy for `code`.'),
+  }),
+)
+
+/**
+ * The `text/event-stream` body, one item per event: `event: <event>` then `data: <JSON of data>`.
+ * Comment lines (`: keep-alive`) are heartbeats and carry nothing.
+ */
+export const assistantStreamSchema = named(
+  'AssistantStreamEvent',
+  z.discriminatedUnion('event', [
+    z.object({ event: z.literal('stage'), data: assistantStageEventSchema }),
+    z.object({ event: z.literal('text'), data: assistantTextEventSchema }),
+    z.object({ event: z.literal('proposal'), data: assistantProposalEventSchema }),
+    z.object({ event: z.literal('done'), data: assistantDoneEventSchema }),
+    z.object({ event: z.literal('error'), data: assistantErrorEventSchema }),
+  ]),
+)
+
 /** True when `A` and `B` accept each other (same shape, whatever the declaration style). */
 type SameShape<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
@@ -782,6 +864,8 @@ export type ResponseSchemasMatchServices = [
   Assert<SameShape<Out<typeof setLogSchema>, sessionService.SetLog>>,
   Assert<SameShape<Out<typeof workoutSessionSchema>, Resolved<typeof sessionService.getWorkoutSession>>>,
   Assert<SameShape<Out<typeof progressPointSchema>, sessionService.ProgressPoint>>,
+  Assert<SameShape<Out<typeof assistantStatusSchema>, AssistantStatus>>,
+  Assert<SameShape<Out<typeof assistantProposalEventSchema>, proposalService.Proposal>>,
   Assert<SameShape<Out<typeof workoutFeedbackSchema>, feedbackService.WorkoutFeedback>>,
   Assert<SameShape<Out<typeof enrichedFeedbackSchema>, feedbackService.EnrichedFeedback>>,
   Assert<SameShape<Out<typeof dashboardSchema>, Resolved<typeof dashboardService.getTrainerDashboard>>>,

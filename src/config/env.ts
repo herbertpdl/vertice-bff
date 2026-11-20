@@ -16,6 +16,16 @@ export const MIN_JWT_SECRET_BYTES = 32
 export const PLACEHOLDER_JWT_SECRETS = [DEV_JWT_SECRET, 'dev-secret-change-me', 'change-me-in-production']
 
 /**
+ * Shared local-dev secret for the tokens the BFF signs for vertice-ai (`SERVICE_JWT_SECRET`): the
+ * same value as vertice-ai's own dev default, so a local BFF and a local vertice-ai agree. Public,
+ * so it is refused outside development/test like {@link DEV_JWT_SECRET}.
+ */
+export const DEV_SERVICE_JWT_SECRET = 'vertice-ai-dev-service-secret-do-not-use-in-production'
+
+/** Publicly known service-secret values, refused outside dev (vertice-ai refuses the same ones). */
+export const PLACEHOLDER_SERVICE_JWT_SECRETS = [DEV_SERVICE_JWT_SECRET, 'changeme', 'change-me', 'secret']
+
+/**
  * Browser origins allowed to call the BFF directly. Only clients running in a browser need this:
  * Expo web (`vertice-mobile` `npm run web`, Metro on :8081). vertice-web-react calls the BFF
  * server-side through its own `/api/*` proxy, so it never needs an entry here.
@@ -68,10 +78,43 @@ export function parseTrustProxy(value: string | undefined): boolean | string {
   return normalized
 }
 
-function isPlaceholderSecret(secret: string): boolean {
+function isPlaceholderSecret(secret: string, placeholders: readonly string[] = PLACEHOLDER_JWT_SECRETS): boolean {
   const normalized = secret.trim().toLowerCase()
-  return PLACEHOLDER_JWT_SECRETS.some((placeholder) => placeholder.toLowerCase() === normalized)
+  return placeholders.some((placeholder) => placeholder.toLowerCase() === normalized)
 }
+
+/**
+ * Why `secret` is not a usable HS256 secret outside development/test, or `undefined` when it is.
+ * The messages never echo the secret itself.
+ */
+function secretProblem(secret: string | undefined, placeholders: readonly string[], scope: string): string | undefined {
+  if (!secret || secret.trim().length === 0) return `is required ${scope}`
+  if (secret !== secret.trim()) return `must not have leading or trailing whitespace ${scope}`
+  if (Buffer.byteLength(secret, 'utf8') < MIN_JWT_SECRET_BYTES) return `must be at least ${MIN_JWT_SECRET_BYTES} bytes ${scope}`
+  if (isPlaceholderSecret(secret, placeholders)) return `is a publicly known placeholder/dev value; set a random secret ${scope}`
+  return undefined
+}
+
+/** `VERTICE_AI_URL`: an absolute http(s) URL, no query or fragment; a trailing slash is dropped. */
+const aiUrl = z
+  .string()
+  .trim()
+  .optional()
+  .transform((value, ctx) => {
+    if (!value) return undefined
+    let url: URL
+    try {
+      url = new URL(value)
+    } catch {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be an absolute http(s) URL' })
+      return z.NEVER
+    }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.search || url.hash || url.username || url.password) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be an http(s) URL with no query, fragment or credentials' })
+      return z.NEVER
+    }
+    return value.replace(/\/+$/, '')
+  })
 
 /** vertice-api's consent version format (`CONSENT_VERSION` in its `UserController`). */
 export const CONSENT_VERSION_PATTERN = /^[A-Za-z0-9._-]{1,32}$/
@@ -141,8 +184,41 @@ const envSchema = z
      */
     TERMS_VERSION: legalVersion,
     HEALTH_DATA_CONSENT_VERSION: legalVersion,
+    /**
+     * The AI workout assistant (`POST /api/assistant/workout-chat`, spec
+     * `docs/specs/ai-workout-assistant/spec.md`). Off by default: when off, the route answers 503
+     * `AI_UNAVAILABLE`, `GET /api/assistant/status` says `enabled: false`, nothing goes to
+     * vertice-ai, and neither `VERTICE_AI_URL` nor `SERVICE_JWT_SECRET` is needed. It stays off
+     * until the PRD §7 launch condition (data inventory and privacy text name Anthropic) is met.
+     */
+    AI_ASSISTANT_ENABLED: envBoolean(false),
+    /** vertice-ai's base URL (private, reachable from the BFF only). Required when the assistant is on. */
+    VERTICE_AI_URL: aiUrl,
+    /**
+     * The HS256 secret of the tokens the BFF signs for vertice-ai (`aud: "vertice-ai"`), shared with
+     * vertice-ai only. Never `JWT_SECRET`: a vertice-ai token must never be a vertice-api credential.
+     * Required when the assistant is on, unless NODE_ENV is development or test (then it defaults to
+     * {@link DEV_SERVICE_JWT_SECRET}).
+     */
+    SERVICE_JWT_SECRET: z.string().optional(),
   })
   .superRefine((value, ctx) => {
+    if (value.AI_ASSISTANT_ENABLED) {
+      if (!value.VERTICE_AI_URL) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['VERTICE_AI_URL'], message: 'is required when AI_ASSISTANT_ENABLED is true' })
+      }
+      if (value.SERVICE_JWT_SECRET && value.SERVICE_JWT_SECRET.trim() === (value.JWT_SECRET ?? DEV_JWT_SECRET).trim()) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['SERVICE_JWT_SECRET'], message: 'must differ from JWT_SECRET' })
+      }
+      if (!DEV_NODE_ENVS.includes(value.NODE_ENV)) {
+        const message = secretProblem(
+          value.SERVICE_JWT_SECRET,
+          PLACEHOLDER_SERVICE_JWT_SECRETS,
+          'when AI_ASSISTANT_ENABLED is true, unless NODE_ENV is development or test',
+        )
+        if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['SERVICE_JWT_SECRET'], message })
+      }
+    }
     if (DEV_NODE_ENVS.includes(value.NODE_ENV)) return
     if (!value.VERIFY_PASSWORDS) {
       ctx.addIssue({
@@ -152,21 +228,16 @@ const envSchema = z
       })
     }
     // Messages never echo the secret itself.
-    const secret = value.JWT_SECRET
-    const scope = 'unless NODE_ENV is development or test'
-    let message: string | undefined
-    if (!secret || secret.trim().length === 0) {
-      message = `is required ${scope}`
-    } else if (secret !== secret.trim()) {
-      message = `must not have leading or trailing whitespace ${scope}`
-    } else if (Buffer.byteLength(secret, 'utf8') < MIN_JWT_SECRET_BYTES) {
-      message = `must be at least ${MIN_JWT_SECRET_BYTES} bytes ${scope}`
-    } else if (isPlaceholderSecret(secret)) {
-      message = `is a publicly known placeholder/dev value; set a random secret ${scope}`
-    }
+    const message = secretProblem(value.JWT_SECRET, PLACEHOLDER_JWT_SECRETS, 'unless NODE_ENV is development or test')
     if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['JWT_SECRET'], message })
   })
-  .transform((value) => ({ ...value, JWT_SECRET: value.JWT_SECRET?.trim() ? value.JWT_SECRET : DEV_JWT_SECRET }))
+  .transform((value) => ({
+    ...value,
+    JWT_SECRET: value.JWT_SECRET?.trim() ? value.JWT_SECRET : DEV_JWT_SECRET,
+    // Outside development/test an enabled assistant has passed the guard above; a disabled one never
+    // signs a vertice-ai token, so the dev value is never used there.
+    SERVICE_JWT_SECRET: value.SERVICE_JWT_SECRET?.trim() ? value.SERVICE_JWT_SECRET : DEV_SERVICE_JWT_SECRET,
+  }))
 
 export type Env = z.infer<typeof envSchema>
 

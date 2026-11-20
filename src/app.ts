@@ -28,6 +28,7 @@ import {
 import { submitFeedbackRoutes, feedbackRoutes } from './modules/feedback/routes.js'
 import dashboardRoutes from './modules/dashboard/routes.js'
 import legalRoutes from './modules/legal/routes.js'
+import assistantRoutes, { assistantSettingsFromEnv, type AssistantSettings } from './modules/assistant/routes.js'
 import { routeDoc, useDocumentationOnlySchemas } from './openapi/docs.js'
 import { healthSchema } from './openapi/responses.js'
 
@@ -45,6 +46,8 @@ export interface BuildAppOptions {
    * Off in a normal start: the spec is a build artifact and nothing serves it.
    */
   openapi?: { version: string }
+  /** Overrides the AI assistant's env settings (tests: switch it on, stub vertice-ai, shorten timers). */
+  assistant?: Partial<AssistantSettings>
 }
 
 /** Network buckets default to this many times the per-IP/per-email limit. */
@@ -134,6 +137,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await api.register(feedbackRoutes, { prefix: '/feedback' })
       await api.register(dashboardRoutes, { prefix: '/dashboard' })
       await api.register(legalRoutes, { prefix: '/legal' })
+      await api.register(assistantRoutes, { prefix: '/assistant', settings: assistantSettingsFromEnv(options.assistant) })
       // Siblings: the sign-in steps are public, everything else under /admin is ADMIN-only (B7).
       await api.register(adminAuthRoutes, { prefix: '/admin/auth' })
       await api.register(adminRoutes, { prefix: '/admin' })
