@@ -39,6 +39,9 @@ API spec's decisions.
 | FF14 | **The cut-over changes nothing for trainers.** Since vertice-bff#74 (deployed 2026-11-20) production runs with `AI_ASSISTANT_ENABLED=true`. The API seeds the `AI_ASSISTANT_ENABLED` flag **on** for everyone with no user settings (vertice-api#104, which corrects PRD R28 and the API spec), and `FIRST_ACCESS_EMAIL_ENABLED` off. So when this release replaces the env switch with the flag, every trainer keeps the assistant, and no admin step is needed after the deploy. | R27, R28 as corrected by vertice-api#104 ("both flags start as they are today"); assessment §7 assumed `false`, which is no longer the deployed value. |
 | FF15 | **R21 budget, BFF share: nothing cached.** About 60 s end to end: API 30 s cache (API D8), BFF none, web status query `staleTime` 30 s + `refetchInterval` 30 s on visible tabs, retry once (web W11). The 20 s deadline bounds a hang and adds no staleness. | R21, E10; API D9. |
 
+Not decided here: R1, R12, E7, E13: web only. R8, R10, R26, E1, E2, E4, E8, E14, E15: upstream (API D3,
+D6, D7, D19); the BFF passes `description` through as is.
+
 ## 1. Proto sync
 
 1. vertice-api's feature-flags PR (vertice-api#103's implementation) is merged **and deployed**.
