@@ -5,6 +5,7 @@ import { env } from '../config/env.js'
 import { grpcCall, MissingCallerIdentityError, SERVICE_TOKEN_RPCS } from '../grpc/call.js'
 import { Metadata } from '@grpc/grpc-js'
 import type { z } from 'zod'
+import type { AiClient } from '../ai/client.js'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -117,6 +118,24 @@ const setBody = { setNumber: 1, strategy: 'STRAIGHT' }
 const exerciseBody = { name: 'Remada', muscleGroupIds: [1] }
 const planBody = { name: 'Plano', startDate: '2026-11-01', endDate: '2027-01-31', level: 'BEGINNER' }
 const setLogBody = { exerciseSetId: ids.exerciseSetA, weight: '20', reps: 10 }
+const chatBody = (o: { trainingPlanId?: number; workoutId?: number; exerciseId?: number } = {}) => ({
+  trainingPlanId: o.trainingPlanId ?? ids.planA,
+  ...('workoutId' in o ? (o.workoutId === undefined ? {} : { workoutId: o.workoutId }) : { workoutId: ids.workoutA }),
+  workout: { exercises: [{ key: 'e1', exerciseId: o.exerciseId ?? ids.exercise, sets: [{ reps: 10 }] }] },
+  history: [],
+  message: 'Adicione um exercício de perna',
+})
+
+/** A vertice-ai that answers every message with one stage, one text chunk and `done`. */
+const stubAi: AiClient = {
+  async workoutChat() {
+    return (async function* () {
+      yield { event: 'stage', data: JSON.stringify({ stage: 'analyzing' }) }
+      yield { event: 'text', data: JSON.stringify({ delta: 'Ok' }) }
+      yield { event: 'done', data: '{}' }
+    })()
+  },
+}
 
 const routes: RouteCase[] = [
   { route: 'GET /health', public: true, ok: { url: '/health' } },
@@ -1188,6 +1207,42 @@ const routes: RouteCase[] = [
     roles: ['TRAINER'],
     ok: { as: 'trainerA', url: '/api/dashboard' },
   },
+
+  // assistant (the suite switches it on with a stub vertice-ai, see beforeAll)
+  {
+    route: 'GET /api/assistant/status',
+    roles: ['TRAINER'],
+    ok: { as: 'trainerA', url: '/api/assistant/status' },
+  },
+  {
+    route: 'POST /api/assistant/workout-chat',
+    roles: ['TRAINER'],
+    ok: { as: 'trainerA', url: '/api/assistant/workout-chat', body: chatBody() },
+    denied: [
+      { as: 'trainerA', url: '/api/assistant/workout-chat', body: chatBody({ trainingPlanId: ids.planB }), why: "another trainer's plan" },
+      {
+        as: 'trainerA',
+        url: '/api/assistant/workout-chat',
+        body: chatBody({ trainingPlanId: ids.planBForClientA, workoutId: undefined }),
+        why: "the trainer's own client's plan written by another trainer",
+      },
+      { as: 'trainerA', url: '/api/assistant/workout-chat', body: chatBody({ workoutId: ids.workoutB }), why: "another trainer's workout" },
+      {
+        as: 'trainerA',
+        url: '/api/assistant/workout-chat',
+        body: chatBody({ trainingPlanId: ids.planA2 }),
+        status: 400,
+        why: "the trainer's own workout from another of their plans",
+      },
+      {
+        as: 'trainerA',
+        url: '/api/assistant/workout-chat',
+        body: chatBody({ exerciseId: ids.privateExerciseB }),
+        status: 400,
+        why: "another trainer's private exercise on screen",
+      },
+    ],
+  },
 ]
 
 const actorForRole: Record<Role, Actor> = { ADMIN: 'admin', TRAINER: 'trainerA', CLIENT: 'clientA' }
@@ -1208,6 +1263,7 @@ describe('route authorization', () => {
       openapi: { version: 'test' },
       // Hundreds of requests from one IP: keep the rate limits out of the authorization checks.
       rateLimits: { globalMax: 1_000_000, authMax: 1_000_000, exportMax: 1_000_000 },
+      assistant: { enabled: true, client: stubAi },
       onRoute: (route: RouteOptions) => {
         for (const method of [route.method].flat()) {
           if (method !== 'HEAD' && method !== 'OPTIONS') registered.add(routeKey(method, route.url))
@@ -1247,7 +1303,20 @@ describe('route authorization', () => {
     const entry = documented.get(route)?.[String(res.statusCode)]
     expect(entry, `${route} documents no ${res.statusCode} response`).toBeDefined()
     if (res.statusCode === 204) return
-    const schema = (entry as { content: Record<string, { schema: z.ZodType }> }).content['application/json']!.schema
+    const content = (entry as { content: Record<string, { schema: z.ZodType }> }).content
+    if (content['text/event-stream']) {
+      // An event stream: every event's `{event, data}` must parse with the documented union.
+      const events = res.body.split('\n\n').filter((block) => block && !block.startsWith(':'))
+      expect(events.length, `${route} streamed no event`).toBeGreaterThan(0)
+      for (const block of events) {
+        const event = /^event: (.*)$/m.exec(block)?.[1]
+        const data = JSON.parse(/^data: (.*)$/m.exec(block)?.[1] ?? 'null')
+        const parsed = content['text/event-stream'].schema.safeParse({ event, data })
+        expect(parsed.error?.issues, `${route} streamed an event its schema does not describe`).toBeUndefined()
+      }
+      return
+    }
+    const schema = content['application/json']!.schema
     const parsed = schema.safeParse(JSON.parse(res.body))
     expect(parsed.error?.issues, `${route} answered something its schema does not describe`).toBeUndefined()
   }
