@@ -77,7 +77,10 @@ interface AdminFeatureFlag {
 interface AdminFeatureFlagList { flags: AdminFeatureFlag[] }  // ordered by key, unpaginated
 ```
 
-Built field by field from the upstream message, never spread.
+Built field by field from the upstream message, never spread. The OpenAPI component names are
+pinned, since the web aliases them: `adminFeatureFlagSchema = named('AdminFeatureFlag', …)` and
+`adminFeatureFlagListSchema = named('AdminFeatureFlagList', …)`. The user setting stays inline
+(no component of its own).
 
 ### 2.2 Admin routes (`src/modules/admin/routes.ts`, ADMIN by the plugin hooks)
 
@@ -166,8 +169,8 @@ stream errors.
 ## 5. What the web can rely on
 
 - The four routes and shapes of §2, under `/api/bff/admin/feature-flags/...` through its proxy
-  (already allowed: `/admin/**`). Writes take the dialog's captured target state (W4) and return
-  the saved flag, which the page shows without a refetch. One query key for the list is enough.
+  (already allowed: `/admin/**`). Writes take the dialog's captured target state (W4) and each
+  returns the saved flag (the web awaits a refetch of its one list key, web D4).
 - User numbers are positive safe integers in and out; a number the BFF refuses is 400, so the
   web's own schema (W6) should match FF8.
 - `GET /assistant/status` keeps its shape, varies per trainer, and changes within about a minute
