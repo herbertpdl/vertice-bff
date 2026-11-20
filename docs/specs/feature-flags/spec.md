@@ -132,11 +132,19 @@ Both 503s have the same code, so the web shows the same thing. The rest of the r
 export const AI_ASSISTANT_FLAG = 'AI_ASSISTANT_ENABLED'
 export const FLAG_EVALUATION_DEADLINE_MS = 20_000
 
-/** Whether `key` is on for the caller (their token). Never rejects: any failure is off (R22). */
-export async function isFlagOn(key: string, log: FastifyBaseLogger): Promise<boolean> {
+/**
+ * Whether `key` is on for the caller (their token). Never rejects: any failure is off (R22).
+ * `client` and `deadlineMs` exist for the real-channel test (§8); production passes neither.
+ */
+export async function isFlagOn(
+  key: string,
+  log: FastifyBaseLogger,
+  client: grpc.Client = featureFlagClient,
+  deadlineMs: number = FLAG_EVALUATION_DEADLINE_MS,
+): Promise<boolean> {
   try {
     const res = await grpcCall<{ key: string }, { enabled: boolean }>(
-      featureFlagClient, 'EvaluateFeatureFlag', { key }, { deadlineMs: FLAG_EVALUATION_DEADLINE_MS })
+      client, 'EvaluateFeatureFlag', { key }, { deadlineMs })
     return res.enabled === true
   } catch (err) {
     log.warn({ flag: key, outcome: 'evaluation_failed', code: codeOf(err) }, 'Feature flag evaluation failed; treating it as off')
@@ -147,7 +155,8 @@ export async function isFlagOn(key: string, log: FastifyBaseLogger): Promise<boo
 
 `codeOf` gives the `HttpError` code or the error's name, never its message. `grpcCall` still logs
 the upstream status as it does for every call. A `MissingCallerIdentityError` (no verified token,
-a bug) is off too.
+a bug) is off too. Production call sites (the assistant's default `isEnabledFor`) call
+`isFlagOn(AI_ASSISTANT_FLAG, log)` and never pass the last two arguments.
 
 ## 3. Config (`src/config/env.ts`)
 
@@ -307,10 +316,19 @@ the real RPC path and the trainer's token are exercised. The `SERVICE_TOKEN_RPCS
 - The stub client takes grpc-js's 4-argument form `(request, metadata, callOptions, callback)`.
   With `deadlineMs`, `callOptions.deadline ≈ Date.now() + deadlineMs`; without it, no deadline is
   set.
-- One real-channel test: an in-process `grpc.Server` (bound to `127.0.0.1:0`) whose handler never
-  answers, called with `deadlineMs: 50` and real timers. The call rejects as 502 `UPSTREAM_ERROR`,
-  and `grpcStatus` `DEADLINE_EXCEEDED` is logged. `isFlagOn` over the same client returns `false`.
-  This is the only test that exercises grpc-js's own deadline.
+- One real-channel test, real timers. An in-process `grpc.Server` (bound to `127.0.0.1:0`)
+  implements `vertice.featureflag.v1.FeatureFlagService` with an `EvaluateFeatureFlag` handler that
+  never answers. The test builds a `FeatureFlagService` client on that port (not the module-level
+  `featureFlagClient`, which points at the env target and would fail with `UNAVAILABLE` instead).
+  Inside `requestContext.run({ bearerToken: 'abc', log }, …)` (so no `MissingCallerIdentityError`),
+  it calls `isFlagOn(AI_ASSISTANT_FLAG, log, client, 50)` and asserts all of:
+  - the result is `false`;
+  - exactly one `evaluation_failed` WARN, with `code: 'UPSTREAM_ERROR'`;
+  - the upstream log line from `grpcCall` has `grpcStatus: 'DEADLINE_EXCEEDED'`;
+  - it settles in well under 1 s (for example under 500 ms).
+
+  Together these prove the deadline fired, not some other failure. This is the only test that
+  exercises grpc-js's own deadline. The server is shut down in `afterAll`.
 
 **`src/modules/clients/service.test.ts`:** a `ForbiddenError` from `CreatePasswordSetupToken` is
 logged at INFO and `setup: null`. Any other error is logged at WARN.
