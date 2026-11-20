@@ -118,8 +118,8 @@ vertice-ai itself is not deployed yet.
 **Admin plugin.** `src/modules/admin/routes.ts:60-62`: every route under `/api/admin` gets
 `app.authenticate` and `requireRole('ADMIN')` as plugin hooks. The admin token carries
 `amr`/`auth_time` (`src/lib/jwt.ts:121,140-152`), re-checked by vertice-api on every call. Write
-routes log `audit: "admin.<thing>.<action>"` with actor and target ids (`routes.ts:206`,
-`routes.ts:238`).
+routes log `audit: "admin.<thing>.<action>"` with actor and target ids (`routes.ts:204`,
+`routes.ts:242`).
 
 **History mapping.**
 - `ADMIN_ACTIONS` (`admin/schemas.ts:49-63`) lists 13 values and backs the `?action=` filter
@@ -287,7 +287,7 @@ Nothing found beyond F4's scoping. Checked:
 - **What:** R27 removes the env variable. `GET /api/assistant/status` keeps its shape
   (`{ enabled }`) but now varies per trainer.
 - **Where:** `env.ts:186-194`; `assistant/routes.ts:17-29,49`; `.aws/task-definition.json:55-57`;
-  `README.md:78`; `.env.example:58`; `docs/api-contract.md:248,661-663`; `src/openapi/docs.ts:38`.
+  `README.md:78-80`; `.env.example:56-62`; `docs/api-contract.md:248,661-663`; `src/openapi/docs.ts:38`.
 - **Why it matters:**
   - The web reads status (`WorkoutEditor.tsx:100-105`) and only uses `enabled`, so the shape is
     unchanged for it. Its 5-minute `staleTime` breaks R21's minute once the answer can change at
@@ -298,8 +298,11 @@ Nothing found beyond F4's scoping. Checked:
     misleads an operator.
   - Seeded off (R28) matches today's `false`, so the cut-over changes nothing that anyone can see.
 - **Recommendation:**
-  - Remove the variable, its task-definition entry, README row and `.env.example` line in the
-    same PR.
+  - Remove the variable and its task-definition entry in the same PR. In the README, remove row
+    78 and rewrite rows 79-80 (`VERTICE_AI_URL`, `SERVICE_JWT_SECRET`), whose "Required when the
+    assistant is on" becomes "required for the assistant to run; checked whenever
+    `VERTICE_AI_URL` is set" (F2). In `.env.example:56-62`, drop `AI_ASSISTANT_ENABLED` and rewrite
+    the comments that say "when off" and "once the assistant is on".
   - Regenerate `docs/openapi.json` and `docs/api-contract.md` (`openapi.test.ts:27` fails
     otherwise).
   - Fix "No upstream call" in the status description.
