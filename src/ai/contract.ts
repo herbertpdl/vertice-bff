@@ -43,11 +43,11 @@ export interface AiWorkoutChatRequest {
       sets: AiSetEntry[]
     }[]
   }
-  /** The plan's other workouts (at most 30), summarized: enough to balance the week. */
+  /** The plan's other workouts (at most 50), summarized: enough to balance the week. */
   otherWorkouts: {
     name: string
     dayOfWeek: string
-    /** At most 20; `muscleGroups` at most 10; `sets` is the number of sets, 0–10. */
+    /** At most 20; `muscleGroups` at most 50; `sets` is the number of sets, 0–10. */
     exercises: { name: string; muscleGroups: string[]; sets: number }[]
   }[]
   /** Every exercise the trainer may use (R29), at most 1,000, unique ids; a proposal may name no other id. */
@@ -55,13 +55,14 @@ export interface AiWorkoutChatRequest {
 }
 
 /** vertice-ai spec §3 bounds the BFF trims to rather than send a 400-bound body. */
-export const AI_MAX_OTHER_WORKOUTS = 30
-export const AI_MAX_MUSCLE_GROUPS = 10
+export const AI_MAX_OTHER_WORKOUTS = 50
+export const AI_MAX_MUSCLE_GROUPS = 50
 export const AI_MAX_CATALOG = 1_000
 
 // ---- events vertice-ai streams back -------------------------------------------------------------
 
-export const aiStageEventSchema = z.object({ stage: z.string() })
+/** `exercise` (1-based) only on `building_sets`, which repeats once per exercise being written. */
+export const aiStageEventSchema = z.object({ stage: z.string(), exercise: z.number().int().positive().optional() })
 export const aiTextEventSchema = z.object({ delta: z.string() })
 /** Parsed loosely here; `modules/assistant/proposal.ts` validates it strictly (R27–R32). */
 export const aiProposalEventSchema = z.object({ exercises: z.unknown() }).passthrough()

@@ -31,8 +31,8 @@ export interface ChatContext {
   request: AiWorkoutChatRequest
   /** The trainer's visible catalog by id: proposal validation and enrichment (F5). */
   catalog: Map<number, exerciseService.Exercise>
-  /** The keys the web sent: a proposal may echo only these. */
-  keys: Set<string>
+  /** The keys the web sent, each with its exercise: a proposal may echo only these, on the same exercise. */
+  keys: Map<string, number>
 }
 
 /** The trainer's whole visible catalog, paged through `ListExercises` with their token. */
@@ -52,6 +52,23 @@ export async function loadCatalog(): Promise<Map<number, exerciseService.Exercis
     cursor = page.nextCursor ?? undefined
   } while (cursor)
   return catalog
+}
+
+/** Other workouts summarized at once, so one message never has hundreds of reads in flight. */
+const CONTEXT_READ_CONCURRENCY = 4
+
+/** `Promise.all(items.map(fn))` with at most `limit` running at once; results keep the input order. */
+async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++
+      results[index] = await fn(items[index]!)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
 }
 
 const muscleGroupNames = (exercise: exerciseService.Exercise) =>
@@ -83,9 +100,10 @@ export async function buildChatContext(user: AuthUser, body: WorkoutChatRequest)
     if (!catalog.has(entry.exerciseId)) throw new ValidationError(`exerciseId ${entry.exerciseId} is not available to you`)
   }
 
-  // vertice-ai takes at most 30 (spec §3); a plan has one per weekday in practice.
+  // vertice-ai takes at most 50 (spec §3), the first ones; a plan has one per weekday in practice.
   const others = planWorkouts.filter((w) => w.id !== current?.id).slice(0, AI_MAX_OTHER_WORKOUTS)
-  const otherWorkouts = await Promise.all(others.map((w) => summarizeWorkout(w, catalog)))
+  // A few workouts at a time: each one fans out to one ListExerciseSets per exercise.
+  const otherWorkouts = await mapWithLimit(others, CONTEXT_READ_CONCURRENCY, (w) => summarizeWorkout(w, catalog))
 
   const request: AiWorkoutChatRequest = {
     message: body.message,
@@ -110,7 +128,7 @@ export async function buildChatContext(user: AuthUser, body: WorkoutChatRequest)
     otherWorkouts,
     catalog: [...catalog.values()].map((e) => ({ id: e.id, name: e.name, muscleGroups: muscleGroupNames(e) })),
   }
-  return { request, catalog, keys: new Set(body.workout.exercises.map((e) => e.key)) }
+  return { request, catalog, keys: new Map(body.workout.exercises.map((e) => [e.key, e.exerciseId])) }
 }
 
 /**

@@ -10,7 +10,7 @@ import { exerciseKeySchema } from './schemas.js'
  * list of workout entries the editor could save with `PUT /workouts/:id/exercises`: the same field
  * bounds and 20/10 caps, nothing else (strict objects: a `name`, a `dayOfWeek` or any other field
  * makes it invalid, R28), every exercise from the trainer's catalog (R29), and every `key` one the
- * web sent, at most once. Anything else is `AI_INVALID_PROPOSAL` and no proposal reaches the web
+ * web sent, at most once, on the same `exerciseId` it was sent with. Anything else is `AI_INVALID_PROPOSAL` and no proposal reaches the web
  * (R32).
  */
 const proposalSetSchema = exerciseSetEntrySchema.strict()
@@ -48,7 +48,7 @@ export type ProposalResult = { ok: true; proposal: Proposal } | { ok: false; rea
 export function validateProposal(
   raw: unknown,
   catalog: Map<number, Exercise>,
-  sentKeys: Set<string>,
+  sentKeys: Map<string, number>,
 ): ProposalResult {
   const parsed = proposalSchema.safeParse(raw)
   if (!parsed.success) {
@@ -64,6 +64,9 @@ export function validateProposal(
     if (key !== null) {
       if (!sentKeys.has(key)) return { ok: false, reason: `exercises.${index}.key not sent` }
       if (seen.has(key)) return { ok: false, reason: `exercises.${index}.key repeated` }
+      // A keyed entry changes that exercise and keeps it (vertice-ai spec §4): a swap is `key: null`,
+      // so the web shows "Removido" + "Novo" rather than a silent "Alterado" (R33).
+      if (sentKeys.get(key) !== entry.exerciseId) return { ok: false, reason: `exercises.${index}.key exerciseId changed` }
       seen.add(key)
     }
     exercises.push({

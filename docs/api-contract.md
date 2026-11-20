@@ -671,7 +671,7 @@ Spec: [`docs/specs/ai-workout-assistant/spec.md`](./specs/ai-workout-assistant/s
   "message": "Adicione um finalizador para pernas"
 }
 ```
-  `workoutId` is absent on a workout not created yet. `workout` is the workout as it stands on screen (a proposal in review and the trainer's edits included); each entry is a `WorkoutExerciseEntry` plus the editor's opaque `key`. A `name` or `dayOfWeek` is ignored. `history` is earlier turns, text only, oldest first; the web trims it to the caps above.
+  History turns follow vertice-ai's rules: a turn that produced a proposal is sent as an `assistant` turn "Proposta pronta para revisão no editor." (plus the R51 line), a stopped, failed or retried message's `user` turn is not sent, and empty turns never are. `workoutId` is absent on a workout not created yet. `workout` is the workout as it stands on screen (a proposal in review and the trainer's edits included); each entry is a `WorkoutExerciseEntry` plus the editor's opaque `key`. A `name` or `dayOfWeek` is ignored. `history` is earlier turns, text only, oldest first; the web trims it to the caps above.
 
 **Before the stream** (normal JSON errors): `400 VALIDATION_ERROR` (body; a `workoutId` from another of the trainer's plans; an on-screen `exerciseId` outside the trainer's catalog, the same answer for a missing id and another trainer's private one), `403 FORBIDDEN` (another trainer's plan or workout, CLIENT, ADMIN), `413 AI_CATALOG_TOO_LARGE` (more than 1,000 visible exercises), `503 AI_UNAVAILABLE` (switched off).
 
@@ -679,13 +679,13 @@ Spec: [`docs/specs/ai-workout-assistant/spec.md`](./specs/ai-workout-assistant/s
 
 | `event` | `data` |
 |---|---|
-| `stage` | `{ "stage": "analyzing" \| "choosing_exercises" \| "building_sets" \| "checking" }`: a change is being built; show your own label |
+| `stage` | `{ "stage": "analyzing" \| "choosing_exercises" \| "building_sets" \| "checking", "exercise"?: n }`: a change is being built; show your own label. `building_sets` repeats per exercise being written, `exercise` its 1-based position |
 | `text` | `{ "delta": "..." }`: append to the answer |
 | `proposal` | `{ "exercises": [ { "key": "e1" \| null, "exerciseId", "restSecondsBetweenSets"?, "notes"?, "sets": [ExerciseSetEntry], "exercise": Exercise } ] }`: the complete new list, in order; `key` is the on-screen exercise it changes or `null` for a new one; an on-screen key missing from the list is removed. Without `key` and `exercise`, each entry is a `WorkoutExerciseEntry` for `PUT /workouts/:workoutId/exercises` or the nested create |
 | `done` | `{}` |
 | `error` | `{ "code", "message" }` |
 
-A question is `text… done`; a change is `stage… proposal [text] done` (the optional `text` is the one "left out" line, R51). One `done` or `error` ends every stream. `error` codes: `AI_UNAVAILABLE` (vertice-ai down or off), `AI_TIMEOUT` (60 seconds with no stage, text or proposal; keep-alives don't count), `AI_INVALID_PROPOSAL` (the proposal failed validation: an exercise outside the catalog, over 20/10, a field out of bounds, a name or weekday, a key not sent; nothing to show), `AI_ERROR` (anything else), `AI_SUPERSEDED` (a newer message from the same trainer took over; show it as stopped).
+A question is `text… done`; a change is `stage… proposal [text] done` (the optional `text` is the one "left out" line, R51). One `done` or `error` ends every stream. `error` codes: `AI_UNAVAILABLE` (vertice-ai down or off), `AI_TIMEOUT` (60 seconds with no stage, text or proposal; keep-alives don't count), `AI_INVALID_PROPOSAL` (the proposal failed validation: an exercise outside the catalog, over 20/10, a field out of bounds, a name or weekday, a key not sent or echoed on a different exercise; nothing to show), `AI_ERROR` (anything else), `AI_SUPERSEDED` (a newer message from the same trainer took over; show it as stopped).
 
 Closing the request ("Parar", leaving) cancels the work upstream. A new message from the same trainer supersedes a running one rather than being refused, so "Parar" then a new message, or "Tentar novamente", always goes through. Nothing is stored: the conversation lives in the web.
 

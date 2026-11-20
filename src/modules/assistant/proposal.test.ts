@@ -11,7 +11,10 @@ const exercise = (id: number): Exercise => ({
   isStarter: true,
 })
 const catalog = new Map([1, 2].map((id) => [id, exercise(id)]))
-const keys = new Set(['e1', 'e2'])
+const keys = new Map([
+  ['e1', 1],
+  ['e2', 2],
+])
 const check = (raw: unknown) => validateProposal(raw, catalog, keys)
 
 describe('validateProposal', () => {
@@ -51,7 +54,9 @@ describe('validateProposal', () => {
     ['an extra entry field', { exercises: [{ key: null, exerciseId: 1, sets: [], order: 1 }] }],
     ['an extra set field', { exercises: [{ key: null, exerciseId: 1, sets: [{ reps: 1, setNumber: 1 }] }] }],
     ['a key that was not sent', { exercises: [{ key: 'e9', exerciseId: 1, sets: [] }] }],
-    ['a key used twice', { exercises: [{ key: 'e1', exerciseId: 1, sets: [] }, { key: 'e1', exerciseId: 2, sets: [] }] }],
+    ['a key used twice', { exercises: [{ key: 'e1', exerciseId: 1, sets: [] }, { key: 'e1', exerciseId: 1, sets: [] }] }],
+    ['a key on a different exercise (a swap must be key: null)', { exercises: [{ key: 'e1', exerciseId: 2, sets: [] }] }],
+    ['a null optional field', { exercises: [{ key: null, exerciseId: 1, notes: null, sets: [] }] }],
     ['no exercises list', {}],
     ['not an object', 'proposta'],
   ])('refuses %s', (_, raw) => {

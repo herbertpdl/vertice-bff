@@ -168,7 +168,11 @@ export async function runChat(run: ChatRun): Promise<ChatOutcome> {
             if (!parsed.success) return finish('AI_ERROR')
             progressed()
             // An unknown key still counts as progress, but the web only labels the known ones.
-            if (STAGES.has(parsed.data.stage)) send('stage', { stage: parsed.data.stage as AssistantStage })
+            if (STAGES.has(parsed.data.stage)) {
+              const stage = parsed.data.stage as AssistantStage
+              const exercise = stage === 'building_sets' ? parsed.data.exercise : undefined
+              send('stage', exercise === undefined ? { stage } : { stage, exercise })
+            }
             else run.log.warn({ assistant: 'workout-chat', stage: parsed.data.stage.slice(0, 40) }, 'Unknown stage dropped')
             break
           }

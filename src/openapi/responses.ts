@@ -757,7 +757,15 @@ export const assistantStageSchema = named('AssistantStage', z.enum(ASSISTANT_STA
 
 export const assistantStageEventSchema = named(
   'AssistantStageEvent',
-  z.object({ stage: assistantStageSchema.describe('A stage key; the web shows its own pt-BR label for it.') }),
+  z.object({
+    stage: assistantStageSchema.describe('A stage key; the web shows its own pt-BR label for it.'),
+    exercise: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('Only on `building_sets`, which repeats per exercise being written: its 1-based position.'),
+  }),
 )
 
 export const assistantTextEventSchema = named(

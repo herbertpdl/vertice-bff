@@ -17,7 +17,7 @@ const context: ChatContext = {
     catalog: [{ id: 1, name: 'Agachamento', muscleGroups: [] }],
   },
   catalog: new Map([[1, exercise]]),
-  keys: new Set(['e1']),
+  keys: new Map([['e1', 1]]),
 }
 
 type Step = { event: string; data: unknown } | { wait: number } | 'hang'
@@ -93,6 +93,21 @@ describe('runChat', () => {
     const { client } = scripted([ev('stage', { stage: 'dreaming' }), ev('usage', {}), ev('text', { delta: 'a' }), ev('done')])
     const { events } = await run(client)
     expect(events.map((e) => e.event)).toEqual(['text', 'done'])
+  })
+
+  it("relays building_sets' exercise position, and only on that stage", async () => {
+    const { client } = scripted([
+      ev('stage', { stage: 'analyzing', exercise: 9 }),
+      ev('stage', { stage: 'building_sets', exercise: 1 }),
+      ev('stage', { stage: 'building_sets', exercise: 2 }),
+      ev('done'),
+    ])
+    const { events } = await run(client)
+    expect(events.slice(0, 3).map((e) => e.data)).toEqual([
+      { stage: 'analyzing' },
+      { stage: 'building_sets', exercise: 1 },
+      { stage: 'building_sets', exercise: 2 },
+    ])
   })
 
   it('sends heartbeats, which do not count as progress: 120 ms of silence is AI_TIMEOUT', async () => {

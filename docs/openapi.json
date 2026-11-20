@@ -1152,6 +1152,12 @@
           "stage": {
             "description": "A stage key; the web shows its own pt-BR label for it.",
             "$ref": "#/components/schemas/AssistantStage"
+          },
+          "exercise": {
+            "description": "Only on `building_sets`, which repeats per exercise being written: its 1-based position.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [

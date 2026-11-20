@@ -40,6 +40,10 @@ CLIENT and ADMIN get 403 by role before anything else (R1).
 
 - An entry is `WorkoutExerciseEntry` (`PUT /workouts/:id/exercises`) with the same bounds, plus
   `key`: the editor's opaque key, `^[A-Za-z0-9_-]{1,64}$`, unique (web F5).
+- History (vertice-ai spec §3): a turn that produced a proposal is an `assistant` turn with the
+  text "Proposta pronta para revisão no editor." (plus the R51 line when there was one); the
+  `user` turn of a stopped, failed or retried message is not sent ("Tentar novamente" sends the
+  same text as the new `message`); empty turns are never sent. The BFF forwards turns as given.
 - A `name` or `dayOfWeek` on `workout` is stripped (R28); other unknown fields are stripped too.
 - Order of checks, so no answer leaks more than the one before it: 401 → 403 role → 503 switched
   off → 400 body → 403/404 plan → 403 workout of another trainer → 400 workout of another of the
@@ -54,8 +58,8 @@ All reads use the trainer's own token (`grpcCall`), so vertice-api applies its o
 |---|---|---|
 | Plan (R12) | `GetTrainingPlan` | `plan`: name, description, level, start and end dates. Never `clientId` (R13) |
 | Workout on screen | `GetWorkout` (only with `workoutId`) | `workout`: the body's entries, plus the stored name and weekday as context |
-| Other workouts (F9) | `ListWorkouts`, `ListWorkoutExercises` each, `ListExerciseSets` per exercise | `otherWorkouts`: name, weekday, each exercise's name, muscle groups and number of sets; at most 30 |
-| Catalog (F2, option (a)) | `ListExercises`, every page (50 a page) | `catalog`: id, name, muscle groups (at most 10) |
+| Other workouts (F9) | `ListWorkouts`, `ListWorkoutExercises` each, `ListExerciseSets` per exercise, 4 workouts at a time | `otherWorkouts`: name, weekday, each exercise's name, muscle groups and number of sets; the first 50 |
+| Catalog (F2, option (a)) | `ListExercises`, every page (50 a page) | `catalog`: id, name, muscle groups (the first 50) |
 
 - A plan of 7 workouts × 10 exercises is 1 + 1 + 7 + 70 calls, plus about 5 catalog pages.
   Names come from the loaded catalog, so no `GetExercise` per exercise; an exercise the trainer
@@ -85,7 +89,7 @@ it carries nothing and is not progress.
 
 | `event` | `data` | |
 |---|---|---|
-| `stage` | `{ "stage": "analyzing" \| "choosing_exercises" \| "building_sets" \| "checking" }` | A change is being built (R18). The web shows its own label per key. Unknown keys from vertice-ai are dropped |
+| `stage` | `{ "stage": "analyzing" \| "choosing_exercises" \| "building_sets" \| "checking", "exercise"?: n }` | A change is being built (R18), keys in this order, later ones may be skipped. `building_sets` repeats once per exercise being written, with `exercise` its 1-based position (only there). The web shows its own label per key. Unknown keys from vertice-ai are dropped |
 | `text` | `{ "delta": "..." }` | The next piece of the answer (R17), or after a proposal R51's one line |
 | `proposal` | `{ "exercises": [AssistantProposalEntry] }` | At most once (R25) |
 | `done` | `{}` | Success |
@@ -114,7 +118,9 @@ when it:
   objects; R28);
 - breaks a field bound or the 20/10 caps (R31);
 - names an `exerciseId` outside the catalog sent for this message (R29);
-- echoes a key that was not sent, or one key twice;
+- echoes a key that was not sent, or one key twice, or a key on a different `exerciseId` than it
+  was sent with (a swap is `key: null`, so the web shows "Removido" + "Novo", R33);
+- has a `null` optional field (vertice-ai leaves unset fields out);
 - is a second proposal.
 
 The reason logged names field paths, never values.
