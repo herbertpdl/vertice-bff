@@ -36,7 +36,7 @@ API spec's decisions.
 | FF11 | **The unknown-`AdminAction` tolerance fix (F3, Low) is deferred.** This release adds no `AdminAction` value, so nothing triggers it. It ships with, and one BFF release before, the later flag-history change (PRD §6). | Optional per the owner; keeps this PR to the feature. |
 | FF12 | **First access: no guard, one log level (F9).** `createClient` logs a `ForbiddenError` from `CreatePasswordSetupToken` (the flag is on for this trainer, API D16) at INFO "Client created; no setup link: first-access e-mail is on for this trainer", and any other failure at WARN as today. `reissueSetupToken`'s 403 is unchanged. The seed description (API §1.2) tells the admin about both. | F9, R29, owner decision (no per-flag guards). VRT-10/11 replace these routes later. |
 | FF13 | **`ops:issue-setup-tokens` gets a note, not a guard (F10).** Header comment of `scripts/issue-setup-tokens.ts` and the README "Operations" entry: run it only while `FIRST_ACCESS_EMAIL_ENABLED` is off for everyone and has no user settings; with a trainer ON, each printed link rotates that client's token and voids the e-mailed one. | F10; owner decision. |
-| FF14 | **The cut-over turns the assistant off in production until an admin turns it on.** Since vertice-bff#74 (deployed 2026-11-20) the task definition sets `AI_ASSISTANT_ENABLED=true`, while the API seeds the flag off (R28, API §1.2). So this release hides the assistant from every trainer until an admin sets the everyone state on. The release step (§6) does that right after the BFF deploy. That works before the web page ships, because the web already forwards `/admin/**` (`bffAllowList.ts`). To have no gap at all, the API seed would have to start the flag on. That is the API spec's call and a reading of R28 ("as they are today"), so it is raised there, not decided here. | R27, R28; assessment §7 assumed `false`, which is no longer the deployed value. |
+| FF14 | **The cut-over changes nothing for trainers.** Since vertice-bff#74 (deployed 2026-11-20) production runs with `AI_ASSISTANT_ENABLED=true`. The API seeds the `AI_ASSISTANT_ENABLED` flag **on** for everyone with no user settings (vertice-api#104, which corrects PRD R28 and the API spec), and `FIRST_ACCESS_EMAIL_ENABLED` off. So when this release replaces the env switch with the flag, every trainer keeps the assistant, and no admin step is needed after the deploy. | R27, R28 as corrected by vertice-api#104 ("both flags start as they are today"); assessment §7 assumed `false`, which is no longer the deployed value. |
 | FF15 | **R21 budget, BFF share: nothing cached.** About 60 s end to end: API 30 s cache (API D8), BFF none, web status query `staleTime` 30 s + `refetchInterval` 30 s on visible tabs, retry once (web W11). The 20 s deadline bounds a hang and adds no staleness. | R21, E10; API D9. |
 
 ## 1. Proto sync
@@ -198,25 +198,22 @@ hashes, never print the values. If it fails, rotate it in both the BFF and verti
 release, since the two must stay equal. Otherwise the new task fails to boot and the ECS circuit
 breaker rolls it back.
 
-**Release step (FF14), right after step 2 is live.** The assistant is now off for every trainer.
-An admin signed in at `admin.vertice.fit` turns it back on:
-- after step 3, from the page;
-- before step 3, from the browser console on that host:
-  `fetch('/api/bff/admin/feature-flags/AI_ASSISTANT_ENABLED/everyone', {method:'PUT', headers:{'content-type':'application/json'}, body:'{"enabled":true}'})`.
-
-This needs an existing admin account. If none exists yet, the assistant stays off until one does.
+**No release step (FF14).** The seed matches today's production state (the assistant on for
+everyone), so trainers see no change at the switch-over and no admin action is needed.
 
 **After deploy:**
-- `GET /api/admin/feature-flags` as the admin lists both flags.
-- `GET /api/assistant/status` as a trainer follows the everyone state, and a per-user ON on a test
-  trainer flips only that trainer within about a minute.
+- `GET /api/admin/feature-flags` as the admin lists both flags: `AI_ASSISTANT_ENABLED` on, `FIRST_ACCESS_EMAIL_ENABLED` off, no user settings.
+- `GET /api/assistant/status` as a trainer answers `{ enabled: true }`, as before the release.
+- A per-user OFF on a test trainer turns the assistant off for only that trainer within about a
+  minute. Remove the setting afterwards.
 - The BFF log has one `admin.flag.*` line per write and no `evaluation_failed` lines in normal
   operation.
 
 **Rollback**, in reverse order:
 - **Web:** the page goes away. Nothing else changes.
-- **BFF:** the previous task definition restores `AI_ASSISTANT_ENABLED=true`. The assistant is
-  then on for everyone again, whatever the flag says.
+- **BFF:** the previous task definition restores `AI_ASSISTANT_ENABLED=true`, which matches the
+  seed. Only flag changes made since the release (for example a trainer set to OFF) stop
+  applying, since the old BFF reads the env switch, not the flag.
 - **API:** the evaluation answers `UNIMPLEMENTED`, so the assistant is off (FF4). The admin routes
   answer 502.
 
@@ -247,7 +244,8 @@ This needs an existing admin account. If none exists yet, the assistant stays of
 
 ## 8. Tests
 
-**`src/test/fakeUpstream.ts`:** an in-memory flag store with the two seeded flags off and a reset
+**`src/test/fakeUpstream.ts`:** an in-memory flag store seeded as the API is (`AI_ASSISTANT_ENABLED` on,
+`FIRST_ACCESS_EMAIL_ENABLED` off, no user settings) and a reset
 helper. `EvaluateFeatureFlag`: a user token only (service subject → `PERMISSION_DENIED`), answers
 the caller's setting, else the everyone state, unknown key `false`. The four admin RPCs: ADMIN only
 (D6 claims as for the other admin RPCs), unknown key `NOT_FOUND`, upsert and idempotent remove, each
@@ -255,7 +253,7 @@ write returning the flag. Switches to make the evaluation fail with a given stat
 
 **`src/test/route-authorization.test.ts`:** one entry per admin route (401 without a token, 403 for
 TRAINER and CLIENT, the broken-ADMIN-token 401s, OK for ADMIN). The assistant entries run with the
-default evaluator against the fake, with `AI_ASSISTANT_ENABLED` on for everyone in `beforeAll`, so
+default evaluator against the fake, with `AI_ASSISTANT_ENABLED` on for everyone (the seed), so
 the real RPC path and the trainer's token are exercised. The `SERVICE_TOKEN_RPCS` pin is unchanged.
 
 **`src/modules/admin/routes.test.ts`:**
