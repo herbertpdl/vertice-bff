@@ -235,6 +235,8 @@ everyone), so trainers see no change at the switch-over and no admin action is n
 - `src/config/env.ts` (§3); `src/ai/token.ts` comment.
 - `src/modules/admin/{routes,schemas,service}.ts`: four routes, three schemas, four service
   functions and the mapper (FF9); `openapi/responses.ts`: two schemas.
+- `src/test/fakeUpstream.ts`: the flag RPCs, the `deadlineMs` handling (§8), and `isWriteRpc`
+  (~1213) gains the `Remove` prefix.
 - `src/modules/clients/service.ts`: FF12's log level. `scripts/issue-setup-tokens.ts`: FF13's
   header note.
 - `.aws/task-definition.json`: drop `AI_ASSISTANT_ENABLED`. `.env.example`: drop it, rewrite the
@@ -261,6 +263,10 @@ write returning the flag. Switches to make the evaluation fail with a given stat
 answer. `fakeGrpcCall` (`fakeUpstream.ts:1220`, which replaces `grpcCall` in the route tests, so
 they never reach grpc-js) honours `options.deadlineMs`: a delay of at least `deadlineMs` rejects with
 `mapGrpcError({ code: DEADLINE_EXCEEDED })`, a shorter one resolves with the handler's answer.
+`isWriteRpc` (~1213) counts `Remove*` RPCs as writes: today its prefix list has no `Remove`, so
+`RemoveFeatureFlagUser` would escape the refusal tests' "a refused request never reaches a write
+RPC" check. A test pins `isWriteRpc('RemoveFeatureFlagUser')` and `isWriteRpc('SetFeatureFlagUser')`
+as true, and `isWriteRpc('ListFeatureFlags')` and `isWriteRpc('EvaluateFeatureFlag')` as false.
 
 **`src/test/route-authorization.test.ts`:** one entry per admin route (401 without a token, 403 for
 TRAINER and CLIENT, the broken-ADMIN-token 401s, OK for ADMIN). The assistant entries run with the
