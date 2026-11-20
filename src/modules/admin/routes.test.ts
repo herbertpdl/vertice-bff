@@ -13,10 +13,12 @@ import {
   emailOf,
   fakeAdminActions,
   fakeEmailSends,
+  fakeFlags,
   fakeGrpcCall,
   fakeSuspended,
   ids,
   resetFakeAdminActions,
+  resetFakeFlags,
   resetFakeSuspended,
   resetUpstreamCallers,
   type Actor,
@@ -794,5 +796,207 @@ describe('request log serializer', () => {
     } finally {
       await app.close()
     }
+  })
+})
+
+describe('admin feature-flag routes (VRT-53)', () => {
+  let app: FastifyInstance
+  const logLines: string[] = []
+
+  beforeAll(async () => {
+    const sink = new Writable({
+      write(chunk, _encoding, done) {
+        logLines.push(String(chunk))
+        done()
+      },
+    })
+    app = await buildApp({
+      rateLimits: { globalMax: 1_000_000 },
+      loggerInstance: pino({ level: 'trace', serializers: LOG_SERIALIZERS }, sink),
+    })
+    await app.ready()
+  })
+  afterAll(() => app.close())
+  beforeEach(() => {
+    logLines.length = 0
+    resetFakeFlags()
+  })
+
+  const send = (method: 'GET' | 'PUT' | 'DELETE', url: string, body?: unknown) =>
+    app.inject({ method, url, headers: bearer('admin'), ...(body !== undefined ? { payload: body as object } : {}) })
+  const lines = () => logLines.map((l) => JSON.parse(l))
+  const auditLines = () => lines().filter((l) => l.audit)
+  const flagRpcs = () => grpcCallMock.mock.calls.map(([, method]) => method)
+  const AI = 'AI_ASSISTANT_ENABLED'
+
+  describe('GET /admin/feature-flags', () => {
+    it('maps every field, flags by key and users in upstream order', async () => {
+      fakeFlags.get(AI)!.users.set(ids.trainerB, false).set(ids.trainerA, true)
+      const res = await send('GET', '/api/admin/feature-flags')
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json()).toEqual({
+        flags: [
+          {
+            key: AI,
+            description: 'Assistente de IA no editor de treino.',
+            enabled: true,
+            users: [
+              { userId: ids.trainerA, enabled: true },
+              { userId: ids.trainerB, enabled: false },
+            ],
+          },
+          { key: 'FIRST_ACCESS_EMAIL_ENABLED', description: 'E-mail de primeiro acesso.', enabled: false, users: [] },
+        ],
+      })
+      expect(flagRpcs()).toEqual(['ListFeatureFlags'])
+    })
+
+    it('keeps the users in the order upstream sent them', async () => {
+      grpcCallMock.mockResolvedValueOnce({
+        flags: [{ key: AI, description: 'd', enabled: false, users: [{ userId: '30', enabled: true }, { userId: '5', enabled: false }] }],
+      } as never)
+      const res = await send('GET', '/api/admin/feature-flags')
+      expect(res.json().flags[0].users).toEqual([
+        { userId: 30, enabled: true },
+        { userId: 5, enabled: false },
+      ])
+    })
+
+    it('drops a user id past 2^53 from upstream, with one unsafe_user_id WARN (FF9)', async () => {
+      grpcCallMock.mockResolvedValueOnce({
+        flags: [
+          {
+            key: AI,
+            description: 'd',
+            enabled: true,
+            users: [
+              { userId: '9007199254740993', enabled: true },
+              { userId: '7', enabled: false },
+            ],
+          },
+        ],
+      } as never)
+      const res = await send('GET', '/api/admin/feature-flags')
+      expect(res.statusCode).toBe(200)
+      expect(res.json().flags[0].users).toEqual([{ userId: 7, enabled: false }])
+      const warns = lines().filter((l) => l.outcome === 'unsafe_user_id')
+      expect(warns).toHaveLength(1)
+      expect(warns[0]).toMatchObject({ level: 40, flag: AI })
+      expect(JSON.stringify(warns[0])).not.toContain('9007199254740993')
+    })
+  })
+
+  describe('writes', () => {
+    it('PUT everyone sends the absolute state and returns the flag', async () => {
+      const res = await send('PUT', `/api/admin/feature-flags/${AI}/everyone`, { enabled: false })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('SetFeatureFlagEveryone')).toEqual({ key: AI, enabled: false })
+      expect(res.json()).toMatchObject({ key: AI, enabled: false, users: [] })
+      expect(auditLines()).toEqual([
+        expect.objectContaining({ level: 30, audit: 'admin.flag.everyone', actorId: ids.admin, flag: AI, enabled: false }),
+      ])
+    })
+
+    it('PUT a user sends the number and the absolute state and returns the flag', async () => {
+      const res = await send('PUT', `/api/admin/feature-flags/${AI}/users/${ids.trainerA}`, { enabled: false })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('SetFeatureFlagUser')).toEqual({ key: AI, userId: ids.trainerA, enabled: false })
+      expect(res.json()).toEqual({
+        key: AI,
+        description: expect.any(String),
+        enabled: true,
+        users: [{ userId: ids.trainerA, enabled: false }],
+      })
+      expect(auditLines()).toEqual([
+        expect.objectContaining({
+          audit: 'admin.flag.user_set',
+          actorId: ids.admin,
+          flag: AI,
+          userId: ids.trainerA,
+          enabled: false,
+        }),
+      ])
+    })
+
+    it('DELETE a user removes the setting and returns the flag; with no setting it is 200, unchanged', async () => {
+      fakeFlags.get(AI)!.users.set(ids.trainerA, false)
+      const res = await send('DELETE', `/api/admin/feature-flags/${AI}/users/${ids.trainerA}`)
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('RemoveFeatureFlagUser')).toEqual({ key: AI, userId: ids.trainerA })
+      expect(res.json()).toMatchObject({ key: AI, enabled: true, users: [] })
+
+      const again = await send('DELETE', `/api/admin/feature-flags/${AI}/users/${ids.trainerA}`)
+      expect(again.statusCode, again.body).toBe(200)
+      expect(again.json()).toMatchObject({ key: AI, enabled: true, users: [] })
+      const audits = auditLines()
+      expect(audits).toHaveLength(2)
+      expect(audits[0]).toMatchObject({ audit: 'admin.flag.user_removed', actorId: ids.admin, flag: AI, userId: ids.trainerA })
+      expect(audits[0]).not.toHaveProperty('enabled')
+    })
+
+    it('accepts the largest safe user number', async () => {
+      const res = await send('PUT', `/api/admin/feature-flags/${AI}/users/9007199254740991`, { enabled: true })
+      expect(res.statusCode, res.body).toBe(200)
+      expect(upstreamRequest('SetFeatureFlagUser')).toEqual({ key: AI, userId: 9007199254740991, enabled: true })
+    })
+
+    it.each([
+      ['a string', { enabled: 'true' }],
+      ['a missing enabled', {}],
+      ['an extra reason', { enabled: true, reason: 'because' }],
+    ])('refuses %s with 400 and no upstream call', async (_, body) => {
+      for (const url of [`/api/admin/feature-flags/${AI}/everyone`, `/api/admin/feature-flags/${AI}/users/${ids.trainerA}`]) {
+        const res = await send('PUT', url, body)
+        expect(res.statusCode, url).toBe(400)
+        expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      }
+      expect(grpcCallMock).not.toHaveBeenCalled()
+      expect(auditLines()).toEqual([])
+    })
+
+    it.each(['ai_assistant', '1FLAG', 'A'.repeat(65), '%20'])('refuses the key %s with 400 and no upstream call', async (key) => {
+      for (const [method, url, body] of [
+        ['PUT', `/api/admin/feature-flags/${key}/everyone`, { enabled: true }],
+        ['PUT', `/api/admin/feature-flags/${key}/users/${ids.trainerA}`, { enabled: true }],
+        ['DELETE', `/api/admin/feature-flags/${key}/users/${ids.trainerA}`, undefined],
+      ] as const) {
+        const res = await send(method, url, body)
+        expect(res.statusCode, `${method} ${url}`).toBe(400)
+        expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      }
+      expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+
+    it.each(['0', '-1', '01', '1e3', 'abc', '9007199254740992'])('refuses the user number %s with 400 and no upstream call', async (userId) => {
+      for (const [method, body] of [
+        ['PUT', { enabled: true }],
+        ['DELETE', undefined],
+      ] as const) {
+        const res = await send(method, `/api/admin/feature-flags/${AI}/users/${userId}`, body)
+        expect(res.statusCode, method).toBe(400)
+        expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      }
+      expect(grpcCallMock).not.toHaveBeenCalled()
+    })
+
+    it('answers 404 NOT_FOUND for an unknown key, and logs no audit line', async () => {
+      for (const [method, url, body] of [
+        ['PUT', '/api/admin/feature-flags/NO_SUCH_FLAG/everyone', { enabled: true }],
+        ['PUT', `/api/admin/feature-flags/NO_SUCH_FLAG/users/${ids.trainerA}`, { enabled: true }],
+        ['DELETE', `/api/admin/feature-flags/NO_SUCH_FLAG/users/${ids.trainerA}`, undefined],
+      ] as const) {
+        const res = await send(method, url, body)
+        expect(res.statusCode, `${method} ${url}`).toBe(404)
+        expect(res.json().error.code).toBe('NOT_FOUND')
+      }
+      expect(auditLines()).toEqual([])
+    })
+
+    it('answers 502 when upstream sends no flag', async () => {
+      grpcCallMock.mockResolvedValueOnce({ flag: null } as never)
+      const res = await send('PUT', `/api/admin/feature-flags/${AI}/everyone`, { enabled: true })
+      expect(res.statusCode).toBe(502)
+      expect(res.json().error.code).toBe('UPSTREAM_ERROR')
+    })
   })
 })

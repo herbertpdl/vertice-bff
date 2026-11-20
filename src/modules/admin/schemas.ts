@@ -147,3 +147,32 @@ export const muscleGroupNameSchema = z.object({
     .describe('Normalized to Unicode NFC and trimmed, then 1-50 characters. Unique ignoring case and accents.'),
 }).meta({ id: 'MuscleGroupNameRequest' })
 export type MuscleGroupName = z.infer<typeof muscleGroupNameSchema>
+
+// ---- feature flags (feature-flags spec §2.2, FF7, FF8) -------------------------------------------
+
+/** vertice-api's key format (API D4): uppercase snake case, starting with a letter. */
+export const FEATURE_FLAG_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/
+export const FEATURE_FLAG_KEY_MAX = 64
+
+/** `:key` of the flag routes; checked before any upstream call. */
+export const featureFlagKeySchema = z.string().regex(FEATURE_FLAG_KEY_PATTERN).max(FEATURE_FLAG_KEY_MAX)
+
+/**
+ * `:userId` of the flag routes: digits only, no leading zero, a safe integer (FF8). `0`, `-1`,
+ * `01`, `1e3` and anything past 2^53 − 1 are a 400: a 20-digit number would otherwise lose
+ * precision and land on another user. Not checked against any account (R17).
+ */
+export const featureFlagUserIdSchema = z
+  .string()
+  .regex(/^[1-9][0-9]{0,15}$/)
+  .transform(Number)
+  .refine(Number.isSafeInteger, 'must be a safe integer')
+
+/**
+ * The body of both flag writes: the absolute target state, never a toggle (W4). `.strict()`: an
+ * unknown field (a `reason`, a `toggle`) is a 400, so a client can't believe it sent something the
+ * BFF dropped. `"true"` (a string) is a 400.
+ */
+export const featureFlagStateSchema = z.object({ enabled: z.boolean() }).strict()
+
+export type FeatureFlagState = z.infer<typeof featureFlagStateSchema>

@@ -124,6 +124,10 @@ The admin panel: dashboard, user directory and profiles, action history, suspens
 | POST | `/api/admin/exercises/{id}/promote` | ADMIN | `promoteAdminExercise` | Promote a trainer’s exercise to the starter set |
 | POST | `/api/admin/muscle-groups` | ADMIN | `createAdminMuscleGroup` | Create a muscle group |
 | PATCH | `/api/admin/muscle-groups/{id}` | ADMIN | `renameAdminMuscleGroup` | Rename a muscle group |
+| GET | `/api/admin/feature-flags` | ADMIN | `listAdminFeatureFlags` | Every feature flag with its user settings |
+| PUT | `/api/admin/feature-flags/{key}/everyone` | ADMIN | `setAdminFeatureFlagEveryone` | Turn a feature flag on or off for everyone |
+| PUT | `/api/admin/feature-flags/{key}/users/{userId}` | ADMIN | `setAdminFeatureFlagUser` | Give one user their own ON or OFF for a feature flag |
+| DELETE | `/api/admin/feature-flags/{key}/users/{userId}` | ADMIN | `removeAdminFeatureFlagUser` | Remove one user’s setting of a feature flag |
 
 ### Legal
 
@@ -245,11 +249,11 @@ The trainer’s landing page in one call.
 
 ### Assistant
 
-The AI workout assistant in the workout editor (TRAINER only, off unless `AI_ASSISTANT_ENABLED`).
+The AI workout assistant in the workout editor (TRAINER only; per trainer, the `AI_ASSISTANT_ENABLED` flag on the admin page).
 
 | Method | Path | Access | `operationId` | Summary |
 |---|---|---|---|---|
-| GET | `/api/assistant/status` | TRAINER | `getAssistantStatus` | Whether the AI workout assistant is switched on |
+| GET | `/api/assistant/status` | TRAINER | `getAssistantStatus` | Whether the AI workout assistant is on for this trainer |
 | POST | `/api/assistant/workout-chat` | TRAINER | `workoutChat` | Send a message to the AI workout assistant (server-sent events) |
 
 ### Health
@@ -422,7 +426,7 @@ Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.1 (B1�
 **Ops** (no route): `npm run ops:create-admin`, `ops:issue-admin-setup-token`, `ops:reset-admin-2fa`, `ops:suspend-admin`, `ops:reactivate-admin` (README "Operations"; the panel never suspends an admin, R14). The setup link is the www "Definir senha" page; `POST /auth/password/setup` answers `{role: "ADMIN", email}`, so the web can send the admin on to the admin host.
 
 ## Admin panel — `/admin` (ADMIN only)
-Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.2–§2.4 (B11–B13, B16, B18). Every route here is behind the `/admin` plugin's hooks: the admin session token (from `/admin/auth/verify` or `/renew`), else `401`; a TRAINER or CLIENT token is **`403 FORBIDDEN`** before any upstream call. Each route is one `vertice.admin.v1` RPC (`AdminService`; `AdminCatalogService` for exercise curation) with the caller's token; vertice-api re-checks ADMIN and the second-factor claims on every call. **Admins are invisible** in every list and count, and a missing or deleted user, or an admin (the caller included), is **`404 NOT_FOUND`** (one answer, no oracle). Responses are built field by field; enum values carry no upstream prefix (`TRAINER`, `SUSPENDED`, `VIEW_USER_PROFILE`).
+Spec: [`docs/specs/admin-panel/spec.md`](./specs/admin-panel/spec.md) §2.2–§2.4 (B11–B13, B16, B18). Every route here is behind the `/admin` plugin's hooks: the admin session token (from `/admin/auth/verify` or `/renew`), else `401`; a TRAINER or CLIENT token is **`403 FORBIDDEN`** before any upstream call. Each route is one `vertice.admin.v1` RPC (`AdminService`; `AdminCatalogService` for exercise curation; `AdminFeatureFlagService` for feature flags) with the caller's token; vertice-api re-checks ADMIN and the second-factor claims on every call. **Admins are invisible** in every list and count, and a missing or deleted user, or an admin (the caller included), is **`404 NOT_FOUND`** (one answer, no oracle). Responses are built field by field; enum values carry no upstream prefix (`TRAINER`, `SUSPENDED`, `VIEW_USER_PROFILE`).
 
 **Paging** (every admin list): query `limit` ∈ {10, 25, 50} (absent or empty = 25, anything else `400 VALIDATION_ERROR` with no upstream call) and `cursor` (the previous page's `nextCursor`, opaque, ≤ 512 characters, sent with the same filters); the response carries `nextCursor: string | null` (`null` on the last page). No page numbers or totals. A cursor vertice-api refuses is `400 VALIDATION_ERROR` with its text. Lists come in upstream order: don't re-sort client-side.
 
@@ -476,6 +480,17 @@ On the e-mail routes `409 PRECONDITION_FAILED` has that one meaning: switched of
 | create, update, promote | An unknown muscle group id, or a bound vertice-api refuses | `400 VALIDATION_ERROR` with vertice-api's field text |
 
 Every other `FAILED_PRECONDITION` on these writes (a muscle group removed under a create, which can't happen while there is no group delete) stays the generic `409 PRECONDITION_FAILED`.
+
+**Feature flags** ([`docs/specs/feature-flags/spec.md`](./specs/feature-flags/spec.md) §2, FF7–FF10, VRT-53), on `vertice.admin.v1.AdminFeatureFlagService`. Flags are created and removed by developers (there is no create or delete); each has an everyone state and any number of per-user settings, a user's own setting winning. **Nothing here is recorded in the action history**; each write logs one `audit` INFO line here instead: `admin.flag.everyone` `{actorId, flag, enabled}`, `admin.flag.user_set` `{actorId, flag, userId, enabled}`, `admin.flag.user_removed` `{actorId, flag, userId}`. A change reaches the product within about a minute (the API caches 30 s; the web polls the assistant status every 30 s).
+
+`AdminFeatureFlag` = `{key, description, enabled, users: [{userId, enabled}]}`: `key` uppercase snake case (the flag's name on the page), `description` pt-BR text written by a developer (render it as text), `enabled` the everyone state, `users` every user setting ordered by `userId` (its length is the count to show). `AdminFeatureFlagList` = `{flags: AdminFeatureFlag[]}`, ordered by key, not paginated. A user setting upstream holds with a number past 2^53 − 1 (only writable by a direct gRPC call) is left out, with one WARN `outcome: "unsafe_user_id"`, rather than shown as another number.
+
+- `GET /feature-flags` → `200 AdminFeatureFlagList`.
+- `PUT /feature-flags/:key/everyone` `{enabled}` → `200 AdminFeatureFlag`, the flag as saved.
+- `PUT /feature-flags/:key/users/:userId` `{enabled}` → `200 AdminFeatureFlag`: that user's own ON or OFF, replacing any earlier one. The number is not checked against any account (R17).
+- `DELETE /feature-flags/:key/users/:userId` → `200 AdminFeatureFlag` (not 204): the user follows the everyone state again. Idempotent: a number with no setting answers 200 with the flag unchanged.
+
+Writes take the **absolute state** (never a toggle): send the target the dialog captured; the last save wins. The body is `.strict()` `{enabled: boolean}`: a string (`"true"`), a missing `enabled` or any extra field (a `reason`) is `400 VALIDATION_ERROR` with no upstream call. `:key` must match `^[A-Z][A-Z0-9_]*$`, 1 to 64 characters; `:userId` is digits only, no leading zero, at most 2^53 − 1 (`0`, `01`, `-1`, `1e3` are 400). Both are checked before any upstream call. An unknown key is **`404 NOT_FOUND`** (a flag removed by a migration: refetch the list).
 
 ADMIN also keeps `GET /muscle-groups` (filters and the exercise form). Errors beyond the paging and role rows above: `401 UNAUTHENTICATED` when vertice-api no longer accepts the admin (sign in again), `403 FORBIDDEN` if vertice-api refuses the token's second-factor claims.
 
@@ -658,9 +673,10 @@ Both fields describe the same completion, so this release is additive: a client 
 
 ## AI workout assistant — `/assistant` (TRAINER only)
 
-Spec: [`docs/specs/ai-workout-assistant/spec.md`](./specs/ai-workout-assistant/spec.md). Off unless `AI_ASSISTANT_ENABLED` is true.
+Spec: [`docs/specs/ai-workout-assistant/spec.md`](./specs/ai-workout-assistant/spec.md). On or off per trainer: the `AI_ASSISTANT_ENABLED` flag on the admin page ([`docs/specs/feature-flags/spec.md`](./specs/feature-flags/spec.md), FF4). The BFF reads it with one `EvaluateFeatureFlag` call per request, with the trainer's own token, a 20 s deadline and no cache; any failure to read it is off. A BFF without `VERTICE_AI_URL` has the assistant off for everyone.
 
-- `GET /assistant/status` → `{ "enabled": boolean }`. No upstream call. The web shows the AI icon only when `enabled`.
+- `GET /assistant/status` → `{ "enabled": boolean }`. Always 200: `true` only when the flag is on for the caller and vertice-ai is configured (with no vertice-ai the flag is not read). May lag an admin change by up to 30 s (the API's cache); with the web's 30 s polling a change shows within about a minute. The web shows the AI icon only when `enabled`.
+- `POST /assistant/workout-chat` checks the flag first, before the body and any read: off, unreadable, or on with no vertice-ai configured is 503 `AI_UNAVAILABLE` (the last also logs one WARN `reason: "no_client"`). A stream already running when the flag turns off finishes; the next message is refused.
 - `POST /assistant/workout-chat` → `text/event-stream`. Body:
 ```json
 {

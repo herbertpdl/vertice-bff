@@ -185,28 +185,26 @@ const envSchema = z
     TERMS_VERSION: legalVersion,
     HEALTH_DATA_CONSENT_VERSION: legalVersion,
     /**
-     * The AI workout assistant (`POST /api/assistant/workout-chat`, spec
-     * `docs/specs/ai-workout-assistant/spec.md`). Off by default: when off, the route answers 503
-     * `AI_UNAVAILABLE`, `GET /api/assistant/status` says `enabled: false`, nothing goes to
-     * vertice-ai, and neither `VERTICE_AI_URL` nor `SERVICE_JWT_SECRET` is needed. It stays off
-     * until the PRD §7 launch condition (data inventory and privacy text name Anthropic) is met.
+     * vertice-ai's base URL (private, reachable from the BFF only), for the AI workout assistant
+     * (spec `docs/specs/ai-workout-assistant/spec.md`). Who gets the assistant is the
+     * `AI_ASSISTANT_ENABLED` feature flag, evaluated per trainer by vertice-api (spec
+     * `docs/specs/feature-flags/spec.md`, FF2, FF4). Unset: the assistant is off for everyone, and
+     * `SERVICE_JWT_SECRET` is not needed. Set: `SERVICE_JWT_SECRET` is checked at boot.
      */
-    AI_ASSISTANT_ENABLED: envBoolean(false),
-    /** vertice-ai's base URL (private, reachable from the BFF only). Required when the assistant is on. */
     VERTICE_AI_URL: aiUrl,
     /**
      * The HS256 secret of the tokens the BFF signs for vertice-ai (`aud: "vertice-ai"`), shared with
      * vertice-ai only. Never `JWT_SECRET`: a vertice-ai token must never be a vertice-api credential.
-     * Required when the assistant is on, unless NODE_ENV is development or test (then it defaults to
-     * {@link DEV_SERVICE_JWT_SECRET}).
+     * Checked whenever `VERTICE_AI_URL` is set; required then unless NODE_ENV is development or test
+     * (then it defaults to {@link DEV_SERVICE_JWT_SECRET}).
      */
     SERVICE_JWT_SECRET: z.string().optional(),
   })
   .superRefine((value, ctx) => {
-    if (value.AI_ASSISTANT_ENABLED) {
-      if (!value.VERTICE_AI_URL) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['VERTICE_AI_URL'], message: 'is required when AI_ASSISTANT_ENABLED is true' })
-      }
+    // Keyed on the URL, not on the flag (FF2): the flag can turn on at runtime, so the URL is the
+    // only boot-time fact about whether this BFF can sign a vertice-ai token. No URL is valid: the
+    // assistant can't run here, and nothing signs one.
+    if (value.VERTICE_AI_URL) {
       if (value.SERVICE_JWT_SECRET && value.SERVICE_JWT_SECRET.trim() === (value.JWT_SECRET ?? DEV_JWT_SECRET).trim()) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['SERVICE_JWT_SECRET'], message: 'must differ from JWT_SECRET' })
       }
@@ -214,7 +212,7 @@ const envSchema = z
         const message = secretProblem(
           value.SERVICE_JWT_SECRET,
           PLACEHOLDER_SERVICE_JWT_SECRETS,
-          'when AI_ASSISTANT_ENABLED is true, unless NODE_ENV is development or test',
+          'when VERTICE_AI_URL is set, unless NODE_ENV is development or test',
         )
         if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['SERVICE_JWT_SECRET'], message })
       }
@@ -234,8 +232,8 @@ const envSchema = z
   .transform((value) => ({
     ...value,
     JWT_SECRET: value.JWT_SECRET?.trim() ? value.JWT_SECRET : DEV_JWT_SECRET,
-    // Outside development/test an enabled assistant has passed the guard above; a disabled one never
-    // signs a vertice-ai token, so the dev value is never used there.
+    // Outside development/test a set VERTICE_AI_URL has passed the check above; with no URL there is
+    // no vertice-ai client, so nothing signs a vertice-ai token and the dev value is never used there.
     SERVICE_JWT_SECRET: value.SERVICE_JWT_SECRET?.trim() ? value.SERVICE_JWT_SECRET : DEV_SERVICE_JWT_SECRET,
   }))
 

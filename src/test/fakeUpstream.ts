@@ -354,8 +354,11 @@ export const fakeUpstreamProfile = { local: false }
 
 export type UpstreamCaller = AuthUser | 'service:bff' | 'service:ops' | 'anonymous'
 
-/** The caller of every call the fake served, in order. Cleared with `resetUpstreamCallers()`. */
-export const upstreamCallers: { method: string; caller: UpstreamCaller }[] = []
+/**
+ * The caller of every call the fake served, in order, plus the call's `deadlineMs` when it had
+ * one. Cleared with `resetUpstreamCallers()`.
+ */
+export const upstreamCallers: { method: string; caller: UpstreamCaller; deadlineMs?: number }[] = []
 export const resetUpstreamCallers = () => {
   upstreamCallers.length = 0
   listUsersPageCalls.length = 0
@@ -391,6 +394,8 @@ function authenticateCall(method: string, options: GrpcCallOptions): UpstreamCal
   if (claims.role !== 'SERVICE' || typeof claims.exp !== 'number') {
     throw new Error(`fakeUpstream: ${method} got a malformed ${subject} token`)
   }
+  // FeatureFlagService answers a service subject PERMISSION_DENIED (feature-flags spec D10).
+  if (method === 'EvaluateFeatureFlag') upstreamError(status.PERMISSION_DENIED, 'FeatureFlagService needs a user token')
   if (!allowed.includes(method)) throw new Error(`fakeUpstream: ${subject} is not allowed to call ${method}`)
   return subject as 'service:bff' | 'service:ops'
 }
@@ -907,6 +912,91 @@ const adminCatalogHandlers: Record<string, (req: Req) => unknown> = {
 }
 
 
+/**
+ * Mirrors vertice-api's feature flags (feature-flags spec D7–D13), seeded as the API is:
+ * `AI_ASSISTANT_ENABLED` on and `FIRST_ACCESS_EMAIL_ENABLED` off for everyone, no user settings.
+ * `resetFakeFlags()` in `beforeEach`. `fakeFlagEvaluation` makes `EvaluateFeatureFlag` fail with a
+ * status or answer late (with `fakeGrpcCall`'s `deadlineMs` handling).
+ */
+interface FakeFlag {
+  description: string
+  enabled: boolean
+  users: Map<number, boolean>
+}
+const initialFlags = (): Map<string, FakeFlag> =>
+  new Map([
+    ['AI_ASSISTANT_ENABLED', { description: 'Assistente de IA no editor de treino.', enabled: true, users: new Map() }],
+    ['FIRST_ACCESS_EMAIL_ENABLED', { description: 'E-mail de primeiro acesso.', enabled: false, users: new Map() }],
+  ])
+export const fakeFlags: Map<string, FakeFlag> = initialFlags()
+export const fakeFlagEvaluation: { failWith?: status; delayMs: number } = { delayMs: 0 }
+export const resetFakeFlags = () => {
+  fakeFlags.clear()
+  for (const [key, flag] of initialFlags()) fakeFlags.set(key, flag)
+  fakeFlagEvaluation.failWith = undefined
+  fakeFlagEvaluation.delayMs = 0
+}
+
+const FLAG_KEY = /^[A-Z][A-Z0-9_]*$/
+function requireFlagKey(value: unknown): string {
+  const key = String(value ?? '')
+  if (key.length === 0 || key.length > 64 || !FLAG_KEY.test(key)) upstreamError(status.INVALID_ARGUMENT, 'key: malformed')
+  return key
+}
+function flagOf(value: unknown): [string, FakeFlag] {
+  const key = requireFlagKey(value)
+  const flag = fakeFlags.get(key)
+  if (!flag) upstreamError(status.NOT_FOUND, `Feature flag ${key} not found`)
+  return [key, flag]
+}
+function requireFlagUserId(value: unknown): number {
+  const userId = Number(value)
+  if (!Number.isSafeInteger(userId) || userId <= 0) upstreamError(status.INVALID_ARGUMENT, 'user_id: must be positive')
+  return userId
+}
+const flagRes = (key: string, flag: FakeFlag) => ({
+  key,
+  description: flag.description,
+  enabled: flag.enabled,
+  users: [...flag.users.entries()].sort(([a], [b]) => a - b).map(([userId, enabled]) => ({ userId: str(userId), enabled })),
+})
+
+const featureFlagHandlers: Record<string, (req: Req) => unknown> = {
+  // FeatureFlagService: a user token only (a service subject is PERMISSION_DENIED in
+  // authenticateCall); the caller's setting, else the everyone state, an unknown key false.
+  EvaluateFeatureFlag: (r) => {
+    const user = caller()
+    if (!user) upstreamError(status.PERMISSION_DENIED, 'FeatureFlagService needs a user token')
+    if (fakeFlagEvaluation.failWith !== undefined) upstreamError(fakeFlagEvaluation.failWith, 'evaluation failed')
+    const flag = fakeFlags.get(requireFlagKey(r.key))
+    if (!flag) return { enabled: false }
+    return { enabled: flag.users.get(user.id) ?? flag.enabled }
+  },
+  // AdminFeatureFlagService: ADMIN only (D6 claims checked in authenticateCall).
+  ListFeatureFlags: () => {
+    requireAdminCaller()
+    return { flags: [...fakeFlags.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, f]) => flagRes(k, f)) }
+  },
+  SetFeatureFlagEveryone: (r) => {
+    requireAdminCaller()
+    const [key, flag] = flagOf(r.key)
+    flag.enabled = r.enabled === true
+    return { flag: flagRes(key, flag) }
+  },
+  SetFeatureFlagUser: (r) => {
+    requireAdminCaller()
+    const [key, flag] = flagOf(r.key)
+    flag.users.set(requireFlagUserId(r.userId), r.enabled === true)
+    return { flag: flagRes(key, flag) }
+  },
+  RemoveFeatureFlagUser: (r) => {
+    requireAdminCaller()
+    const [key, flag] = flagOf(r.key)
+    flag.users.delete(requireFlagUserId(r.userId))
+    return { flag: flagRes(key, flag) }
+  },
+}
+
 const handlers: Record<string, (req: Req) => unknown> = {
   // UserService
   ListUsers: (r) => listUsers(r),
@@ -1174,6 +1264,7 @@ const handlers: Record<string, (req: Req) => unknown> = {
   // AdminService
   ...adminHandlers,
   ...adminCatalogHandlers,
+  ...featureFlagHandlers,
 
   // TrainerClientService
   CreateClientForTrainer: (r) => ({ ...userRes(users[3]!, 'detail'), id: '99', email: r.email, cpf: r.cpf }),
@@ -1210,12 +1301,17 @@ const handlers: Record<string, (req: Req) => unknown> = {
 
 /** RPCs that change upstream state. A refused request must never reach one. */
 export const isWriteRpc = (method: string) =>
-  /^(Create|Update|Delete|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard|Start|Verify|Issue|Reset|Suspend|Reactivate|Send|Promote|Rename)/.test(method) &&
+  /^(Create|Update|Delete|Remove|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard|Start|Verify|Issue|Reset|Suspend|Reactivate|Send|Promote|Rename)/.test(method) &&
   method !== 'VerifyCredentials'
+
+/** How late the fake answers `method`; only `EvaluateFeatureFlag` can be delayed. */
+const delayOf = (method: string) => (method === 'EvaluateFeatureFlag' ? fakeFlagEvaluation.delayMs : 0)
 
 /**
  * Drop-in implementation for the mocked `grpcCall`; unknown methods, and calls without a valid
- * caller token, fail loudly.
+ * caller token, fail loudly. Honours `options.deadlineMs` like grpc-js: an answer delayed by at
+ * least the deadline rejects with what `grpcCall` maps `DEADLINE_EXCEEDED` to, when the deadline
+ * passes; a shorter delay resolves with the handler's answer.
  */
 export async function fakeGrpcCall(
   _client: unknown,
@@ -1226,7 +1322,20 @@ export async function fakeGrpcCall(
   const handler = handlers[method]
   if (!handler) throw new Error(`fakeUpstream: no handler for ${method}`)
   const callerOfCall = authenticateCall(method, options)
-  upstreamCallers.push({ method, caller: callerOfCall })
+  upstreamCallers.push({
+    method,
+    caller: callerOfCall,
+    ...(options.deadlineMs !== undefined && { deadlineMs: options.deadlineMs }),
+  })
+  const delayMs = delayOf(method)
+  if (delayMs > 0) {
+    const { deadlineMs } = options
+    if (deadlineMs !== undefined && delayMs >= deadlineMs) {
+      await new Promise((resolve) => setTimeout(resolve, deadlineMs))
+      throw mapGrpcError({ code: status.DEADLINE_EXCEEDED, details: 'Deadline exceeded' })
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
   currentCaller = callerOfCall
   try {
     return handler((request ?? {}) as Req) as never

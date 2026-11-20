@@ -19,8 +19,8 @@ export const AI_TOKEN_TTL_SECONDS = 60
 
 export function signAiServiceToken(user: Pick<AuthUser, 'id' | 'role'>): string {
   if (!Number.isSafeInteger(user.id) || user.id <= 0) throw new Error('signAiServiceToken: invalid user id')
-  // The env guard only checks the secret when the assistant is switched on; refuse here too so a
-  // disabled deployment can never sign with the public dev value.
+  // The env check only runs when VERTICE_AI_URL is set (feature-flags FF2); refuse here too, as the
+  // backstop, so a deployment without that check can never sign with the public dev value.
   if (!DEV_NODE_ENVS.includes(env.NODE_ENV) && env.SERVICE_JWT_SECRET === DEV_SERVICE_JWT_SECRET) {
     throw new Error('signAiServiceToken: SERVICE_JWT_SECRET is not configured')
   }
