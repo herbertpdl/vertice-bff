@@ -75,9 +75,8 @@ cp .env.example .env
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW_MS` | `5` / `900000` | Strict per-IP and per-email buckets on `/auth/login`, `/auth/register` and `/auth/password[/setup]`: the request after `AUTH_RATE_LIMIT_MAX` counted attempts in the window gets `429`. Login and password setup count failures only; register counts every attempt. See [`docs/api-contract.md`](docs/api-contract.md#rate-limits) |
 | `EXPORT_RATE_LIMIT_MAX` / `EXPORT_RATE_LIMIT_WINDOW_MS` | `3` / `3600000` | Per-user bucket on `GET /api/auth/me/export` (the data export), counting every export; the next one in the window is `429`. Its own limiter, sharing `AUTH_RATE_LIMIT_NETWORK_MAX` and `AUTH_RATE_LIMIT_MAX_KEYS`. |
 | `TERMS_VERSION` / `HEALTH_DATA_CONSENT_VERSION` | `2026-10-draft` / `2026-10-draft` | Current version of the Terms of Use / Privacy Policy and of the health-data consent notice (P1-04), served by the public `GET /api/legal/versions`. 1 to 32 of `[A-Za-z0-9._-]` (vertice-api's format); anything else refuses to start. Bump one when its text changes: users whose stored consent has another version are asked again. The texts are drafts pending legal review |
-| `AI_ASSISTANT_ENABLED` | `false` | The AI workout assistant (`/api/assistant/*`, spec [`docs/specs/ai-workout-assistant/spec.md`](docs/specs/ai-workout-assistant/spec.md)). Off: `POST /api/assistant/workout-chat` is `503 AI_UNAVAILABLE`, `GET /api/assistant/status` says `enabled: false`, nothing goes to vertice-ai and the two variables below are not needed. Stays off until the PRD §7 launch condition is met |
-| `VERTICE_AI_URL` | none | vertice-ai's base URL (deployed: `http://vertice-ai:8000`, ECS Service Connect). Required when the assistant is on; absolute http(s), no query, fragment or credentials |
-| `SERVICE_JWT_SECRET` | vertice-ai's dev default (only when `NODE_ENV` is unset, `development` or `test`) | HS256 secret of the tokens the BFF signs for vertice-ai (`aud: vertice-ai`); must equal vertice-ai's. Never `JWT_SECRET`: the BFF refuses to start with the assistant on if they are equal, and outside development/test applies `JWT_SECRET`'s guards. Deployed from Secrets Manager `vertice/prod/ai-service-jwt-secret` |
+| `VERTICE_AI_URL` | none | vertice-ai's base URL for the AI workout assistant (`/api/assistant/*`, spec [`docs/specs/ai-workout-assistant/spec.md`](docs/specs/ai-workout-assistant/spec.md); deployed: `http://vertice-ai:8000`, ECS Service Connect). Unset: the assistant is off for everyone (outside development/test the BFF logs one WARN at boot). When set, `SERVICE_JWT_SECRET` is checked. Who gets the assistant is the `AI_ASSISTANT_ENABLED` feature flag on the admin page, per trainer (spec [`docs/specs/feature-flags/spec.md`](docs/specs/feature-flags/spec.md)). Absolute http(s), no query, fragment or credentials |
+| `SERVICE_JWT_SECRET` | vertice-ai's dev default (only when `NODE_ENV` is unset, `development` or `test`) | HS256 secret of the tokens the BFF signs for vertice-ai (`aud: vertice-ai`); must equal vertice-ai's. Never `JWT_SECRET`. Checked whenever `VERTICE_AI_URL` is set: the BFF refuses to start if they are equal, and outside development/test applies `JWT_SECRET`'s guards. Deployed from Secrets Manager `vertice/prod/ai-service-jwt-secret` |
 
 ## Running locally
 
@@ -209,6 +208,10 @@ Clients created before password setup tokens got a random password nobody knows,
 verifies passwords (the default) **they are locked out until they redeem a setup link**. Run this
 and distribute the links before deploying with `VERIFY_PASSWORDS=true` (in dev,
 `VERIFY_PASSWORDS=false` can bridge the gap):
+
+Run it only while the `FIRST_ACCESS_EMAIL_ENABLED` feature flag is off for everyone and has no
+user settings (the admin's Feature flags page): with a trainer ON, each printed link rotates that
+client's token and voids the one the first-access e-mail sent.
 
 ```sh
 # Who would get a link (issues nothing):

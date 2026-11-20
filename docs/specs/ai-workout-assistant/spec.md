@@ -156,7 +156,7 @@ the usual 502/503 when vertice-api fails.
 
 | Variable | Default | |
 |---|---|---|
-| `AI_ASSISTANT_ENABLED` | `false` | Off: the chat answers 503 `AI_UNAVAILABLE`, status says `enabled: false`, nothing is called, and the two below are not needed. Stays off until PRD §7's launch condition (data inventory and privacy text name Anthropic) is met |
+| `AI_ASSISTANT_ENABLED` | `false` | **Superseded by [feature-flags](../feature-flags/spec.md) FF2/FF4:** the env switch is gone; the assistant is the per-trainer `AI_ASSISTANT_ENABLED` flag, and the two below are checked whenever `VERTICE_AI_URL` is set. Off: the chat answers 503 `AI_UNAVAILABLE`, status says `enabled: false`, nothing is called, and the two below are not needed. Stays off until PRD §7's launch condition (data inventory and privacy text name Anthropic) is met |
 | `VERTICE_AI_URL` | none | Required when on. Absolute http(s), no query, fragment or credentials. Deployed: `http://vertice-ai:8000` (ECS Service Connect) |
 | `SERVICE_JWT_SECRET` | dev: vertice-ai's dev default | Required when on outside development/test, with `JWT_SECRET`'s guards (≥ 32 bytes, no padding, no placeholder) and never equal to `JWT_SECRET`. Deployed from Secrets Manager `vertice/prod/ai-service-jwt-secret` |
 
@@ -186,6 +186,8 @@ two rows in `src/test/route-authorization.test.ts`.
    BFF merge: with `AI_ASSISTANT_ENABLED=false` the BFF never calls vertice-ai and boots without it.
 2. vertice-bff (this), flag off.
 3. vertice-web-react (#36), which hides the icon while `GET /api/assistant/status` says off.
+   (Steps 3–4 are superseded by [feature-flags](../feature-flags/spec.md) FF2/FF4: the switch is
+   now the per-trainer `AI_ASSISTANT_ENABLED` flag on the admin page.)
 4. The owner turns `AI_ASSISTANT_ENABLED` on after PRD §7's condition and the web → BFF timeout.
 
 Rollback: switch the BFF flag off first (the route answers 503, nothing is stored), then
