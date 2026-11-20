@@ -268,6 +268,8 @@ scripts run inside the running BFF task. The image ships them compiled as
 `VERTICE_API_GRPC_HOST`/`PORT`. Needed locally: AWS CLI v2 with credentials allowed
 `ecs:ExecuteCommand` on the cluster, and the Session Manager plugin
 (`brew install --cask session-manager-plugin`; check with `session-manager-plugin --version`).
+The cask's installer runs `sudo`, so run it in a real terminal: from a shell that can't prompt
+for a password (an agent shell, `!` in Claude Code) it fails with "a terminal is required".
 
 **One-time setup.** ECS Exec is a setting of the service, not of the task definition, and AWS
 refuses to turn it on until the running task definition has a task role (`vertice-bff-task`, in
@@ -289,9 +291,13 @@ TASK=$(aws ecs list-tasks --region us-east-2 --cluster vertice --service-name ve
 # Ready when enableExecuteCommand is true and ExecuteCommandAgent is RUNNING
 aws ecs describe-tasks --region us-east-2 --cluster vertice --tasks "$TASK" \
   --query 'tasks[0].{exec:enableExecuteCommand,agent:containers[?name==`vertice-bff`].managedAgents[0].lastStatus}'
-# Keep the link out of the terminal scrollback: write the session to a private file
+# Keep the link out of the terminal scrollback: write the session to a private file.
+# `sleep 45 |` holds stdin open: with an empty or closed stdin (a script, CI, an agent shell) the
+# session closes before the script's output arrives, so the link is lost while the action still
+# runs on the server. 45 s is a ceiling: raise it when the call can be slow (Aurora waking from
+# auto-pause).
 umask 077
-aws ecs execute-command --region us-east-2 --cluster vertice --task "$TASK" \
+sleep 45 | aws ecs execute-command --region us-east-2 --cluster vertice --task "$TASK" \
   --container vertice-bff --interactive \
   --command "node /app/dist/ops/cli/create-admin.js --name 'Ana Souza' --email ana@vertice.fit" \
   > admin-setup.txt
@@ -301,6 +307,19 @@ aws ecs execute-command --region us-east-2 --cluster vertice --task "$TASK" \
   `reset-admin-2fa.js`, `suspend-admin.js`, `reactivate-admin.js`. Run one with no arguments to
   check access: it prints the usage and exits 2 without calling vertice-api.
 - Read `setupLink` from `admin-setup.txt`, hand it to the admin out of band, then delete the file.
+- **If `create-admin`'s output was lost**, the admin was probably still created, and a rerun fails
+  with "Email or CPF already in use". Find the new id in vertice-api's log (last hour, with
+  timestamps), take the entry whose time matches the failed run, then issue a new link with
+  `issue-admin-setup-token.js --user-id <id>` (same `sleep 45 |` command as above); that also
+  voids the lost link. The log line carries only the id: if more than one entry fits the window,
+  don't guess, because a link for the wrong id sets another admin's password and voids their
+  unused links.
+
+  ```sh
+  aws logs filter-log-events --region us-east-2 --log-group-name /ecs/vertice-api \
+    --start-time $(( ($(date +%s) - 3600) * 1000 )) --filter-pattern '"Ops created admin"' \
+    --query 'events[].[timestamp,message]' --output text
+  ```
 - ECS Exec session logging is off on the cluster (`executeCommandConfiguration.logging=NONE`), so
   the session's output, the link included, is not stored in CloudWatch or S3; keep it that way.
   CloudTrail records each `ExecuteCommand` call with its command string (so the name and e-mail
