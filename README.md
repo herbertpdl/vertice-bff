@@ -294,7 +294,8 @@ aws ecs describe-tasks --region us-east-2 --cluster vertice --tasks "$TASK" \
 # Keep the link out of the terminal scrollback: write the session to a private file.
 # `sleep 45 |` holds stdin open: with an empty or closed stdin (a script, CI, an agent shell) the
 # session closes before the script's output arrives, so the link is lost while the action still
-# runs on the server.
+# runs on the server. 45 s is a ceiling: raise it when the call can be slow (Aurora waking from
+# auto-pause).
 umask 077
 sleep 45 | aws ecs execute-command --region us-east-2 --cluster vertice --task "$TASK" \
   --container vertice-bff --interactive \
@@ -307,13 +308,17 @@ sleep 45 | aws ecs execute-command --region us-east-2 --cluster vertice --task "
   check access: it prints the usage and exits 2 without calling vertice-api.
 - Read `setupLink` from `admin-setup.txt`, hand it to the admin out of band, then delete the file.
 - **If `create-admin`'s output was lost**, the admin was probably still created, and a rerun fails
-  with "Email or CPF already in use". Find the new id in vertice-api's log, then issue a new link
-  with `issue-admin-setup-token.js --user-id <id>` (same `sleep 45 |` command as above); that also
-  voids the lost link:
+  with "Email or CPF already in use". Find the new id in vertice-api's log (last hour, with
+  timestamps), take the entry whose time matches the failed run, then issue a new link with
+  `issue-admin-setup-token.js --user-id <id>` (same `sleep 45 |` command as above); that also
+  voids the lost link. The log line carries only the id: if more than one entry fits the window,
+  don't guess, because a link for the wrong id sets another admin's password and voids their
+  unused links.
 
   ```sh
   aws logs filter-log-events --region us-east-2 --log-group-name /ecs/vertice-api \
-    --filter-pattern '"Ops created admin"' --query 'events[].message' --output text
+    --start-time $(( ($(date +%s) - 3600) * 1000 )) --filter-pattern '"Ops created admin"' \
+    --query 'events[].[timestamp,message]' --output text
   ```
 - ECS Exec session logging is off on the cluster (`executeCommandConfiguration.logging=NONE`), so
   the session's output, the link included, is not stored in CloudWatch or S3; keep it that way.
