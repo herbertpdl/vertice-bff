@@ -215,7 +215,9 @@ everyone), so trainers see no change at the switch-over and no admin action is n
   seed. Only flag changes made since the release (for example a trainer set to OFF) stop
   applying, since the old BFF reads the env switch, not the flag.
 - **API:** the evaluation answers `UNIMPLEMENTED`, so the assistant is off (FF4). The admin routes
-  answer 502.
+  answer 502. This turns the assistant off for every trainer. Roll the BFF back first (it restores
+  `AI_ASSISTANT_ENABLED=true`, by reverting the step-2 PR, which restores the task-definition
+  entry) unless that outage is accepted.
 
 ## 7. Code changes (checklist)
 
