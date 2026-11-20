@@ -249,7 +249,10 @@ everyone), so trainers see no change at the switch-over and no admin action is n
 helper. `EvaluateFeatureFlag`: a user token only (service subject → `PERMISSION_DENIED`), answers
 the caller's setting, else the everyone state, unknown key `false`. The four admin RPCs: ADMIN only
 (D6 claims as for the other admin RPCs), unknown key `NOT_FOUND`, upsert and idempotent remove, each
-write returning the flag. Switches to make the evaluation fail with a given status or hang.
+write returning the flag. Switches to make the evaluation fail with a given status or delay its
+answer. `fakeGrpcCall` (`fakeUpstream.ts:1220`, which replaces `grpcCall` in the route tests, so
+they never reach grpc-js) honours `options.deadlineMs`: a delay of at least `deadlineMs` rejects with
+`mapGrpcError({ code: DEADLINE_EXCEEDED })`, a shorter one resolves with the handler's answer.
 
 **`src/test/route-authorization.test.ts`:** one entry per admin route (401 without a token, 403 for
 TRAINER and CLIENT, the broken-ADMIN-token 401s, OK for ADMIN). The assistant entries run with the
@@ -269,14 +272,15 @@ the real RPC path and the trainer's token are exercised. The `SERVICE_TOKEN_RPCS
 **`src/modules/assistant/routes.test.ts`:**
 - Status is `true` only with a client and the evaluator on. Two trainers get different answers.
 - With no client, status is `false` and the evaluator is not called.
-- The evaluator failing with `UNAVAILABLE`, `UNIMPLEMENTED` or `DEADLINE_EXCEEDED`, or hanging past
-  the deadline (fake timers), answers 200 `{enabled:false}` with one `evaluation_failed` WARN.
-- An evaluation answering after 15 s (inside the deadline) is still `true`.
+- The evaluation failing with `UNAVAILABLE`, `UNIMPLEMENTED` or `DEADLINE_EXCEEDED`, or the fake
+  delaying past `deadlineMs` (fake timers), answers 200 `{enabled:false}` with one
+  `evaluation_failed` WARN.
+- The fake delaying 15 s (inside the deadline) still answers `true`.
 - Chat, flag off or evaluation failing: 503 `AI_UNAVAILABLE`, with no `ListExercises` and no
   vertice-ai call. Flag on with no client: 503 plus the `no_client` WARN.
 - A stream running when the evaluator flips to off completes. The next message is 503.
-- `isFlagOn` sends the trainer's bearer token and the 20 s deadline (asserted on the fake's
-  metadata and the call options).
+- `isFlagOn` sends the trainer's bearer token and passes `deadlineMs: 20_000` (asserted on the
+  fake's recorded caller and options).
 
 **`src/config/env.test.ts`** (re-keyed from `on` at :201-252):
 - With `VERTICE_AI_URL` set in production, these are refused: a missing, short, padded or
@@ -285,8 +289,14 @@ the real RPC path and the trainer's token are exercised. The `SERVICE_TOKEN_RPCS
 - With no URL in production, any secret boots.
 - `AI_ASSISTANT_ENABLED=yes` is ignored, not an error.
 
-**`src/grpc/call.test.ts`:** `deadlineMs` reaches grpc-js as a `deadline` about that far ahead.
-Without `deadlineMs`, no deadline is sent.
+**`src/grpc/call.test.ts`:**
+- The stub client takes grpc-js's 4-argument form `(request, metadata, callOptions, callback)`.
+  With `deadlineMs`, `callOptions.deadline ≈ Date.now() + deadlineMs`; without it, no deadline is
+  set.
+- One real-channel test: an in-process `grpc.Server` (bound to `127.0.0.1:0`) whose handler never
+  answers, called with `deadlineMs: 50` and real timers. The call rejects as 502 `UPSTREAM_ERROR`,
+  and `grpcStatus` `DEADLINE_EXCEEDED` is logged. `isFlagOn` over the same client returns `false`.
+  This is the only test that exercises grpc-js's own deadline.
 
 **`src/modules/clients/service.test.ts`:** a `ForbiddenError` from `CreatePasswordSetupToken` is
 logged at INFO and `setup: null`. Any other error is logged at WARN.
