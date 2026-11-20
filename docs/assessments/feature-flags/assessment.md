@@ -61,7 +61,7 @@ evaluation failure means "off" (R22). The vertice-ai client is built at boot whe
 | R18 | new route: no cap | |
 | R19 | not exposed | Evaluation is upstream |
 | R20 | not exposed | Evaluation is upstream |
-| R21 | change: assistant routes ask per request, no BFF cache | API caches at most 30 s (API F2, A2); the BFF adds nothing. vertice-web-react: the status query's staleTime must fit R21 with the API cache (30 s + 30 s), refetch on editor mount, retry once (`WorkoutEditor.tsx:100-105` has 5 min, no retry today) |
+| R21 | change: assistant routes ask per request, no BFF cache | Budget (identical in all three assessments): the API caches flags for at most 30 s; the BFF caches nothing and has a 20 s evaluation deadline; the web status query uses `staleTime` 30 s, `refetchInterval` 30 s (visible tabs only), refetch on mount, retry once; about 60 s worst case. vertice-web-react: the status query uses `staleTime` 30 s, `refetchInterval` 30 s (visible tabs only), refetch on mount, retry once (React Query doesn't refetch on staleness alone) (`WorkoutEditor.tsx:101-106` on web main at 9a386d8 has 5 min, no retry today) |
 | R22 | change: assistant routes treat any evaluation failure as off | F4 |
 | R23 | withdrawn (2026-11-20) | No history entries for flag changes; `ListActions` mapping unchanged. F3 (Low) is latent for the future flag-history change |
 | R24 | new routes take no `reason` | Unlike suspend (`adminReasonSchema`) |
@@ -79,7 +79,7 @@ evaluation failure means "off" (R22). The vertice-ai client is built at boot whe
 | E7 | not exposed (web) | |
 | E8 | not exposed | |
 | E9 | `GET /api/admin/feature-flags` | A removed flag and its settings vanish from the list |
-| E10 | change: assistant routes | A running chat stream is not cut when the flag turns off (F4). vertice-web-react: the status query's staleTime must fit R21 with the API cache (30 s + 30 s), refetch on editor mount, retry once |
+| E10 | change: assistant routes | A running chat stream is not cut when the flag turns off (F4). vertice-web-react: the status query uses `staleTime` 30 s, `refetchInterval` 30 s (visible tabs only), refetch on mount, retry once (React Query doesn't refetch on staleness alone) |
 | E11 | change: assistant routes | Off on evaluation failure (F4) |
 | E12 | not exposed | Last save wins upstream |
 | E13 | not exposed (web) | |
@@ -151,9 +151,9 @@ and the route description (`routes.ts:49`) says the same. Both become false. Bot
 mentions (`:248`, `:661`) and `src/openapi/docs.ts:38` name `AI_ASSISTANT_ENABLED`.
 
 The web already reads the status. On vertice-web-react `origin/main` (`9a386d8`),
-`src/components/domain/WorkoutEditor/WorkoutEditor.tsx:100-105` queries it with
+`src/components/domain/WorkoutEditor/WorkoutEditor.tsx:101-106` queries it with
 `staleTime: 5 * 60_000, retry: false` and hides the AI button on any failure. Two web comments
-name `AI_ASSISTANT_ENABLED`: `WorkoutEditor.tsx:98-99` and `src/lib/api/assistant.ts:8`. The
+name `AI_ASSISTANT_ENABLED`: `WorkoutEditor.tsx:99-100` and `src/lib/api/assistant.ts:8`. The
 query key `["assistantStatus"]` is not per user, which is fine: sign-out clears the whole cache
 (`src/lib/auth/useSignOut.ts:15`, `queryClient.clear()`), so a per-trainer answer never carries
 over to the next user in the same browser.
@@ -289,10 +289,11 @@ Nothing found beyond F4's scoping. Checked:
 - **Where:** `env.ts:186-194`; `assistant/routes.ts:17-29,49`; `.aws/task-definition.json:55-57`;
   `README.md:78-80`; `.env.example:56-62`; `docs/api-contract.md:248,661-663`; `src/openapi/docs.ts:38`.
 - **Why it matters:**
-  - The web reads status (`WorkoutEditor.tsx:100-105`) and only uses `enabled`, so the shape is
+  - The web reads status (`WorkoutEditor.tsx:101-106` on web main at 9a386d8) and only uses `enabled`, so the shape is
     unchanged for it. Its 5-minute `staleTime` breaks R21's minute once the answer can change at
-    runtime: with the API's 30 s cache and no BFF cache, the web's `staleTime` must be 30 s, with a
-    refetch on editor mount and one retry (§7 step 3).
+    runtime. With the API's 30 s cache and no BFF cache, the web query must use `staleTime` 30 s,
+    `refetchInterval` 30 s (visible tabs only; React Query doesn't refetch on staleness alone),
+    refetch on mount, and retry once: about 60 s worst case (§7 step 3).
   - The env schema is a plain `z.object` (it strips unknown keys), so a task definition that still
     sets `AI_ASSISTANT_ENABLED` boots fine and the variable does nothing. That is harmless, but it
     misleads an operator.
@@ -510,10 +511,12 @@ Order (API §7):
    means off (F4). The admin routes would answer 502, though, so ship it after.
 3. **vertice-web-react**:
    - the "Feature flags" page;
-   - the assistant-status query in `WorkoutEditor.tsx:100-105`: `staleTime` 30 s (so 30 s API
-     cache + 30 s web stays within R21), refetch on editor mount, retry once;
-   - the comments naming `AI_ASSISTANT_ENABLED` (`WorkoutEditor.tsx:98-99`,
-     `src/lib/api/assistant.ts:8`) updated to say the switch is the flag on the admin page.
+   - the assistant-status query in `WorkoutEditor.tsx:101-106` (web main at 9a386d8):
+     `staleTime` 30 s, `refetchInterval` 30 s (visible tabs only), refetch on mount, retry once.
+     With the API's 30 s cache and the BFF caching nothing (20 s evaluation deadline), that is
+     about 60 s worst case (R21);
+   - the comments naming `AI_ASSISTANT_ENABLED` (`WorkoutEditor.tsx:99-100` on web main at
+     9a386d8, `src/lib/api/assistant.ts:8`) updated to say the switch is the flag on the admin page.
 
    The query key needs no user in it: sign-out calls `queryClient.clear()`
    (`src/lib/auth/useSignOut.ts:15`).
@@ -530,7 +533,7 @@ Order (API §7):
 
 **Docs to update:** `docs/api-contract.md` and `docs/openapi.json` (generated), the README env
 table, `.env.example`, `CLAUDE.md:78`, and `.aws/task-definition.json` (drop the variable). In
-vertice-web-react: the comments at `WorkoutEditor.tsx:98-99` and `src/lib/api/assistant.ts:8`.
+vertice-web-react: the comments at `WorkoutEditor.tsx:99-100` (web main at 9a386d8) and `src/lib/api/assistant.ts:8`.
 
 ## 8. Effort and risk
 
