@@ -244,15 +244,19 @@ Nothing found beyond F4's scoping. Checked:
   `grpcCall`); R22, E11.
 - **Why it matters:**
   - A 5xx on status turns "AI off" into an error state on the workout editor.
-  - With no deadline, a trainer's first request after Aurora resumes (about 15 s, API §3) holds
-    the status call that long.
+  - With no deadline, a hung upstream holds the status call indefinitely. The first request
+    after Aurora resumes legitimately takes about 15 s (API §3).
   - For the chat route, "off" is already 503 `AI_UNAVAILABLE`, the right answer here too.
 - **Recommendation:**
   - Status: catch any evaluation failure, answer `{ enabled: false }`, and log one warning
     (`rpc`, no user data).
   - Chat: on failure, the same 503 `AI_UNAVAILABLE` as "switched off".
-  - Give the evaluation call a short deadline (a few seconds) through `GrpcCallOptions`. Today
-    `GrpcCallOptions` has no deadline, so this is a small addition to `call.ts`.
+  - Give the evaluation call a deadline above Aurora's resume time, for example 20 s, through
+    `GrpcCallOptions`. The first evaluation after an idle pause waits for the database (about
+    15 s, API §3, vertice-api#89). A deadline of a few seconds would answer "off" to the first
+    trainer after every pause, and that "off" would then sit in the web's 30 s cache. The deadline
+    is there to stop a hang, not to hide a slow database. Today `GrpcCallOptions` has no deadline,
+    so this is a small addition to `call.ts`.
   - E10: a chat stream already running when the flag turns off is not cut. The next message is
     refused. That fits "within about a minute".
   - Admin routes keep the global mapping: unknown key NOT_FOUND → 404; non-positive number
@@ -453,6 +457,8 @@ nothing. The one BFF-side choice is in F2, where the vertice-ai guards key on:
 - Two trainers with different answers get different status.
 - The evaluator throwing (each of UNAVAILABLE, UNIMPLEMENTED, a deadline) → `{ enabled: false }`,
   200.
+- An evaluation slower than a few seconds but within the deadline (an Aurora resume) still
+  answers `{ enabled: true }`.
 - Chat with the flag off, or the evaluator throwing → 503 `AI_UNAVAILABLE`, and no
   `buildChatContext` call and no vertice-ai call.
 - Flag on with no client → 503, with the distinct warning.
@@ -545,8 +551,8 @@ None asked of the owner. Assumptions the spec should use:
   (TRAINER-callable).
 - [ ] F2: key the vertice-ai guards on `VERTICE_AI_URL`; build the client at boot when the URL is
   set; the "flag on, no client" behaviour and its warning.
-- [ ] F4: evaluation failure means off on both routes; a deadline on the evaluation call; a running
-  stream isn't cut.
+- [ ] F4: evaluation failure means off on both routes; a deadline on the evaluation call above
+  Aurora's ~15 s resume (for example 20 s); a running stream isn't cut.
 - [ ] F5: the four routes' paths, bodies (no `reason`), the key pattern, the response (the updated
   flag), and the audit lines.
 - [ ] F6: `AssistantSettings.enabled` becomes an injectable per-user evaluator.
