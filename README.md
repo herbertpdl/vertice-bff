@@ -342,9 +342,28 @@ not breaching):
 
 `outcome: "error"` (5xx, upstream down) is never counted. The field names and values are a
 contract: renaming `audit`, `step` or `outcome`, or one of their values, silently breaks the
-alarms, so change the filters in the same rollout. The alarms have **no actions yet**: subscribe
-an SNS topic (e-mail) with `aws cloudwatch put-metric-alarm ... --alarm-actions <topic ARN>`.
-Created by CLI for VRT-19 on 2026-11-18. There is no IaC yet.
+alarms, so change the filters in the same rollout.
+
+Both alarms notify the SNS topic `vertice-admin-alerts` (us-east-2) as their alarm and OK
+action, so its subscribers get an e-mail when an alarm trips and another when it clears. Today
+the one subscriber is the owner's e-mail.
+
+```bash
+ARN=$(aws sns list-topics --region us-east-2 --query "Topics[?ends_with(TopicArn, ':vertice-admin-alerts')].TopicArn" --output text)
+aws sns list-subscriptions-by-topic --region us-east-2 --topic-arn "$ARN"   # who gets the e-mails
+aws sns subscribe --region us-east-2 --topic-arn "$ARN" --protocol email --notification-endpoint <address>
+aws sns unsubscribe --region us-east-2 --subscription-arn <subscription ARN>  # remove someone
+# test: sends an ALARM e-mail now and an OK e-mail at the next evaluation (within 5 minutes)
+aws cloudwatch set-alarm-state --region us-east-2 --alarm-name vertice-admin-signin-failures --state-value ALARM --state-reason test
+```
+
+A new subscriber gets nothing until they click the link in AWS's confirmation e-mail
+(`list-subscriptions-by-topic` shows `PendingConfirmation` until then). `put-metric-alarm`
+replaces every setting of an existing alarm: when changing a threshold, pass
+`--alarm-actions "$ARN" --ok-actions "$ARN"` again, or the e-mails silently stop.
+
+Created by CLI for VRT-19 on 2026-11-18; VRT-49 wired the SNS topic on 2026-11-20. There is no
+IaC yet.
 
 ## API
 
