@@ -1,6 +1,9 @@
 import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { Writable } from 'node:stream'
+import { status } from '@grpc/grpc-js'
 import jwt from 'jsonwebtoken'
+import pino from 'pino'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../../app.js'
@@ -8,7 +11,19 @@ import { env } from '../../config/env.js'
 import { grpcCall } from '../../grpc/call.js'
 import { httpAiClient } from '../../ai/client.js'
 import { parseSse } from '../../ai/sse.js'
-import { bearer, emailOf, fakeGrpcCall, ids, resetUpstreamCallers, userOf } from '../../test/fakeUpstream.js'
+import {
+  bearer,
+  emailOf,
+  fakeFlagEvaluation,
+  fakeFlags,
+  fakeGrpcCall,
+  ids,
+  resetFakeFlags,
+  resetUpstreamCallers,
+  upstreamCallers,
+  userOf,
+} from '../../test/fakeUpstream.js'
+import { AI_ASSISTANT_FLAG, FLAG_EVALUATION_DEADLINE_MS } from '../feature-flags/service.js'
 
 vi.mock('../../grpc/call.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../grpc/call.js')>()),
@@ -18,7 +33,9 @@ const grpcCallMock = vi.mocked(grpcCall)
 
 /**
  * The route end to end over real HTTP: the BFF listening on a port, vertice-ai a stub HTTP server
- * reached through the real `httpAiClient`, and vertice-api the in-memory fake.
+ * reached through the real `httpAiClient`, and vertice-api the in-memory fake. The flag is read
+ * through the default evaluator (`isFlagOn`) against the fake, seeded on for everyone, unless a
+ * test overrides `isEnabledFor`.
  */
 
 interface StubCall {
@@ -55,11 +72,21 @@ afterAll(() => new Promise<void>((r) => stub.close(() => r())))
 const timings = { heartbeatMs: 30, idleTimeoutMs: 1_000 }
 let app: FastifyInstance
 let baseUrl: string
+const logLines: string[] = []
+const sink = new Writable({
+  write(chunk, _encoding, done) {
+    logLines.push(String(chunk))
+    done()
+  },
+})
+const lines = () => logLines.map((l) => JSON.parse(l) as Record<string, unknown>)
+const flagFailures = () => lines().filter((l) => l.outcome === 'evaluation_failed')
 
 async function start(options: Parameters<typeof buildApp>[0] = {}) {
   app = await buildApp({
     rateLimits: { globalMax: 1_000_000 },
-    assistant: { enabled: true, client: httpAiClient(stubUrl), timings },
+    loggerInstance: pino({ level: 'info' }, sink),
+    assistant: { client: httpAiClient(stubUrl), timings },
     ...options,
   })
   await app.listen({ port: 0, host: '127.0.0.1' })
@@ -68,6 +95,8 @@ async function start(options: Parameters<typeof buildApp>[0] = {}) {
 
 beforeEach(() => {
   calls.length = 0
+  logLines.length = 0
+  resetFakeFlags()
   grpcCallMock.mockReset()
   grpcCallMock.mockImplementation(fakeGrpcCall)
   resetUpstreamCallers()
@@ -215,7 +244,7 @@ describe('POST /api/assistant/workout-chat', () => {
   })
 
   it('reports an unreachable vertice-ai as AI_UNAVAILABLE', async () => {
-    await start({ assistant: { enabled: true, client: httpAiClient('http://127.0.0.1:1'), timings } })
+    await start({ assistant: { client: httpAiClient('http://127.0.0.1:1'), timings } })
     const events = await eventsOf(await post(body()))
     expect(events).toEqual([{ event: 'error', data: { code: 'AI_UNAVAILABLE', message: expect.any(String) } }])
   })
@@ -226,7 +255,7 @@ describe('POST /api/assistant/workout-chat', () => {
       const t = setInterval(() => res.write(': ping\n\n'), 20)
       res.on('close', () => clearInterval(t))
     }
-    await start({ assistant: { enabled: true, client: httpAiClient(stubUrl), timings: { heartbeatMs: 30, idleTimeoutMs: 150 } } })
+    await start({ assistant: { client: httpAiClient(stubUrl), timings: { heartbeatMs: 30, idleTimeoutMs: 150 } } })
     const events = await eventsOf(await post(body()))
     expect(events.at(-1)!.data.code).toBe('AI_TIMEOUT')
     await until(() => calls[0]!.closed)
@@ -245,7 +274,7 @@ describe('POST /api/assistant/workout-chat', () => {
   })
 
   it('answers 503 AI_UNAVAILABLE while switched off, without any upstream call', async () => {
-    await start({ assistant: { enabled: false } })
+    await start({ assistant: { isEnabledFor: async () => false, client: httpAiClient(stubUrl), timings } })
     const res = await post(body())
     expect(res.status).toBe(503)
     expect(res.headers.get('cache-control')).toBe('no-store')
@@ -253,12 +282,132 @@ describe('POST /api/assistant/workout-chat', () => {
     expect(grpcCallMock).not.toHaveBeenCalled()
     expect(calls).toEqual([])
   })
+
+  it.each([
+    ['off for everyone', () => void (fakeFlags.get(AI_ASSISTANT_FLAG)!.enabled = false)],
+    ['off for this trainer', () => void fakeFlags.get(AI_ASSISTANT_FLAG)!.users.set(ids.trainerA, false)],
+    ['unreadable', () => void (fakeFlagEvaluation.failWith = status.UNAVAILABLE)],
+  ])('answers 503 AI_UNAVAILABLE when the flag is %s, with no ListExercises and no vertice-ai call', async (_, arrange) => {
+    arrange()
+    await start()
+    const res = await post(body())
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('AI_UNAVAILABLE')
+    expect(grpcCallMock.mock.calls.map(([, method]) => method)).toEqual(['EvaluateFeatureFlag'])
+    expect(calls).toEqual([])
+  })
+
+  it('answers 503 AI_UNAVAILABLE with the no_client WARN when the flag is on but vertice-ai is not configured', async () => {
+    await start({ assistant: { client: undefined, timings } })
+    const res = await post(body())
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('AI_UNAVAILABLE')
+    expect(grpcCallMock.mock.calls.map(([, method]) => method)).toEqual(['EvaluateFeatureFlag'])
+    const warns = lines().filter((l) => l.reason === 'no_client')
+    expect(warns).toEqual([expect.objectContaining({ level: 40, assistant: 'unavailable', userId: ids.trainerA })])
+  })
+
+  it('lets a running stream finish when the flag turns off, and refuses the next message', async () => {
+    let release!: () => void
+    const released = new Promise<void>((r) => (release = r))
+    script = async (res) => {
+      sse(res)
+      res.write(frame('stage', { stage: 'analyzing' }))
+      await released
+      res.end(frame('done', {}))
+    }
+    await start()
+    const first = await post(body())
+    const firstEvents = eventsOf(first)
+    await until(() => calls.length === 1)
+    fakeFlags.get(AI_ASSISTANT_FLAG)!.enabled = false
+    release()
+    expect((await firstEvents).map((e) => e.event)).toEqual(['stage', 'done'])
+    const next = await post(body())
+    expect(next.status).toBe(503)
+    expect(calls).toHaveLength(1)
+  })
 })
 
 describe('GET /api/assistant/status', () => {
-  it.each([true, false])('says enabled: %s', async (enabled) => {
-    await start({ assistant: { enabled, client: httpAiClient(stubUrl), timings } })
-    const res = await fetch(`${baseUrl}/api/assistant/status`, { headers: bearer('trainerA') })
-    expect(await res.json()).toEqual({ enabled })
+  const status_ = async (actor: 'trainerA' | 'trainerB' = 'trainerA') => {
+    const res = await fetch(`${baseUrl}/api/assistant/status`, { headers: bearer(actor) })
+    expect(res.status).toBe(200)
+    return res.json()
+  }
+
+  it.each([true, false])('says enabled: %s when the evaluator says so and vertice-ai is configured', async (enabled) => {
+    await start({ assistant: { isEnabledFor: async () => enabled, client: httpAiClient(stubUrl), timings } })
+    expect(await status_()).toEqual({ enabled })
+  })
+
+  it('answers per trainer: two trainers get different answers', async () => {
+    fakeFlags.get(AI_ASSISTANT_FLAG)!.users.set(ids.trainerB, false)
+    await start()
+    expect(await status_('trainerA')).toEqual({ enabled: true })
+    expect(await status_('trainerB')).toEqual({ enabled: false })
+  })
+
+  it('says false without evaluating when vertice-ai is not configured', async () => {
+    const isEnabledFor = vi.fn(async () => true)
+    await start({ assistant: { isEnabledFor, client: undefined, timings } })
+    expect(await status_()).toEqual({ enabled: false })
+    expect(isEnabledFor).not.toHaveBeenCalled()
+    expect(grpcCallMock).not.toHaveBeenCalled()
+  })
+
+  it.each([status.UNAVAILABLE, status.UNIMPLEMENTED, status.DEADLINE_EXCEEDED])(
+    'answers 200 enabled: false with one evaluation_failed WARN when the evaluation fails with status %s',
+    async (code) => {
+      fakeFlagEvaluation.failWith = code
+      await start()
+      expect(await status_()).toEqual({ enabled: false })
+      const warns = flagFailures()
+      expect(warns).toHaveLength(1)
+      expect(warns[0]).toMatchObject({ level: 40, flag: AI_ASSISTANT_FLAG, code: expect.any(String) })
+      expect(warns[0]).not.toHaveProperty('userId')
+    },
+  )
+
+  it("evaluates with the trainer's own token and a 20 s deadline", async () => {
+    await start()
+    expect(await status_()).toEqual({ enabled: true })
+    expect(upstreamCallers).toEqual([
+      { method: 'EvaluateFeatureFlag', caller: { id: ids.trainerA, role: 'TRAINER' }, deadlineMs: 20_000 },
+    ])
+    expect(FLAG_EVALUATION_DEADLINE_MS).toBe(20_000)
+    expect(grpcCallMock.mock.calls[0]![2]).toEqual({ key: AI_ASSISTANT_FLAG })
+  })
+
+  describe('a slow evaluation (fake timers)', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    const statusWithDelay = async (delayMs: number, advanceMs: number) => {
+      fakeFlagEvaluation.delayMs = delayMs
+      app = await buildApp({
+        rateLimits: { globalMax: 1_000_000 },
+        loggerInstance: pino({ level: 'info' }, sink),
+        assistant: { client: httpAiClient(stubUrl), timings },
+      })
+      await app.ready()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const pending = app.inject({ method: 'GET', url: '/api/assistant/status', headers: bearer('trainerA') })
+      await vi.advanceTimersByTimeAsync(advanceMs)
+      const res = await pending
+      expect(res.statusCode).toBe(200)
+      return res.json()
+    }
+
+    it('answers false with one evaluation_failed WARN when the answer comes after the deadline', async () => {
+      expect(await statusWithDelay(25_000, FLAG_EVALUATION_DEADLINE_MS)).toEqual({ enabled: false })
+      expect(flagFailures()).toEqual([expect.objectContaining({ code: 'UPSTREAM_ERROR' })])
+    })
+
+    it('still answers true when the answer takes 15 s (inside the deadline)', async () => {
+      expect(await statusWithDelay(15_000, 15_000)).toEqual({ enabled: true })
+      expect(flagFailures()).toEqual([])
+    })
   })
 })

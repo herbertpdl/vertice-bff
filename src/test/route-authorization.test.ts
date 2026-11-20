@@ -26,6 +26,7 @@ import {
   isWriteRpc,
   resetFakeAdminActions,
   resetFakeConsents,
+  resetFakeFlags,
   resetUpstreamCallers,
   setupTokenFor,
   upstreamCallers,
@@ -356,6 +357,38 @@ const routes: RouteCase[] = [
     denied: [
       { as: 'admin', url: '/api/admin/muscle-groups/9999', body: { name: 'Costas' }, why: 'path: a missing group', status: 404, byUpstream: 'RenameMuscleGroup' },
       { as: 'admin', url: '/api/admin/muscle-groups/0', body: { name: 'Costas' }, why: 'path: a malformed id', status: 400 },
+    ],
+  },
+
+  // feature flags (feature-flags spec §2.2, VRT-53): ADMIN by the /admin plugin's hooks.
+  { route: 'GET /api/admin/feature-flags', roles: ['ADMIN'], ok: { as: 'admin', url: '/api/admin/feature-flags' } },
+  {
+    route: 'PUT /api/admin/feature-flags/:key/everyone',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: '/api/admin/feature-flags/AI_ASSISTANT_ENABLED/everyone', body: { enabled: false } },
+    denied: [
+      { as: 'admin', url: '/api/admin/feature-flags/ai_assistant/everyone', body: { enabled: true }, why: 'path: a lower-case key', status: 400 },
+      { as: 'admin', url: '/api/admin/feature-flags/AI_ASSISTANT_ENABLED/everyone', body: { enabled: 'true' }, why: 'body: a string state', status: 400 },
+      { as: 'admin', url: '/api/admin/feature-flags/NO_SUCH_FLAG/everyone', body: { enabled: true }, why: 'path: an unknown key', status: 404, byUpstream: 'SetFeatureFlagEveryone' },
+    ],
+  },
+  {
+    route: 'PUT /api/admin/feature-flags/:key/users/:userId',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/feature-flags/AI_ASSISTANT_ENABLED/users/${ids.trainerA}`, body: { enabled: false } },
+    denied: [
+      { as: 'admin', url: '/api/admin/feature-flags/AI_ASSISTANT_ENABLED/users/1e3', body: { enabled: true }, why: 'path: a non-digit user number', status: 400 },
+      { as: 'admin', url: `/api/admin/feature-flags/AI_ASSISTANT_ENABLED/users/${ids.trainerA}`, body: { enabled: true, reason: 'x' }, why: 'body: an extra field', status: 400 },
+      { as: 'admin', url: `/api/admin/feature-flags/NO_SUCH_FLAG/users/${ids.trainerA}`, body: { enabled: true }, why: 'path: an unknown key', status: 404, byUpstream: 'SetFeatureFlagUser' },
+    ],
+  },
+  {
+    route: 'DELETE /api/admin/feature-flags/:key/users/:userId',
+    roles: ['ADMIN'],
+    ok: { as: 'admin', url: `/api/admin/feature-flags/AI_ASSISTANT_ENABLED/users/${ids.trainerA}` },
+    denied: [
+      { as: 'admin', url: '/api/admin/feature-flags/AI_ASSISTANT_ENABLED/users/9007199254740992', why: 'path: a user number past 2^53 − 1', status: 400 },
+      { as: 'admin', url: `/api/admin/feature-flags/NO_SUCH_FLAG/users/${ids.trainerA}`, why: 'path: an unknown key', status: 404, byUpstream: 'RemoveFeatureFlagUser' },
     ],
   },
 
@@ -1208,7 +1241,8 @@ const routes: RouteCase[] = [
     ok: { as: 'trainerA', url: '/api/dashboard' },
   },
 
-  // assistant (the suite switches it on with a stub vertice-ai, see beforeAll)
+  // assistant (a stub vertice-ai, see beforeAll; the flag is read through the default evaluator
+  // against the fake, seeded on for everyone, so the real RPC path and the trainer's token are used)
   {
     route: 'GET /api/assistant/status',
     roles: ['TRAINER'],
@@ -1263,7 +1297,7 @@ describe('route authorization', () => {
       openapi: { version: 'test' },
       // Hundreds of requests from one IP: keep the rate limits out of the authorization checks.
       rateLimits: { globalMax: 1_000_000, authMax: 1_000_000, exportMax: 1_000_000 },
-      assistant: { enabled: true, client: stubAi },
+      assistant: { client: stubAi },
       onRoute: (route: RouteOptions) => {
         for (const method of [route.method].flat()) {
           if (method !== 'HEAD' && method !== 'OPTIONS') registered.add(routeKey(method, route.url))
@@ -1285,6 +1319,7 @@ describe('route authorization', () => {
     resetFakeConsents()
     resetFakeSecondFactors()
     resetFakeAdminActions()
+    resetFakeFlags()
     resetFakeSuspended()
     // A suspended client, so reactivate has a target (client A2 is no actor: no token is refused).
     fakeSuspended.add(ids.clientA2)
@@ -1601,5 +1636,14 @@ describe('route authorization', () => {
       expect(call, `${s.rpc} was not called`).toBeDefined()
       expect(call![2]).toMatchObject(s.sends)
     })
+  })
+})
+
+describe('isWriteRpc', () => {
+  it('counts Remove* and Set* RPCs as writes, and the flag reads as reads', () => {
+    expect(isWriteRpc('RemoveFeatureFlagUser')).toBe(true)
+    expect(isWriteRpc('SetFeatureFlagUser')).toBe(true)
+    expect(isWriteRpc('ListFeatureFlags')).toBe(false)
+    expect(isWriteRpc('EvaluateFeatureFlag')).toBe(false)
   })
 })

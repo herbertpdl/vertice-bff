@@ -35,7 +35,8 @@ export const TAGS = [
   { name: 'Dashboard', description: 'The trainer’s landing page in one call.' },
   {
     name: 'Assistant',
-    description: 'The AI workout assistant in the workout editor (TRAINER only, off unless `AI_ASSISTANT_ENABLED`).',
+    description:
+      'The AI workout assistant in the workout editor (TRAINER only; per trainer, the `AI_ASSISTANT_ENABLED` flag on the admin page).',
   },
   { name: 'Health', description: 'Liveness.' },
 ] as const

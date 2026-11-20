@@ -10,6 +10,8 @@ import {
   adminCatalogPageSchema,
   adminDashboardSchema,
   adminDirectoryPageSchema,
+  adminFeatureFlagListSchema,
+  adminFeatureFlagSchema,
   adminMostUsedPageSchema,
   adminUserProfileSchema,
   adminUserResultSchema,
@@ -28,6 +30,9 @@ import {
   CATALOG_SCOPES,
   DIRECTORY_ROLES,
   DIRECTORY_STATUSES,
+  featureFlagKeySchema,
+  featureFlagStateSchema,
+  featureFlagUserIdSchema,
   muscleGroupNameSchema,
 } from './schemas.js'
 import * as adminService from './service.js'
@@ -55,6 +60,8 @@ const cursorDoc = z
  * `audit: "admin.<action>"` line (actor and target ids; never the reason, B15).
  * VRT-31: exercise curation and the most-used list (spec §2.4), on `AdminCatalogService`; each
  * write logs `audit: "admin.catalog.<action>"` (actor and target ids; never a name, B15).
+ * VRT-53: the Feature flags page (feature-flags spec §2.2, FF7–FF10), on `AdminFeatureFlagService`;
+ * each write logs `audit: "admin.flag.<action>"`. Not recorded in the action history.
  * vertice-api re-checks ADMIN and the second-factor claims (D6) on every call.
  */
 export default async function adminRoutes(app: FastifyInstance) {
@@ -489,6 +496,122 @@ export default async function adminRoutes(app: FastifyInstance) {
       const renamed = await adminService.renameMuscleGroup(id, name)
       audit(req, 'muscle_group_rename', { muscleGroupId: id })
       return renamed
+    },
+  )
+
+  // ---- feature flags (VRT-53, feature-flags spec §2.2) -------------------------------------------
+
+  const flagKeyDoc = featureFlagKeySchema.describe('The flag’s key: uppercase snake case, 1–64 characters.')
+  const flagUserIdDoc = z
+    .number()
+    .int()
+    .positive()
+    .max(Number.MAX_SAFE_INTEGER)
+    .describe('A user number: digits, no leading zero, at most 2^53 − 1. Not checked against any account.')
+  const flagWriteNote =
+    'Sends the absolute state (never a toggle); the last save wins. Not recorded in the action history. ' +
+    'A change reaches the product within about a minute. An unknown key is 404 `NOT_FOUND` (refetch the list).'
+
+  app.get(
+    '/feature-flags',
+    {
+      schema: routeDoc({
+        operationId: 'listAdminFeatureFlags',
+        summary: 'Every feature flag with its user settings',
+        description:
+          'Ordered by key, each flag with its everyone state and every user setting (ordered by user number), in ' +
+          'upstream order. Not paginated. Flags are created and removed by developers: there is no create or delete. ' +
+          'Not recorded in the action history.',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        ok: { status: 200, description: 'Every flag.', schema: adminFeatureFlagListSchema },
+        errors: [403],
+      }),
+    },
+    async () => adminService.listFeatureFlags(),
+  )
+
+  app.put<{ Params: { key: string } }>(
+    '/feature-flags/:key/everyone',
+    {
+      schema: routeDoc({
+        operationId: 'setAdminFeatureFlagEveryone',
+        summary: 'Turn a feature flag on or off for everyone',
+        description:
+          'Applies to every user without a setting of their own; user settings are kept. ' + flagWriteNote,
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        params: z.object({ key: flagKeyDoc }),
+        body: featureFlagStateSchema,
+        ok: { status: 200, description: 'The flag as saved.', schema: adminFeatureFlagSchema },
+        errors: [403, 404],
+      }),
+    },
+    async (req) => {
+      const key = featureFlagKeySchema.parse(req.params.key)
+      const { enabled } = featureFlagStateSchema.parse(req.body)
+      const flag = await adminService.setFeatureFlagEveryone(key, enabled)
+      req.log.info({ audit: 'admin.flag.everyone', actorId: req.user!.id, flag: key, enabled }, 'Feature flag changed by an admin')
+      return flag
+    },
+  )
+
+  app.put<{ Params: { key: string; userId: string } }>(
+    '/feature-flags/:key/users/:userId',
+    {
+      schema: routeDoc({
+        operationId: 'setAdminFeatureFlagUser',
+        summary: 'Give one user their own ON or OFF for a feature flag',
+        description:
+          'Replaces any earlier setting of this user number, and wins over the everyone state. The number is not ' +
+          'checked against any account. ' + flagWriteNote,
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        params: z.object({ key: flagKeyDoc, userId: flagUserIdDoc }),
+        body: featureFlagStateSchema,
+        ok: { status: 200, description: 'The flag as saved.', schema: adminFeatureFlagSchema },
+        errors: [403, 404],
+      }),
+    },
+    async (req) => {
+      const key = featureFlagKeySchema.parse(req.params.key)
+      const userId = featureFlagUserIdSchema.parse(req.params.userId)
+      const { enabled } = featureFlagStateSchema.parse(req.body)
+      const flag = await adminService.setFeatureFlagUser(key, userId, enabled)
+      req.log.info(
+        { audit: 'admin.flag.user_set', actorId: req.user!.id, flag: key, userId, enabled },
+        'Feature flag user setting changed by an admin',
+      )
+      return flag
+    },
+  )
+
+  app.delete<{ Params: { key: string; userId: string } }>(
+    '/feature-flags/:key/users/:userId',
+    {
+      schema: routeDoc({
+        operationId: 'removeAdminFeatureFlagUser',
+        summary: 'Remove one user’s setting of a feature flag',
+        description:
+          'That user follows the everyone state again. Idempotent: a number with no setting answers 200 with the flag ' +
+          'unchanged. No body. Not recorded in the action history. A change reaches the product within about a ' +
+          'minute. An unknown key is 404 `NOT_FOUND` (refetch the list).',
+        tag: 'Admin',
+        roles: ['ADMIN'],
+        params: z.object({ key: flagKeyDoc, userId: flagUserIdDoc }),
+        ok: { status: 200, description: 'The flag as saved.', schema: adminFeatureFlagSchema },
+        errors: [403, 404],
+      }),
+    },
+    async (req) => {
+      const key = featureFlagKeySchema.parse(req.params.key)
+      const userId = featureFlagUserIdSchema.parse(req.params.userId)
+      const flag = await adminService.removeFeatureFlagUser(key, userId)
+      req.log.info(
+        { audit: 'admin.flag.user_removed', actorId: req.user!.id, flag: key, userId },
+        'Feature flag user setting removed by an admin',
+      )
+      return flag
     },
   )
 }

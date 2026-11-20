@@ -542,6 +542,36 @@ export const adminMostUsedPageSchema = named(
   }),
 )
 
+// ---- admin feature flags (feature-flags spec §2.1, FF7, FF9) -------------------------------------
+
+export const adminFeatureFlagSchema = named(
+  'AdminFeatureFlag',
+  z.object({
+    key: z
+      .string()
+      .regex(/^[A-Z][A-Z0-9_]*$/)
+      .max(64)
+      .describe('Uppercase snake case; also the flag’s name on the page.'),
+    description: z.string().describe('What the flag controls (pt-BR, developer-written). Render as text.'),
+    enabled: z.boolean().describe('The everyone state: applies to every user without a setting of their own.'),
+    users: z
+      .array(
+        z.object({
+          userId: id.describe('A user number; not checked against any account.'),
+          enabled: z.boolean().describe('This user’s own ON or OFF, which wins over the everyone state.'),
+        }),
+      )
+      .describe('Every user setting, ordered by `userId`. Its length is the count the page shows.'),
+  }),
+)
+
+export const adminFeatureFlagListSchema = named(
+  'AdminFeatureFlagList',
+  z.object({
+    flags: z.array(adminFeatureFlagSchema).describe('Every flag, ordered by key. Not paginated.'),
+  }),
+)
+
 export const progressExerciseSchema = named(
   'ProgressExercise',
   z.object({ id, name: z.string() }),
@@ -849,6 +879,8 @@ export type ResponseSchemasMatchServices = [
   Assert<SameShape<Out<typeof adminCatalogExerciseSchema>, adminService.AdminCatalogExercise>>,
   Assert<SameShape<Out<typeof adminCatalogPageSchema>, adminService.AdminCatalogPage>>,
   Assert<SameShape<Out<typeof adminMostUsedPageSchema>, adminService.AdminMostUsedPage>>,
+  Assert<SameShape<Out<typeof adminFeatureFlagSchema>, adminService.AdminFeatureFlag>>,
+  Assert<SameShape<Out<typeof adminFeatureFlagListSchema>, adminService.AdminFeatureFlagList>>,
   Assert<SameShape<Out<typeof passwordSetupResultSchema>, userService.RedeemedSetup>>,
   Assert<SameShape<Out<typeof consentSchema>, userService.Consent>>,
   Assert<SameShape<Out<typeof meSchema>, userService.Me>>,

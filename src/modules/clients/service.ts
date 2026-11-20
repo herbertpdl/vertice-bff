@@ -81,7 +81,14 @@ export async function createClient(
   try {
     setup = await userService.createPasswordSetupToken(client.id)
   } catch (err) {
-    log.warn({ err, clientId: client.id }, 'Client created, but issuing the password setup token failed')
+    // With FIRST_ACCESS_EMAIL_ENABLED on for this trainer, vertice-api refuses the trainer-issued
+    // link (PERMISSION_DENIED, API D16): the client gets the e-mail instead, so this is expected
+    // (feature-flags FF12). Anything else is a failure.
+    if (err instanceof ForbiddenError) {
+      log.info({ clientId: client.id }, 'Client created; no setup link: first-access e-mail is on for this trainer')
+    } else {
+      log.warn({ err, clientId: client.id }, 'Client created, but issuing the password setup token failed')
+    }
   }
   return { ...client, setup }
 }

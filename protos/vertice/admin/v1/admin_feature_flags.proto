@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package vertice.admin.v1;
+
+option java_package = "com.vertice.api.generated.grpc.admin.v1";
+option java_multiple_files = true;
+
+// The admin panel's Feature flags page (feature-flags spec D11-D13). ADMIN only, with the
+// second-factor claim: any other user is PERMISSION_DENIED, a service token PERMISSION_DENIED, no
+// token UNAUTHENTICATED. Flags are created and removed by developers; there is no create or delete.
+// Nothing here is recorded in the action history. Writes take the absolute state, the last one
+// saved wins, and each returns the flag as saved. A key that names no flag is NOT_FOUND "Feature
+// flag <key> not found"; a malformed key is INVALID_ARGUMENT. A change reaches the product within
+// about a minute (R21).
+service AdminFeatureFlagService {
+  // Every flag ordered by key, each with all its user settings (R2, R3). Not paginated.
+  rpc ListFeatureFlags(ListFeatureFlagsRequest) returns (ListFeatureFlagsResponse);
+  // Turns the flag on or off for everyone without a setting of their own (R11, R20).
+  rpc SetFeatureFlagEveryone(SetFeatureFlagEveryoneRequest) returns (SetFeatureFlagEveryoneResponse);
+  // Gives a user number its own ON or OFF, replacing any earlier one (R13, R15, R19). Any positive
+  // number is accepted: no account is looked up (R17). INVALID_ARGUMENT for user_id <= 0.
+  rpc SetFeatureFlagUser(SetFeatureFlagUserRequest) returns (SetFeatureFlagUserResponse);
+  // Removes a user number's setting; that user follows the everyone state again (R16). Succeeds,
+  // changing nothing, when the number has no setting. INVALID_ARGUMENT for user_id <= 0.
+  rpc RemoveFeatureFlagUser(RemoveFeatureFlagUserRequest) returns (RemoveFeatureFlagUserResponse);
+}
+
+message FeatureFlag {
+  // Uppercase snake case; also the flag's name on the page.
+  string key = 1;
+  // What the flag controls, which user a setting refers to, and what to check before turning it on.
+  string description = 2;
+  // The everyone state.
+  bool enabled = 3;
+  // Every user setting, ordered by user_id. Its length is the count R3 shows.
+  repeated FeatureFlagUserSetting users = 4;
+}
+
+message FeatureFlagUserSetting {
+  int64 user_id = 1;
+  bool enabled = 2;
+}
+
+message ListFeatureFlagsRequest {}
+
+message ListFeatureFlagsResponse {
+  repeated FeatureFlag flags = 1;
+}
+
+message SetFeatureFlagEveryoneRequest {
+  string key = 1;
+  bool enabled = 2;
+}
+
+message SetFeatureFlagEveryoneResponse {
+  FeatureFlag flag = 1;
+}
+
+message SetFeatureFlagUserRequest {
+  string key = 1;
+  int64 user_id = 2;
+  bool enabled = 3;
+}
+
+message SetFeatureFlagUserResponse {
+  FeatureFlag flag = 1;
+}
+
+message RemoveFeatureFlagUserRequest {
+  string key = 1;
+  int64 user_id = 2;
+}
+
+message RemoveFeatureFlagUserResponse {
+  FeatureFlag flag = 1;
+}

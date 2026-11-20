@@ -1,7 +1,7 @@
 import Fastify, { type FastifyBaseLogger, type RouteOptions } from 'fastify'
 import { LOG_SERIALIZERS } from './lib/log-serializers.js'
 import cors from '@fastify/cors'
-import { env } from './config/env.js'
+import { DEV_NODE_ENVS, env } from './config/env.js'
 import errorHandler from './plugins/error-handler.js'
 import securityHeaders from './plugins/security-headers.js'
 import requestContextPlugin from './plugins/request-context.js'
@@ -46,7 +46,7 @@ export interface BuildAppOptions {
    * Off in a normal start: the spec is a build artifact and nothing serves it.
    */
   openapi?: { version: string }
-  /** Overrides the AI assistant's env settings (tests: switch it on, stub vertice-ai, shorten timers). */
+  /** Overrides the AI assistant's settings (tests: the flag evaluator, a stub vertice-ai, shorter timers). */
   assistant?: Partial<AssistantSettings>
 }
 
@@ -92,6 +92,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
       'VERIFY_PASSWORDS=false: login accepts any password for an existing email ' +
         '(dev/test only; needs the vertice-api local profile)',
     )
+  }
+  // The AI_ASSISTANT_ENABLED flag can be on while this BFF has no vertice-ai to call (FF3): say so
+  // once at boot, so "the admin turned it on and nobody sees the icon" shows in the log.
+  if (!env.VERTICE_AI_URL && !DEV_NODE_ENVS.includes(env.NODE_ENV)) {
+    app.log.warn('VERTICE_AI_URL is not set: the AI assistant is off for everyone')
   }
 
   await app.register(securityHeaders)

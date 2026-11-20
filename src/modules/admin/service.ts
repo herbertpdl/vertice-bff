@@ -1,4 +1,10 @@
-import { adminCatalogClient, adminClient, trainerClientClient, userClient } from '../../grpc/clients.js'
+import {
+  adminCatalogClient,
+  adminClient,
+  adminFeatureFlagClient,
+  trainerClientClient,
+  userClient,
+} from '../../grpc/clients.js'
 import { grpcCall, UPSTREAM_MESSAGES } from '../../grpc/call.js'
 import {
   ConflictError,
@@ -665,4 +671,99 @@ export async function renameMuscleGroup(id: number, name: string): Promise<Muscl
     ),
   )
   return toMuscleGroupResult(res, 'RenameMuscleGroup')
+}
+
+// ---- feature flags (feature-flags spec §2.2, FF7, FF9) -------------------------------------------
+
+/** One user's own setting of a flag. */
+export interface AdminFeatureFlagUser {
+  userId: number
+  enabled: boolean
+}
+
+/** A flag as the admin page shows it. */
+export interface AdminFeatureFlag {
+  key: string
+  description: string
+  /** The everyone state. */
+  enabled: boolean
+  /** Ordered by user id (upstream order); its length is R3's count. */
+  users: AdminFeatureFlagUser[]
+}
+
+export interface AdminFeatureFlagList {
+  flags: AdminFeatureFlag[]
+}
+
+interface FeatureFlagResponse {
+  key: string
+  description: string
+  enabled: boolean
+  users: { userId: string; enabled: boolean }[]
+}
+
+/**
+ * Built field by field (never spread). `userId` arrives as a decimal string (`longs: String`) and
+ * leaves as a number; one that isn't a positive safe integer (writable only by a direct gRPC call)
+ * is dropped with one WARN, so the page never shows a number other than the stored one (FF9).
+ */
+function toAdminFeatureFlag(flag: FeatureFlagResponse): AdminFeatureFlag {
+  const users: AdminFeatureFlagUser[] = []
+  for (const setting of flag.users ?? []) {
+    const userId = Number(setting.userId)
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      requestContext.getStore()?.log?.warn({ flag: flag.key, outcome: 'unsafe_user_id' }, 'Dropped a flag user setting with an unsafe user id')
+      continue
+    }
+    users.push({ userId, enabled: setting.enabled === true })
+  }
+  return { key: flag.key, description: flag.description, enabled: flag.enabled === true, users }
+}
+
+function toWrittenFlag(res: { flag: FeatureFlagResponse | null }, rpc: string): AdminFeatureFlag {
+  if (!res.flag) {
+    requestContext.getStore()?.log?.warn({ rpc }, 'Answered no feature flag')
+    throw new HttpError(502, UPSTREAM_MESSAGES.upstreamError, 'UPSTREAM_ERROR')
+  }
+  return toAdminFeatureFlag(res.flag)
+}
+
+/** `ListFeatureFlags`: every flag ordered by key, each with all its user settings. Not paginated. */
+export async function listFeatureFlags(): Promise<AdminFeatureFlagList> {
+  const res = await grpcCall<Record<string, never>, { flags: FeatureFlagResponse[] }>(
+    adminFeatureFlagClient,
+    'ListFeatureFlags',
+    {},
+  )
+  return { flags: (res.flags ?? []).map(toAdminFeatureFlag) }
+}
+
+/** `SetFeatureFlagEveryone`: the absolute everyone state. Unknown key: 404. */
+export async function setFeatureFlagEveryone(key: string, enabled: boolean): Promise<AdminFeatureFlag> {
+  const res = await grpcCall<{ key: string; enabled: boolean }, { flag: FeatureFlagResponse | null }>(
+    adminFeatureFlagClient,
+    'SetFeatureFlagEveryone',
+    { key, enabled },
+  )
+  return toWrittenFlag(res, 'SetFeatureFlagEveryone')
+}
+
+/** `SetFeatureFlagUser`: one user number's own ON or OFF, replacing any earlier one. */
+export async function setFeatureFlagUser(key: string, userId: number, enabled: boolean): Promise<AdminFeatureFlag> {
+  const res = await grpcCall<{ key: string; userId: number; enabled: boolean }, { flag: FeatureFlagResponse | null }>(
+    adminFeatureFlagClient,
+    'SetFeatureFlagUser',
+    { key, userId, enabled },
+  )
+  return toWrittenFlag(res, 'SetFeatureFlagUser')
+}
+
+/** `RemoveFeatureFlagUser`: idempotent; no setting for the number answers the flag unchanged. */
+export async function removeFeatureFlagUser(key: string, userId: number): Promise<AdminFeatureFlag> {
+  const res = await grpcCall<{ key: string; userId: number }, { flag: FeatureFlagResponse | null }>(
+    adminFeatureFlagClient,
+    'RemoveFeatureFlagUser',
+    { key, userId },
+  )
+  return toWrittenFlag(res, 'RemoveFeatureFlagUser')
 }

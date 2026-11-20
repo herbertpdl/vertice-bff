@@ -43,6 +43,12 @@ export interface GrpcCallOptions {
    * `VERIFY_PASSWORDS` is false and `NODE_ENV` is a dev value (`DEV_NODE_ENVS`).
    */
   anonymous?: boolean
+  /**
+   * How long the call may take, in milliseconds. Passed to grpc-js as `{ deadline: Date.now() +
+   * deadlineMs }`, so a hang ends as `DEADLINE_EXCEEDED` (→ 502). Without it no deadline is set.
+   * Only the feature-flag evaluation uses it (feature-flags spec FF4).
+   */
+  deadlineMs?: number
 }
 
 /** Thrown, before anything goes upstream, when a call has no caller identity it may use. */
@@ -66,8 +72,10 @@ export function grpcCall<TRequest, TResponse>(
 ): Promise<TResponse> {
   return new Promise((resolve, reject) => {
     const metadata = withCallerIdentity(method, options)
+    const callOptions: grpc.CallOptions =
+      options.deadlineMs === undefined ? {} : { deadline: Date.now() + options.deadlineMs }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(client as any)[method](request, metadata, (error: grpc.ServiceError | null, response: TResponse) => {
+    ;(client as any)[method](request, metadata, callOptions, (error: grpc.ServiceError | null, response: TResponse) => {
       if (error) {
         logUpstreamError(method, error)
         reject(mapGrpcError(error))

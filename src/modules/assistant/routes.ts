@@ -1,11 +1,13 @@
 import { PassThrough } from 'node:stream'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import { env } from '../../config/env.js'
 import { httpAiClient, type AiClient } from '../../ai/client.js'
 import { HttpError } from '../../lib/errors.js'
+import type { AuthUser } from '../../lib/jwt.js'
 import { routeDoc } from '../../openapi/docs.js'
 import { assistantStatusSchema, assistantStreamSchema } from '../../openapi/responses.js'
 import { workoutChatRequestSchema } from './schemas.js'
+import { AI_ASSISTANT_FLAG, isFlagOn } from '../feature-flags/service.js'
 import { buildChatContext } from './service.js'
 import { ChatSlots, DEFAULT_CHAT_TIMINGS, runChat, type ChatTimings } from './session.js'
 
@@ -15,17 +17,21 @@ import { ChatSlots, DEFAULT_CHAT_TIMINGS, runChat, type ChatTimings } from './se
  */
 
 export interface AssistantSettings {
-  /** `AI_ASSISTANT_ENABLED`. Off: the chat route answers 503 `AI_UNAVAILABLE` and calls nothing. */
-  enabled: boolean
-  /** vertice-ai; only built when enabled (`VERTICE_AI_URL` is required then). */
+  /**
+   * Whether the `AI_ASSISTANT_ENABLED` flag is on for this trainer (feature-flags spec FF4, FF6):
+   * one `EvaluateFeatureFlag` per request with their token, no cache. Never rejects; any failure is
+   * off. Off: the chat route answers 503 `AI_UNAVAILABLE` and calls nothing.
+   */
+  isEnabledFor: (user: AuthUser, log: FastifyBaseLogger) => Promise<boolean>
+  /** vertice-ai; built whenever `VERTICE_AI_URL` is set. Without it the assistant is off for everyone. */
   client?: AiClient
   timings: ChatTimings
 }
 
 export function assistantSettingsFromEnv(overrides: Partial<AssistantSettings> = {}): AssistantSettings {
-  const enabled = overrides.enabled ?? env.AI_ASSISTANT_ENABLED
-  const client = overrides.client ?? (enabled && env.VERTICE_AI_URL ? httpAiClient(env.VERTICE_AI_URL) : undefined)
-  return { enabled, client, timings: { ...DEFAULT_CHAT_TIMINGS, ...overrides.timings } }
+  const client = overrides.client ?? (env.VERTICE_AI_URL ? httpAiClient(env.VERTICE_AI_URL) : undefined)
+  const isEnabledFor = overrides.isEnabledFor ?? ((_user: AuthUser, log: FastifyBaseLogger) => isFlagOn(AI_ASSISTANT_FLAG, log))
+  return { isEnabledFor, client, timings: { ...DEFAULT_CHAT_TIMINGS, ...overrides.timings } }
 }
 
 export interface AssistantStatus {
@@ -45,14 +51,21 @@ export default async function assistantRoutes(app: FastifyInstance, opts: { sett
     {
       schema: routeDoc({
         operationId: 'getAssistantStatus',
-        summary: 'Whether the AI workout assistant is switched on',
-        description: 'No upstream call. The web hides the AI icon while `enabled` is false.',
+        summary: 'Whether the AI workout assistant is on for this trainer',
+        description:
+          'Per trainer: the `AI_ASSISTANT_ENABLED` feature flag, read with one `EvaluateFeatureFlag` call ' +
+          'with the trainer’s token (20 s deadline, no cache). Always 200: any failure to read the flag, or a ' +
+          'BFF with no vertice-ai configured, answers `false`. May lag an admin change by up to 30 s (the ' +
+          'API’s cache). The web hides the AI icon while `enabled` is false.',
         tag: 'Assistant',
         roles: ['TRAINER'],
-        ok: { status: 200, description: 'The switch’s state.', schema: assistantStatusSchema },
+        ok: { status: 200, description: 'Whether the assistant is on for the caller.', schema: assistantStatusSchema },
       }),
     },
-    async (): Promise<AssistantStatus> => ({ enabled: settings.enabled && settings.client !== undefined }),
+    async (req): Promise<AssistantStatus> => ({
+      // No client: nothing the flag could say is useful, so it isn't read (FF3).
+      enabled: settings.client !== undefined && (await settings.isEnabledFor(req.user!, req.log)),
+    }),
   )
 
   app.post(
@@ -64,7 +77,9 @@ export default async function assistantRoutes(app: FastifyInstance, opts: { sett
         description:
           'Answers `text/event-stream` (see `AssistantStreamEvent` and docs/api-contract.md, "AI workout assistant"). ' +
           'Before the stream: 400 (body, a workout of another plan, an exercise outside the trainer’s catalog), ' +
-          '403 (another trainer’s plan or workout), 413 `AI_CATALOG_TOO_LARGE`, 503 `AI_UNAVAILABLE` (switched off). ' +
+          '403 (another trainer’s plan or workout), 413 `AI_CATALOG_TOO_LARGE`, 503 `AI_UNAVAILABLE` (the ' +
+          '`AI_ASSISTANT_ENABLED` flag is off for this trainer or cannot be read, or vertice-ai is not configured; ' +
+          'checked first, so nothing else is read). ' +
           'Once streaming, failures are an `error` event (`AI_UNAVAILABLE`, `AI_TIMEOUT`, `AI_INVALID_PROPOSAL`, ' +
           '`AI_ERROR`, `AI_SUPERSEDED`) and the stream ends. A new message from the same trainer supersedes a running one.',
         tag: 'Assistant',
@@ -80,8 +95,18 @@ export default async function assistantRoutes(app: FastifyInstance, opts: { sett
       }),
     },
     async (req, reply) => {
+      // The flag first (FF5): an off trainer triggers no catalog read and no vertice-ai call. A
+      // stream already running when the flag turns off finishes; the next message is refused.
+      const on = await settings.isEnabledFor(req.user!, req.log)
+      if (!on) throw new HttpError(503, 'The AI assistant is switched off', 'AI_UNAVAILABLE')
       const client = settings.client
-      if (!settings.enabled || !client) throw new HttpError(503, 'The AI assistant is switched off', 'AI_UNAVAILABLE')
+      if (!client) {
+        req.log.warn(
+          { assistant: 'unavailable', reason: 'no_client', userId: req.user!.id },
+          'AI flag on but VERTICE_AI_URL is not set',
+        )
+        throw new HttpError(503, 'The AI assistant is unavailable', 'AI_UNAVAILABLE')
+      }
       const body = workoutChatRequestSchema.parse(req.body)
       const user = req.user!
 

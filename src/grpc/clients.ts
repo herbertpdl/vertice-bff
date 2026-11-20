@@ -37,3 +37,13 @@ export const adminOpsClient = new grpcProto.vertice.admin.v1.AdminOpsService(grp
 export const adminClient = new grpcProto.vertice.admin.v1.AdminService(grpcTarget, credentials)
 /** Starter-catalog curation and the most-used list (`modules/admin/service.ts`), with the caller's admin token. */
 export const adminCatalogClient = new grpcProto.vertice.admin.v1.AdminCatalogService(grpcTarget, credentials)
+/**
+ * Feature-flag evaluation (`modules/feature-flags/service.ts` only), always with the caller's own
+ * token: never `asService`, never in `SERVICE_TOKEN_RPCS` (feature-flags spec FF1, FF4).
+ */
+export const featureFlagClient = new grpcProto.vertice.featureflag.v1.FeatureFlagService(grpcTarget, credentials)
+/** The admin panel's Feature flags page (`modules/admin/service.ts`), with the caller's admin token. */
+export const adminFeatureFlagClient = new grpcProto.vertice.admin.v1.AdminFeatureFlagService(
+  grpcTarget,
+  credentials,
+)

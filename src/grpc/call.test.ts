@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import * as grpc from '@grpc/grpc-js'
 import {
   grpcCall,
@@ -14,12 +14,23 @@ import { UpstreamExhaustedError } from '../lib/errors.js'
 import { ForbiddenError, HttpError, NotFoundError, PreconditionFailedError, ValidationError } from '../lib/errors.js'
 import { serviceToken } from '../lib/jwt.js'
 import { requestContext } from '../lib/request-context.js'
+import { AI_ASSISTANT_FLAG, isFlagOn } from '../modules/feature-flags/service.js'
+import { grpcProto } from './loadProto.js'
 
-/** A stand-in grpc-js client exposing `method`, recording the metadata of its last call. */
+/**
+ * A stand-in grpc-js client exposing `method` in grpc-js's 4-argument form
+ * `(request, metadata, callOptions, callback)`, recording the metadata and options of its last call.
+ */
 function stubClient(method: string) {
-  const stub: { seen?: grpc.Metadata } & Record<string, unknown> = {}
-  stub[method] = (_request: unknown, metadata: grpc.Metadata, cb: (err: null, res: object) => void) => {
+  const stub: { seen?: grpc.Metadata; seenOptions?: grpc.CallOptions } & Record<string, unknown> = {}
+  stub[method] = (
+    _request: unknown,
+    metadata: grpc.Metadata,
+    callOptions: grpc.CallOptions,
+    cb: (err: null, res: object) => void,
+  ) => {
     stub.seen = metadata
+    stub.seenOptions = callOptions
     cb(null, {})
   }
   return stub
@@ -36,6 +47,21 @@ describe('grpcCall', () => {
     const { stub, call } = requestContext.run({ bearerToken: 'abc' }, () => ping())
     await call
     expect(stub.seen!.get('authorization')).toEqual(['Bearer abc'])
+  })
+
+  it('passes deadlineMs to grpc-js as a deadline of now + deadlineMs', async () => {
+    const before = Date.now()
+    const { stub, call } = requestContext.run({ bearerToken: 'abc' }, () => ping({ deadlineMs: 20_000 }))
+    await call
+    const deadline = stub.seenOptions!.deadline as number
+    expect(deadline).toBeGreaterThanOrEqual(before + 20_000)
+    expect(deadline).toBeLessThanOrEqual(Date.now() + 20_000)
+  })
+
+  it('sets no deadline without deadlineMs', async () => {
+    const { stub, call } = requestContext.run({ bearerToken: 'abc' }, () => ping())
+    await call
+    expect(stub.seenOptions).toEqual({})
   })
 
   it("prefers the user's token even where the service token is allowed (password change)", async () => {
@@ -255,8 +281,12 @@ describe('mapGrpcError', () => {
 describe('upstream error logging', () => {
   function failingClient(code: grpc.status, details: string) {
     return {
-      Fail: (_request: unknown, _metadata: grpc.Metadata, cb: (err: Partial<grpc.ServiceError>) => void) =>
-        cb({ code, details }),
+      Fail: (
+        _request: unknown,
+        _metadata: grpc.Metadata,
+        _callOptions: grpc.CallOptions,
+        cb: (err: Partial<grpc.ServiceError>) => void,
+      ) => cb({ code, details }),
     } as unknown as grpc.Client
   }
   const logger = () => ({ info: vi.fn(), warn: vi.fn() })
@@ -299,5 +329,50 @@ describe('upstream error logging', () => {
     expect(redactUpstreamText('CPF already in use: 529.982.247-25')).toBe('CPF already in use: [number]')
     expect(redactUpstreamText('CPF already in use: 52998224725')).toBe('CPF already in use: [number]')
     expect(redactUpstreamText('Workout with id 5 not found')).toBe('Workout with id 5 not found')
+  })
+})
+
+/**
+ * The only test that exercises grpc-js's own deadline (feature-flags spec §8): a real channel to an
+ * in-process server whose `EvaluateFeatureFlag` never answers.
+ */
+describe('isFlagOn over a real channel', () => {
+  const server = new grpc.Server()
+  let client: grpc.Client
+
+  beforeAll(async () => {
+    server.addService(grpcProto.vertice.featureflag.v1.FeatureFlagService.service, {
+      // Never answers: only the deadline can end the call.
+      EvaluateFeatureFlag: () => {},
+    })
+    const port = await new Promise<number>((resolve, reject) =>
+      server.bindAsync('127.0.0.1:0', grpc.ServerCredentials.createInsecure(), (err, bound) =>
+        err ? reject(err) : resolve(bound),
+      ),
+    )
+    // Its own client on that port: the module-level `featureFlagClient` points at the env target.
+    client = new grpcProto.vertice.featureflag.v1.FeatureFlagService(`127.0.0.1:${port}`, grpc.credentials.createInsecure())
+  })
+  afterAll(() => {
+    client?.close()
+    server.forceShutdown()
+  })
+
+  it('treats a call cut by its deadline as off, with one evaluation_failed WARN', async () => {
+    const log = { info: vi.fn(), warn: vi.fn() }
+    const started = Date.now()
+    const on = await requestContext.run({ bearerToken: 'abc', log: log as never }, () =>
+      isFlagOn(AI_ASSISTANT_FLAG, log as never, client, 50),
+    )
+    const elapsed = Date.now() - started
+
+    expect(on).toBe(false)
+    const failures = log.warn.mock.calls.filter(([fields]) => fields?.outcome === 'evaluation_failed')
+    expect(failures).toEqual([
+      [{ flag: AI_ASSISTANT_FLAG, outcome: 'evaluation_failed', code: 'UPSTREAM_ERROR' }, expect.any(String)],
+    ])
+    const upstream = [...log.warn.mock.calls, ...log.info.mock.calls].filter(([fields]) => fields?.rpc === 'EvaluateFeatureFlag')
+    expect(upstream).toEqual([[expect.objectContaining({ grpcStatus: 'DEADLINE_EXCEEDED' }), expect.any(String)]])
+    expect(elapsed).toBeLessThan(500)
   })
 })
