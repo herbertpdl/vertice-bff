@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package vertice.featureflag.v1;
+
+option java_package = "com.vertice.api.generated.grpc.featureflag.v1";
+option java_multiple_files = true;
+
+// Feature flags as the product reads them (feature-flags spec D7, D10). Any signed-in user may ask
+// about themself: the answer is their own setting when they have one, else the flag's everyone
+// state. A service token is PERMISSION_DENIED, no token UNAUTHENTICATED. Answers may be up to 30 s
+// old (R21).
+service FeatureFlagService {
+  // Whether the flag is on for the caller. An unknown key, or flags that cannot be read right now,
+  // answer enabled = false (R22): never NOT_FOUND, so this tells nobody which keys exist.
+  // INVALID_ARGUMENT for a key that is empty, longer than 64 characters or not uppercase snake case.
+  rpc EvaluateFeatureFlag(EvaluateFeatureFlagRequest) returns (EvaluateFeatureFlagResponse);
+}
+
+message EvaluateFeatureFlagRequest {
+  // The flag's key, e.g. AI_ASSISTANT_ENABLED.
+  string key = 1;
+}
+
+message EvaluateFeatureFlagResponse {
+  bool enabled = 1;
+}
