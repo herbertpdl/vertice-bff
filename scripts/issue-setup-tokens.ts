@@ -6,6 +6,10 @@
  *
  * Output goes to stdout only (the links are credentials); progress and errors go to stderr.
  * See the README's "Operations" section.
+ *
+ * Run it only while the `FIRST_ACCESS_EMAIL_ENABLED` feature flag is off for everyone and has no
+ * user settings: with a trainer ON, each printed link rotates that client's token and voids the
+ * one the first-access e-mail sent (feature-flags spec FF13).
  */
 import { issueSetupTokens } from '../src/ops/issue-setup-tokens.js'
 import { opsToken } from '../src/ops/ops-token.js'
