@@ -124,7 +124,7 @@ jobs:
       - name: Log in to Amazon ECR
         if: steps.head.outputs.current == 'true'
         id: ecr
-        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        uses: aws-actions/amazon-ecr-login@7290e214a610b32bc0eef81748948b6d466a8783 # v2.2.0
 
       # Tags are immutable in ECR, so a re-run (or a manual redeploy of the same head commit)
       # reuses the image already pushed instead of failing on the push.
