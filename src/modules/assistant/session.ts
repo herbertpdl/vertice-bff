@@ -1,6 +1,8 @@
 import type { FastifyBaseLogger } from 'fastify'
 import {
+  AI_MAX_LINE,
   AI_UPSTREAM_INVALID_PROPOSAL_CODES,
+  ASSISTANT_LINES,
   AI_UPSTREAM_UNAVAILABLE_CODES,
   ASSISTANT_STAGES,
   aiDoneEventSchema,
@@ -8,6 +10,7 @@ import {
   aiProposalEventSchema,
   aiStageEventSchema,
   aiTextEventSchema,
+  type AssistantLine,
   type AssistantStage,
 } from '../../ai/contract.js'
 import { AiUpstreamError, type AiClient } from '../../ai/client.js'
@@ -102,6 +105,21 @@ export interface ChatRun {
 export type ChatOutcome = 'done' | StreamErrorCode | 'client_closed'
 
 const STAGES = new Set<string>(ASSISTANT_STAGES)
+const LINES = new Set<string>(ASSISTANT_LINES)
+
+/**
+ * Whether a `text` event's `line` can be relayed (client-anamnese spec §4): a known value, the
+ * first with that value, `left_out` never after `anamnese_conflict`, and one non-blank line of at
+ * most 300 code points. Otherwise the reason it can't: the delta then goes out as answer text,
+ * so a bad marker degrades the display, never loses text.
+ */
+function lineProblem(line: unknown, delta: string, seen: Set<AssistantLine>): string | undefined {
+  if (typeof line !== 'string' || !LINES.has(line)) return 'unknown_line'
+  if (seen.has(line as AssistantLine)) return 'repeated_line'
+  if (line === 'left_out' && seen.has('anamnese_conflict')) return 'line_order'
+  if (!delta.trim() || /[\r\n]/.test(delta) || [...delta].length > AI_MAX_LINE) return 'line_shape'
+  return undefined
+}
 
 class Stopped extends Error {}
 
@@ -116,6 +134,7 @@ export async function runChat(run: ChatRun): Promise<ChatOutcome> {
   const started = Date.now()
   let proposals = 0
   let textChunks = 0
+  const lines = new Set<AssistantLine>()
   let usage: { model?: string; promptVersion?: string; inputTokens?: number; outputTokens?: number } = {}
 
   const heartbeat = setInterval(() => run.write(SSE_HEARTBEAT), timings.heartbeatMs)
@@ -181,7 +200,23 @@ export async function runChat(run: ChatRun): Promise<ChatOutcome> {
             if (!parsed.success) return finish('AI_ERROR')
             progressed()
             textChunks++
-            if (parsed.data.delta) send('text', { delta: parsed.data.delta })
+            const { delta, line } = parsed.data
+            if (!delta) break
+            if (line === undefined) {
+              send('text', { delta })
+              break
+            }
+            const problem = lineProblem(line, delta, lines)
+            if (problem) {
+              run.log.warn(
+                { assistant: 'workout-chat', reason: problem, line: typeof line === 'string' ? line.slice(0, 40) : typeof line },
+                'Text line marker dropped',
+              )
+              send('text', { delta })
+              break
+            }
+            lines.add(line as AssistantLine)
+            send('text', { delta, line })
             break
           }
           case 'proposal': {
@@ -258,6 +293,9 @@ export async function runChat(run: ChatRun): Promise<ChatOutcome> {
       durationMs: Date.now() - started,
       textChunks,
       proposals,
+      lines: [...lines],
+      // An enum, never the text (client-anamnese A9).
+      anamnese: run.context.anamnese,
       ...usage,
     },
     'Assistant message finished',

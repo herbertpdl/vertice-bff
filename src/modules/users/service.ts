@@ -39,6 +39,8 @@ export interface UserResponse {
   consent?: ConsentStateResponse | null
   /** Whether an admin suspended the user (admin-panel R46): set on `ListClientsForTrainer` only, false elsewhere. */
   suspended?: boolean
+  /** Whether the calling trainer wrote the client's anamnese (client-anamnese R21): `ListClientsForTrainer` only. */
+  hasAnamnese?: boolean
 }
 
 export function toUser(r: UserResponse): User {

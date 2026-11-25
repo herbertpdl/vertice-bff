@@ -123,6 +123,19 @@ export const resetFakeSuspended = () => fakeSuspended.clear()
 export const fakeEmailSends: { mode: 'ok' | 'limited' | 'failed' | 'disabled' } = { mode: 'ok' }
 export const FAKE_EMAIL_RETRY_SECONDS = 42
 
+/**
+ * Anamneses by `trainerId:clientId` (client-anamnese). Empty by default; `fakeAnamneseRead.failWith`
+ * makes `GetClientAnamnese` fail with that status (e.g. UNAVAILABLE).
+ */
+export const fakeAnamneses = new Map<string, { text: string; updatedAt: string }>()
+export const fakeAnamneseRead: { failWith?: status } = {}
+export const anamneseKey = (trainerId: number, clientId: number) => `${trainerId}:${clientId}`
+export const FAKE_ANAMNESE_AT = '2026-11-25T12:00:00Z'
+export const resetFakeAnamneses = () => {
+  fakeAnamneses.clear()
+  delete fakeAnamneseRead.failWith
+}
+
 /** What the fake `CreatePasswordSetupToken` issues; `RedeemPasswordSetupToken` accepts only these. */
 export const setupTokenFor = (userId: number) => `issued-${userId}`
 
@@ -1271,8 +1284,31 @@ const handlers: Record<string, (req: Req) => unknown> = {
   ListClientsForTrainer: (r) => ({
     clients: trainerClients
       .filter(([t]) => t === Number(r.trainerId))
-      .map(([, c]) => ({ ...userRes(find(users, c, 'User'), 'summary'), suspended: fakeSuspended.has(c) })),
+      .map(([t, c]) => ({
+        ...userRes(find(users, c, 'User'), 'summary'),
+        suspended: fakeSuspended.has(c),
+        hasAnamnese: fakeAnamneses.has(anamneseKey(t, c)),
+      })),
   }),
+  // ClientAnamneseService, mirroring vertice-api: only the client's active trainer, for their own
+  // trainer_id; anything else (a former trainer included) is PERMISSION_DENIED.
+  GetClientAnamnese: (r) => {
+    const key = anamneseAccess(r)
+    if (fakeAnamneseRead.failWith !== undefined) upstreamError(fakeAnamneseRead.failWith, 'Anamnese read failed')
+    return fakeAnamneses.get(key) ?? { text: '', updatedAt: '' }
+  },
+  SaveClientAnamnese: (r) => {
+    const key = anamneseAccess(r)
+    const text = String(r.text ?? '')
+    if (text.length > 5_000) upstreamError(status.INVALID_ARGUMENT, 'text: size must be between 0 and 5000')
+    if (text.trim() === '') {
+      fakeAnamneses.delete(key)
+      return { text: '', updatedAt: '' }
+    }
+    const saved = { text, updatedAt: FAKE_ANAMNESE_AT }
+    fakeAnamneses.set(key, saved)
+    return saved
+  },
   // Mirrors vertice-api: the trainer for their own trainer_id and an active client (anything else,
   // a missing client included, is PERMISSION_DENIED), or ADMIN. Stateless, like DeleteAccount.
   EndTrainerClientRelationship: (r) => {
@@ -1299,9 +1335,20 @@ const handlers: Record<string, (req: Req) => unknown> = {
   }),
 }
 
+function anamneseAccess(r: Req): string {
+  const user = caller()
+  const trainerId = Number(r.trainerId)
+  const clientId = Number(r.clientId)
+  const active = trainerClients.some(([t, c]) => t === trainerId && c === clientId)
+  if (user?.role !== 'TRAINER' || user.id !== trainerId || !active) {
+    upstreamError(status.PERMISSION_DENIED, `You do not have access to client ${clientId}`)
+  }
+  return anamneseKey(trainerId, clientId)
+}
+
 /** RPCs that change upstream state. A refused request must never reach one. */
 export const isWriteRpc = (method: string) =>
-  /^(Create|Update|Delete|Remove|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard|Start|Verify|Issue|Reset|Suspend|Reactivate|Send|Promote|Rename)/.test(method) &&
+  /^(Save|Create|Update|Delete|Remove|Set|Clone|Replace|Record|Complete|Submit|GetOrStart|End|Restart|Discard|Start|Verify|Issue|Reset|Suspend|Reactivate|Send|Promote|Rename)/.test(method) &&
   method !== 'VerifyCredentials'
 
 /** How late the fake answers `method`; only `EvaluateFeatureFlag` can be delayed. */

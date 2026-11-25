@@ -67,6 +67,9 @@ All reads use the trainer's own token (`grpcCall`), so vertice-api applies its o
 - The catalog is capped at 1,000 exercises (vertice-ai's bound). Past it the message is refused
   with 413 `AI_CATALOG_TOO_LARGE` rather than sent with a partial catalog.
 - Never sent: the client's id, name or e-mail, recorded weights, logs, feedback (R13).
+- Amended by [`client-anamnese/spec.md`](../client-anamnese/spec.md) §3: the trainer's anamnese of
+  the plan's client (`GetClientAnamnese`, per message, parallel with the catalog) is sent as
+  `anamnese`, the only client-derived text; omitted when empty or refused to a former trainer.
 
 The call: `POST {VERTICE_AI_URL}/v1/workout-chat`, `accept: text/event-stream`, `x-request-id`
 (the BFF request id), and a token from `src/ai/token.ts`.
@@ -90,7 +93,7 @@ it carries nothing and is not progress.
 | `event` | `data` | |
 |---|---|---|
 | `stage` | `{ "stage": "analyzing" \| "choosing_exercises" \| "building_sets" \| "checking", "exercise"?: n }` | A change is being built (R18), keys in this order, later ones may be skipped. `building_sets` repeats once per exercise being written, with `exercise` its 1-based position (only there). The web shows its own label per key. Unknown keys from vertice-ai are dropped |
-| `text` | `{ "delta": "..." }` | The next piece of the answer (R17), or after a proposal R51's one line |
+| `text` | `{ "delta": "...", "line"?: "left_out" \| "anamnese_conflict" }` | The next piece of the answer (R17); with `line`, one whole line: R51's (`left_out`) or the anamnese conflict (client-anamnese spec §4) |
 | `proposal` | `{ "exercises": [AssistantProposalEntry] }` | At most once (R25) |
 | `done` | `{}` | Success |
 | `error` | `{ "code", "message" }` | Failure; `message` is English for logs |
@@ -101,7 +104,8 @@ card). The list is the whole new exercise list in order; an on-screen key missin
 that exercise is removed (R33). Strip `key` and `exercise` and it is a body for
 `PUT /workouts/:workoutId/exercises` or the nested create (R38, R40).
 
-Order (vertice-ai §4): a question is `text+ done`; a change is `stage+ proposal [text] done`;
+Order (vertice-ai §4, as amended by client-anamnese spec §4): a question is
+`text+ [anamnese_conflict] done`; a change is `stage+ proposal [left_out] [anamnese_conflict] done`;
 anything can be cut short by one `error`. Exactly one `done` or `error` ends the stream, except
 when the client is gone (nothing is written then).
 

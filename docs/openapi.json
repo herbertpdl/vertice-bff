@@ -1042,6 +1042,51 @@
           "code"
         ]
       },
+      "AnamneseNotice": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "present",
+              "missing",
+              "unavailable"
+            ],
+            "description": "`present`: the AI uses your anamnese of this client; `missing`: you have none (offer the link); `unavailable`: the client is no longer yours (show nothing)."
+          },
+          "client": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The plan’s client, for the notice and the link; null exactly when `unavailable`."
+          }
+        },
+        "required": [
+          "state",
+          "client"
+        ],
+        "additionalProperties": false
+      },
       "AssistantDoneEvent": {
         "type": "object",
         "properties": {},
@@ -1338,7 +1383,15 @@
         "properties": {
           "delta": {
             "type": "string",
-            "description": "The next piece of the answer; append it to what came before."
+            "description": "Without `line`: the next piece of the answer, append it to what came before. With `line`: one whole line."
+          },
+          "line": {
+            "description": "Absent on answer text. `left_out`: what the proposal left out; `anamnese_conflict`: what the request conflicts with in the anamnese. Each is one complete event, shown as its own line, at most once per stream, `left_out` first.",
+            "type": "string",
+            "enum": [
+              "left_out",
+              "anamnese_conflict"
+            ]
           }
         },
         "required": [
@@ -1420,6 +1473,32 @@
           "currentPassword",
           "newPassword"
         ]
+      },
+      "ClientAnamnese": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "As stored, untrimmed; empty when there is none. Health data: render it only on its tab."
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO-8601 instant, UTC (`Z`). An absolute point in time. Format it for display in a time zone (the business zone is America/Sao_Paulo) — never read the clock or the calendar day off the string, and never assume a fixed -03:00 (instants from before 2019 are -02:00)."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it was last saved; null when `text` is empty."
+          }
+        },
+        "required": [
+          "text",
+          "updatedAt"
+        ],
+        "additionalProperties": false
       },
       "ClientDetail": {
         "type": "object",
@@ -1632,6 +1711,10 @@
           "suspended": {
             "type": "boolean",
             "description": "An admin suspended the client: they stay on the roster but cannot sign in until reactivated."
+          },
+          "hasAnamnese": {
+            "type": "boolean",
+            "description": "Whether you wrote an anamnese for this client (the “Sem anamnese” badge when false)."
           }
         },
         "required": [
@@ -1641,7 +1724,8 @@
           "currentPlan",
           "lastWorkoutAt",
           "weekActivity",
-          "suspended"
+          "suspended",
+          "hasAnamnese"
         ],
         "additionalProperties": false
       },
@@ -2952,6 +3036,20 @@
           "TRAINER",
           "CLIENT"
         ]
+      },
+      "SaveClientAnamneseRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 5000,
+            "description": "The whole anamnese, stored as written (not trimmed). At most 5,000 UTF-16 units (a character outside the BMP counts two). A blank text clears it."
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
       },
       "SessionUser": {
         "type": "object",
@@ -5041,6 +5139,158 @@
           },
           "404": {
             "description": "Not found (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clients/{id}/anamnese": {
+      "get": {
+        "operationId": "getClientAnamnese",
+        "summary": "A client’s anamnese",
+        "tags": [
+          "Clients"
+        ],
+        "description": "Roles: TRAINER. One of your clients (a former client is 403). With none, `{ \"text\": \"\", \"updatedAt\": null }`, never a 404.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The anamnese, or the empty state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientAnamnese"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "saveClientAnamnese",
+        "summary": "Save a client’s anamnese",
+        "tags": [
+          "Clients"
+        ],
+        "description": "Roles: TRAINER. One of your clients. Replaces the whole text (last save wins, no history), stored as written. A blank text clears it and answers the empty state. Over 5,000 UTF-16 units is a 400.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveClientAnamneseRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The stored state (the empty state after a clear).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientAnamnese"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8615,6 +8865,89 @@
           },
           "401": {
             "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/assistant/anamnese-notice": {
+      "get": {
+        "operationId": "getAnamneseNotice",
+        "summary": "Whether the AI uses the anamnese of this plan’s client",
+        "tags": [
+          "Assistant"
+        ],
+        "description": "Roles: TRAINER. For the plan open in the editor (yours): `present` or `missing` with the client’s id and name (the link to their anamnese tab), or `unavailable` with `client: null` when the client is no longer yours. Never returns the anamnese itself. Each chat message reads the anamnese again, so this can lag a save made since.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "trainingPlanId",
+            "required": true,
+            "description": "The plan open in the editor."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "TRAINER"
+        ],
+        "responses": {
+          "200": {
+            "description": "The notice state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnamneseNotice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed path id, query or body (`VALIDATION_ERROR` with field `details`), or a route-specific 400 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (`UNAUTHORIZED`), the account no longer exists (`UNAUTHENTICATED`), or a route-specific 401 code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role or the owner check refuses the caller (`FORBIDDEN`), or a route-specific 403 code (`ACCOUNT_SUSPENDED`, `ADMIN_LOGIN_ELSEWHERE`, `SESSION_NOT_RENEWABLE` on the routes that say so).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`NOT_FOUND`).",
             "content": {
               "application/json": {
                 "schema": {

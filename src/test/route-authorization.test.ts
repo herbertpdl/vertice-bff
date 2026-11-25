@@ -25,6 +25,7 @@ import {
   ids,
   isWriteRpc,
   resetFakeAdminActions,
+  resetFakeAnamneses,
   resetFakeConsents,
   resetFakeFlags,
   resetUpstreamCallers,
@@ -590,6 +591,67 @@ const routes: RouteCase[] = [
     ok: { as: 'trainerA', url: `/api/clients/${ids.clientA}/overview` },
     denied: [
       { as: 'trainerA', url: `/api/clients/${ids.clientB}/overview`, why: "path: another trainer's client" },
+    ],
+  },
+  {
+    route: 'GET /api/clients/:id/anamnese',
+    roles: ['TRAINER'],
+    ok: { as: 'trainerA', url: `/api/clients/${ids.clientA}/anamnese` },
+    scoped: [
+      {
+        as: 'trainerA',
+        url: `/api/clients/${ids.clientA}/anamnese`,
+        why: "the trainer id is the caller's own",
+        rpc: 'GetClientAnamnese',
+        sends: { trainerId: ids.trainerA, clientId: ids.clientA },
+      },
+    ],
+    denied: [
+      { as: 'trainerA', url: `/api/clients/${ids.clientB}/anamnese`, why: "path: another trainer's client" },
+      { as: 'trainerB', url: `/api/clients/${ids.clientA}/anamnese`, why: "path: trainer A's client, read by trainer B" },
+    ],
+  },
+  {
+    route: 'PUT /api/clients/:id/anamnese',
+    roles: ['TRAINER'],
+    ok: { as: 'trainerA', url: `/api/clients/${ids.clientA}/anamnese`, body: { text: 'Dor no joelho.' } },
+    scoped: [
+      {
+        as: 'trainerA',
+        url: `/api/clients/${ids.clientA}/anamnese`,
+        body: { text: 'Dor no joelho.' },
+        why: "the trainer id is the caller's own",
+        rpc: 'SaveClientAnamnese',
+        sends: { trainerId: ids.trainerA, clientId: ids.clientA, text: 'Dor no joelho.' },
+      },
+    ],
+    denied: [
+      {
+        as: 'trainerA',
+        url: `/api/clients/${ids.clientB}/anamnese`,
+        body: { text: 'x' },
+        why: "path: another trainer's client",
+      },
+      {
+        as: 'trainerA',
+        url: `/api/clients/${ids.clientB}/anamnese`,
+        body: { text: 'x'.repeat(5_001) },
+        why: "path: another trainer's client, with a body that is too long (403 first)",
+      },
+      {
+        as: 'trainerA',
+        url: `/api/clients/${ids.clientA}/anamnese`,
+        body: { text: 'x'.repeat(5_001) },
+        status: 400,
+        why: 'body: 5,001 UTF-16 units',
+      },
+      {
+        as: 'trainerA',
+        url: `/api/clients/${ids.clientA}/anamnese`,
+        body: { text: 'x', clientId: ids.clientB },
+        status: 400,
+        why: 'body: an extra key',
+      },
     ],
   },
   {
@@ -1249,6 +1311,26 @@ const routes: RouteCase[] = [
     ok: { as: 'trainerA', url: '/api/assistant/status' },
   },
   {
+    route: 'GET /api/assistant/anamnese-notice',
+    roles: ['TRAINER'],
+    ok: { as: 'trainerA', url: `/api/assistant/anamnese-notice?trainingPlanId=${ids.planA}` },
+    denied: [
+      { as: 'trainerA', url: `/api/assistant/anamnese-notice?trainingPlanId=${ids.planB}`, why: "query: another trainer's plan" },
+      {
+        as: 'trainerA',
+        url: `/api/assistant/anamnese-notice?trainingPlanId=${ids.planBForClientA}`,
+        why: "query: the trainer's own client's plan written by another trainer",
+      },
+      { as: 'trainerA', url: '/api/assistant/anamnese-notice', status: 400, why: 'query: no plan' },
+      {
+        as: 'trainerA',
+        url: `/api/assistant/anamnese-notice?trainingPlanId=${ids.planA}&clientId=${ids.clientB}`,
+        status: 400,
+        why: 'query: an extra key',
+      },
+    ],
+  },
+  {
     route: 'POST /api/assistant/workout-chat',
     roles: ['TRAINER'],
     ok: { as: 'trainerA', url: '/api/assistant/workout-chat', body: chatBody() },
@@ -1321,6 +1403,7 @@ describe('route authorization', () => {
     resetFakeAdminActions()
     resetFakeFlags()
     resetFakeSuspended()
+    resetFakeAnamneses()
     // A suspended client, so reactivate has a target (client A2 is no actor: no token is refused).
     fakeSuspended.add(ids.clientA2)
   })
@@ -1645,5 +1728,10 @@ describe('isWriteRpc', () => {
     expect(isWriteRpc('SetFeatureFlagUser')).toBe(true)
     expect(isWriteRpc('ListFeatureFlags')).toBe(false)
     expect(isWriteRpc('EvaluateFeatureFlag')).toBe(false)
+  })
+
+  it('counts SaveClientAnamnese as a write and GetClientAnamnese as a read', () => {
+    expect(isWriteRpc('SaveClientAnamnese')).toBe(true)
+    expect(isWriteRpc('GetClientAnamnese')).toBe(false)
   })
 })

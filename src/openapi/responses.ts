@@ -1,8 +1,9 @@
 import { z } from 'zod'
 import { FEEDBACK_RATINGS } from '../modules/feedback/schemas.js'
 import { dayOfWeekSchema, exerciseSetEntrySchema } from '../modules/workouts/schemas.js'
-import { ASSISTANT_STAGES } from '../ai/contract.js'
+import { ASSISTANT_LINES, ASSISTANT_STAGES } from '../ai/contract.js'
 import type { AssistantStatus } from '../modules/assistant/routes.js'
+import type * as assistantService from '../modules/assistant/service.js'
 import type * as proposalService from '../modules/assistant/proposal.js'
 import { setStrategySchema } from '../modules/exercise-sets/schemas.js'
 import { planLevelSchema } from '../modules/training-plans/schemas.js'
@@ -462,6 +463,17 @@ export const clientSummarySchema = named(
     suspended: z
       .boolean()
       .describe('An admin suspended the client: they stay on the roster but cannot sign in until reactivated.'),
+    hasAnamnese: z
+      .boolean()
+      .describe('Whether you wrote an anamnese for this client (the “Sem anamnese” badge when false).'),
+  }),
+)
+
+export const clientAnamneseSchema = named(
+  'ClientAnamnese',
+  z.object({
+    text: z.string().describe('As stored, untrimmed; empty when there is none. Health data: render it only on its tab.'),
+    updatedAt: instant.nullable().describe('When it was last saved; null when `text` is empty.'),
   }),
 )
 
@@ -798,9 +810,37 @@ export const assistantStageEventSchema = named(
   }),
 )
 
+export const anamneseNoticeSchema = named(
+  'AnamneseNotice',
+  z.object({
+    state: z
+      .enum(['present', 'missing', 'unavailable'])
+      .describe(
+        '`present`: the AI uses your anamnese of this client; `missing`: you have none (offer the link); ' +
+          '`unavailable`: the client is no longer yours (show nothing).',
+      ),
+    client: z
+      .object({ id, name: z.string() })
+      .nullable()
+      .describe('The plan’s client, for the notice and the link; null exactly when `unavailable`.'),
+  }),
+)
+
 export const assistantTextEventSchema = named(
   'AssistantTextEvent',
-  z.object({ delta: z.string().describe('The next piece of the answer; append it to what came before.') }),
+  z.object({
+    delta: z
+      .string()
+      .describe('Without `line`: the next piece of the answer, append it to what came before. With `line`: one whole line.'),
+    line: z
+      .enum(ASSISTANT_LINES)
+      .optional()
+      .describe(
+        'Absent on answer text. `left_out`: what the proposal left out; `anamnese_conflict`: what the request ' +
+          'conflicts with in the anamnese. Each is one complete event, shown as its own line, at most once per ' +
+          'stream, `left_out` first.',
+      ),
+  }),
 )
 
 export const assistantProposalEntrySchema = named(
@@ -890,6 +930,8 @@ export type ResponseSchemasMatchServices = [
   Assert<SameShape<Out<typeof createdClientSchema>, clientService.CreatedClient>>,
   Assert<SameShape<Out<typeof clientSummarySchema>, clientService.ClientSummary>>,
   Assert<SameShape<Out<typeof clientOverviewSchema>, clientService.ClientOverview>>,
+  Assert<SameShape<Out<typeof clientAnamneseSchema>, clientService.ClientAnamnese>>,
+  Assert<SameShape<Out<typeof anamneseNoticeSchema>, assistantService.AnamneseNotice>>,
   Assert<SameShape<Out<typeof muscleGroupSchema>, exerciseService.MuscleGroup>>,
   Assert<SameShape<Out<typeof exerciseSchema>, exerciseService.Exercise>>,
   Assert<SameShape<Out<typeof exercisePageSchema>, exerciseService.ExercisePage>>,

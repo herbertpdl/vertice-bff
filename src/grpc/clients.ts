@@ -26,6 +26,14 @@ export const trainerClientClient = new grpcProto.vertice.trainerclient.v1.Traine
   grpcTarget,
   credentials,
 )
+/**
+ * A trainer's anamnese of a client (`modules/clients/service.ts` only: the tab's routes, the AI
+ * panel's chat read), always with the trainer's own token (client-anamnese spec A1).
+ */
+export const clientAnamneseClient = new grpcProto.vertice.trainerclient.v1.ClientAnamneseService(
+  grpcTarget,
+  credentials,
+)
 /** `service:bff` only, from `modules/admin-auth/service.ts` (admin sign-in's second factor). */
 export const adminAuthClient = new grpcProto.vertice.admin.v1.AdminAuthService(grpcTarget, credentials)
 /**

@@ -52,18 +52,38 @@ export interface AiWorkoutChatRequest {
   }[]
   /** Every exercise the trainer may use (R29), at most 1,000, unique ids; a proposal may name no other id. */
   catalog: { id: number; name: string; muscleGroups: string[] }[]
+  /**
+   * The trainer's anamnese of the plan's client, as stored (client-anamnese R22, R24): the only
+   * client-derived text. Omitted when there is none or the read was refused; never empty.
+   */
+  anamnese?: string
 }
 
 /** vertice-ai spec §3 bounds the BFF trims to rather than send a 400-bound body. */
 export const AI_MAX_OTHER_WORKOUTS = 50
 export const AI_MAX_MUSCLE_GROUPS = 50
 export const AI_MAX_CATALOG = 1_000
+/**
+ * vertice-ai's anamnese bound, in code points (its client-anamnese spec). The BFF's 5,000 UTF-16
+ * units (`ANAMNESE_MAX_LENGTH`) are never more, so anything vertice-api stored passes.
+ */
+export const AI_MAX_ANAMNESE = 5_000
 
 // ---- events vertice-ai streams back -------------------------------------------------------------
 
 /** `exercise` (1-based) only on `building_sets`, which repeats once per exercise being written. */
 export const aiStageEventSchema = z.object({ stage: z.string(), exercise: z.number().int().positive().optional() })
-export const aiTextEventSchema = z.object({ delta: z.string() })
+/**
+ * `line` (client-anamnese spec §4): absent on answer text, else a marker the BFF checks before
+ * relaying (`session.ts`); parsed as `unknown` so a bad one degrades to text instead of failing.
+ */
+export const aiTextEventSchema = z.object({ delta: z.string(), line: z.unknown().optional() })
+
+/** The `line` values a `text` event may carry, each one whole line, at most once, in this order. */
+export const ASSISTANT_LINES = ['left_out', 'anamnese_conflict'] as const
+export type AssistantLine = (typeof ASSISTANT_LINES)[number]
+/** vertice-ai's bound on a line event's text, in code points. */
+export const AI_MAX_LINE = 300
 /** Parsed loosely here; `modules/assistant/proposal.ts` validates it strictly (R27–R32). */
 export const aiProposalEventSchema = z.object({ exercises: z.unknown() }).passthrough()
 export const aiErrorEventSchema = z.object({ code: z.string(), message: z.string().optional() })

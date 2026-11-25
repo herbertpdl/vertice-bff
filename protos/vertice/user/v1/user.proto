@@ -138,6 +138,9 @@ message UserResponse {
   // Whether an admin suspended the user (admin-panel R46). Set on
   // TrainerClientService.ListClientsForTrainer only; false everywhere else.
   bool suspended = 14;
+  // Whether the calling trainer has written an anamnese for this client (client-anamnese R21). Set
+  // on TrainerClientService.ListClientsForTrainer only; false everywhere else.
+  bool has_anamnese = 15;
 }
 
 // Whether a client still has to choose their password, and how the first-access emails went. Every

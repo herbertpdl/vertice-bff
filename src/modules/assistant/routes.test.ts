@@ -12,12 +12,17 @@ import { grpcCall } from '../../grpc/call.js'
 import { httpAiClient } from '../../ai/client.js'
 import { parseSse } from '../../ai/sse.js'
 import {
+  anamneseKey,
   bearer,
   emailOf,
+  FAKE_ANAMNESE_AT,
+  fakeAnamneseRead,
+  fakeAnamneses,
   fakeFlagEvaluation,
   fakeFlags,
   fakeGrpcCall,
   ids,
+  resetFakeAnamneses,
   resetFakeFlags,
   resetUpstreamCallers,
   upstreamCallers,
@@ -97,6 +102,7 @@ beforeEach(() => {
   calls.length = 0
   logLines.length = 0
   resetFakeFlags()
+  resetFakeAnamneses()
   grpcCallMock.mockReset()
   grpcCallMock.mockImplementation(fakeGrpcCall)
   resetUpstreamCallers()
@@ -326,6 +332,100 @@ describe('POST /api/assistant/workout-chat', () => {
     const next = await post(body())
     expect(next.status).toBe(503)
     expect(calls).toHaveLength(1)
+  })
+})
+
+describe('the anamnese in the chat (client-anamnese spec §2.4, §3)', () => {
+  const ANAMNESE = 'Dor no joelho direito; evitar impacto. Hipertensão controlada.'
+  const setAnamnese = (text: string, trainerId: number = ids.trainerA, clientId: number = ids.clientA) =>
+    fakeAnamneses.set(anamneseKey(trainerId, clientId), { text, updatedAt: FAKE_ANAMNESE_AT })
+  const finished = () => lines().filter((l) => l.msg === 'Assistant message finished')
+
+  it('sends it as written, read with the trainer token, and it is the only client-derived text (R22, R24, E17)', async () => {
+    setAnamnese(ANAMNESE)
+    await start()
+    const events = await eventsOf(await post(body()))
+    expect(events.at(-1)!.event).toBe('done')
+    const sent = calls[0]!.body
+    expect(Object.keys(sent).sort()).toEqual(['anamnese', 'catalog', 'history', 'message', 'otherWorkouts', 'plan', 'workout'])
+    expect(sent.anamnese).toBe(ANAMNESE)
+    const others = JSON.stringify({ ...sent, anamnese: undefined })
+    expect(others).not.toContain('clientId')
+    expect(others).not.toContain(userOf('clientA').name)
+    expect(others).not.toContain(emailOf(ids.clientA))
+    expect(JSON.stringify(calls[0]!.headers)).not.toContain('joelho')
+    expect(upstreamCallers.find((c) => c.method === 'GetClientAnamnese')).toEqual({
+      method: 'GetClientAnamnese',
+      caller: { id: ids.trainerA, role: 'TRAINER' },
+    })
+    expect(grpcCallMock.mock.calls.find(([, m]) => m === 'GetClientAnamnese')![2]).toEqual({
+      trainerId: ids.trainerA,
+      clientId: ids.clientA,
+    })
+    // No log line carries it, only the enum.
+    expect(logLines.join('')).not.toContain('joelho')
+    expect(finished()).toEqual([expect.objectContaining({ anamnese: 'sent' })])
+  })
+
+  it('omits the field when there is none (R27)', async () => {
+    await start()
+    await eventsOf(await post(body()))
+    expect(calls[0]!.body).not.toHaveProperty('anamnese')
+    expect(finished()).toEqual([expect.objectContaining({ anamnese: 'none' })])
+  })
+
+  it('streams normally for a former trainer, without the field (R7, Q1)', async () => {
+    // Trainer A's old anamnese of client B stays stored, but the relationship ended.
+    setAnamnese(ANAMNESE, ids.trainerA, ids.clientB)
+    await start()
+    const res = await post(body({ trainingPlanId: ids.planAForFormerClientB }))
+    expect(res.status).toBe(200)
+    expect((await eventsOf(res)).at(-1)!.event).toBe('done')
+    expect(calls[0]!.body).not.toHaveProperty('anamnese')
+    expect(finished()).toEqual([expect.objectContaining({ anamnese: 'refused' })])
+  })
+
+  it('fails before the stream when the read fails for another reason, and never calls vertice-ai (Q2)', async () => {
+    setAnamnese(ANAMNESE)
+    fakeAnamneseRead.failWith = status.UNAVAILABLE
+    await start()
+    const res = await post(body())
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('UPSTREAM_UNAVAILABLE')
+    expect(calls).toEqual([])
+  })
+
+  it('reads it fresh on every message: two messages around a save carry the old, then the new text (R29, E13)', async () => {
+    setAnamnese('Antes')
+    await start()
+    await eventsOf(await post(body()))
+    setAnamnese('Depois')
+    await eventsOf(await post(body()))
+    expect(calls.map((c) => c.body.anamnese)).toEqual(['Antes', 'Depois'])
+  })
+})
+
+describe('GET /api/assistant/anamnese-notice', () => {
+  const notice = async (trainingPlanId: number) => {
+    const res = await fetch(`${baseUrl}/api/assistant/anamnese-notice?trainingPlanId=${trainingPlanId}`, { headers: bearer('trainerA') })
+    expect(res.status).toBe(200)
+    return res.json()
+  }
+
+  it('says present or missing with the client, and unavailable for a former client, never reading the text (R25, R26, R28)', async () => {
+    fakeAnamneses.set(anamneseKey(ids.trainerA, ids.clientA), { text: 'x', updatedAt: FAKE_ANAMNESE_AT })
+    await start()
+    expect(await notice(ids.planA)).toEqual({ state: 'present', client: { id: ids.clientA, name: userOf('clientA').name } })
+    expect(await notice(ids.planA2)).toEqual({ state: 'missing', client: { id: ids.clientA2, name: 'Client A2' } })
+    expect(await notice(ids.planAForFormerClientB)).toEqual({ state: 'unavailable', client: null })
+    expect(grpcCallMock.mock.calls.map(([, m]) => m)).not.toContain('GetClientAnamnese')
+  })
+
+  it('is not gated on the AI flag (Q3)', async () => {
+    fakeFlags.get(AI_ASSISTANT_FLAG)!.enabled = false
+    await start()
+    expect(await notice(ids.planA2)).toMatchObject({ state: 'missing' })
+    expect(grpcCallMock.mock.calls.map(([, m]) => m)).not.toContain('EvaluateFeatureFlag')
   })
 })
 

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { cpfInputSchema, emailSchema } from '../auth/schemas.js'
-import { requiredText } from '../../lib/validation.js'
+import { requiredText, utf16String } from '../../lib/validation.js'
 
 export const clientCreateSchema = z.object({
   name: requiredText(255),
@@ -31,3 +31,24 @@ export const clientDetailQuerySchema = z
     reveal: z.literal('cpf').optional(),
   })
   .strict()
+
+/**
+ * The longest anamnese, in UTF-16 units (vertice-api's bound, client-anamnese R10). 5,000 units
+ * are never more than 5,000 code points, vertice-ai's bound (`AI_MAX_ANAMNESE`).
+ */
+export const ANAMNESE_MAX_LENGTH = 5_000
+
+/**
+ * `PUT /clients/:id/anamnese`. The text as written: required, empty allowed, never trimmed. The
+ * BFF has no "blank" rule of its own (spec A3): vertice-api decides, clears a blank text and
+ * answers the empty state.
+ */
+export const clientAnamneseSaveSchema = z
+  .object({
+    text: utf16String(ANAMNESE_MAX_LENGTH).describe(
+      'The whole anamnese, stored as written (not trimmed). At most 5,000 UTF-16 units (a character outside ' +
+        'the BMP counts two). A blank text clears it.',
+    ),
+  })
+  .strict()
+  .meta({ id: 'SaveClientAnamneseRequest' })
