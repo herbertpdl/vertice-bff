@@ -27,9 +27,10 @@ R39 (the tab mentions the AI only when the trainer has it) is already covered by
 
 The risk is in scheduling and in the AI path, not in the routes:
 - **Nothing upstream exists yet.** The routes need vertice-api's new `ClientAnamneseService`
-  (`GetClientAnamnese`/`SaveClientAnamnese`) and `UserResponse.has_anamnese` (F1). The chat change
-  also needs vertice-ai to accept an `anamnese` field: its request model rejects unknown keys, so
-  a BFF that sends it first breaks every chat message (F2).
+  (`GetClientAnamnese`/`SaveClientAnamnese`; names provisional) and `UserResponse.has_anamnese`
+  (F1). The chat change also needs vertice-ai to accept an `anamnese` field: its request model
+  rejects unknown keys, so a BFF that sends it first breaks every chat message whose client has an
+  anamnese (the key is omitted otherwise, F4) (F2).
 - **The BFF deploy is the launch.** The `AI_ASSISTANT_ENABLED` flag is already on. The first BFF
   build that reads the anamnese into the chat sends health data to Anthropic right away, so R33's
   privacy text and data inventory must be live before it (F3).
@@ -48,8 +49,8 @@ the health text only to learn that it exists (§5, option C).
 
 | Id | Severity | One line |
 |---|---|---|
-| F1 | Blocker | `ClientAnamneseService` and `UserResponse.has_anamnese` don't exist upstream yet: routes can be spec'd, not built or tested against a real API |
-| F2 | Blocker | vertice-ai's `WorkoutChatRequest` forbids unknown keys: sending `anamnese` before vertice-ai accepts it 400s every chat message |
+| F1 | Blocker | `ClientAnamneseService` (names provisional) and `UserResponse.has_anamnese` don't exist upstream yet: routes can be spec'd, not built or tested against a real API |
+| F2 | Blocker | vertice-ai's `WorkoutChatRequest` forbids unknown keys: sending `anamnese` before vertice-ai accepts it 400s every chat message whose client has an anamnese (the key is omitted otherwise) |
 | F3 | High | No switch of its own and the AI flag is on: the first BFF deploy with the chat change sends health data to Anthropic, so R33 must be live first |
 | F4 | High | Chat path: PERMISSION_DENIED on the read means "omit the field", any other failure fails the message before the stream; never cache (R29) |
 | F5 | High | The AI panel needs presence, the client's name and the link target for a plan, plus a "not available" state for former trainers: no route answers that |
@@ -175,7 +176,7 @@ gain the anamnese (F11).
 
 **F1 (Blocker): the RPCs and the roster field are new on vertice-api**
 - **What:** the routes need `GetClientAnamnese` and `SaveClientAnamnese` (a new
-  `ClientAnamneseService` in `vertice.trainerclient.v1`, API assessment "New RPCs") and
+  `ClientAnamneseService`; all three names provisional until the API proto merges; in `vertice.trainerclient.v1`, API assessment "New RPCs") and
   `UserResponse.has_anamnese` (field 15, set on `ListClientsForTrainer` only, API-F8). None of
   these is in vertice-api's protos or in this repo's copy today.
 - **Where:** `protos/vertice/trainerclient/v1/`, `protos/vertice/user/v1/user.proto:120-140`,
@@ -194,8 +195,8 @@ gain the anamnese (F11).
 
 **F2 (Blocker): vertice-ai must accept `anamnese` before the BFF sends it**
 - **What:** vertice-ai's `WorkoutChatRequest` forbids unknown keys (`extra="forbid"`, API-F21), so
-  a body with `anamnese` is a 400. The BFF maps that to `AI_ERROR` for **every** message, with or
-  without an anamnese, since the BFF would always send the key when one exists.
+  a body with `anamnese` is a 400. The BFF maps that to `AI_ERROR` for every message whose client
+  has an anamnese. Messages without one are unaffected, because the key is omitted then (F4).
 - **Where:** `ai/contract.ts:30-55`, `assistant/service.ts:108-130`; R22, R40.
 - **Why it matters:** a BFF deployed before vertice-ai breaks the assistant for every trainer whose
   client has an anamnese.
@@ -236,6 +237,12 @@ gain the anamnese (F11).
   - Refusing blank turns "clear" into a 400.
   - A BFF-side "blank" rule that differs from vertice-api's (API-F6: Unicode whitespace including
     U+00A0) gives two definitions of "has an anamnese".
+- **Departure from API-F6:** API-F6 says to define blank once and mirror it in the BFF and web.
+  This assessment deliberately gives the BFF **no** blank rule. The BFF has nothing to do with the
+  answer except forward it, and a mirror is a second definition that can drift (JavaScript's
+  `trim()` and Java's `isBlank` already disagree on U+00A0). With the API deciding and answering
+  the empty state, the BFF stays correct whatever the definition becomes. The web may still mirror
+  it for the UI (the counter, the "Salvar" state); that is the web assessment's call.
 - **Recommendation:**
   - `text: utf16String(ANAMNESE_MAX_LENGTH)`, with the constant 5,000 named once in the BFF and
     mirroring the API's.
@@ -509,6 +516,11 @@ See §8.
   older builds degrade to merged text, never to lost text), and relays it. It also allows at most
   one event per `line` value. vertice-ai's spec owns the wire shape; this is the BFF's preferred
   option (Q4).
+- **Divergence from API-F19:** API-F19 proposes the conflict line as a second, unmarked `text`
+  event after the R51 line, in a fixed order. That works for vertice-ai's output, but not on the
+  web: `text` is an append-only delta stream, so ordering alone doesn't separate two lines, and the
+  web would render them as one. Hence the `line` marker. vertice-ai's spec decides the final shape;
+  the API assessment is being aligned to the marker (§10, "reconcile with API-F19").
 
 ## 5. Options
 
@@ -611,13 +623,14 @@ and the event relay.
 
 ## 9. Questions and assumptions
 
-None of these could be put to the owner during this run. Each has an assumption for the spec to
-use.
+Q1 was decided by the owner in review. The others could not be put to the owner; each has an
+assumption for the spec to use.
 
-- **Q1.** What does the panel show a former trainer (assistant open on a former client's plan)?
-  - **Assumption:** the notice route answers `unavailable`, and the web shows neither R25's line
-    nor R26's link. The chat works without an anamnese (R27). The copy, if any, is the web's
-    (API Q1).
+- **Q1. Resolved (owner, 2026-11-25).** What does the panel show a former trainer (assistant open
+  on a former client's plan)?
+  - **Decision:** no notice strip and no link. The notice route answers `unavailable`, and the web
+    shows neither R25's line nor R26's link. The chat works without an anamnese (R27). This
+    confirms the earlier assumption (API Q1).
 - **Q2.** When the anamnese read fails for a reason other than a refusal (vertice-api unavailable,
   timeout), does the message fail or go without it?
   - **Assumption:** it fails before the stream with the normal mapped status (503
@@ -655,3 +668,5 @@ use.
 - [ ] F9: `hasAnamnese` mapped from `ListClientsForTrainer` only, like `suspended`.
 - [ ] F11: the save audit line, the api-contract and AI spec updates naming the anamnese.
 - [ ] F13: `Save` in `isWriteRpc`, fake handlers, and `has_anamnese` in the fake roster.
+- [ ] F6: reconcile with API-F19 (unmarked second `text` event vs the `line` marker) in
+      vertice-ai's spec before the BFF spec fixes the stream.
