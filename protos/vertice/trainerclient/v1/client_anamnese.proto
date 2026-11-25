@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package vertice.trainerclient.v1;
+
+option java_package = "com.vertice.api.generated.grpc.trainerclient.v1";
+option java_multiple_files = true;
+
+// A trainer's anamnese of one client (client-anamnese spec): one free text per (trainer, client)
+// pair, health data. Only the client's active trainer reads and saves it: TRAINER for their own
+// trainer_id and a CLIENT on their active roster. A missing client, another trainer's client, a
+// former client and a non-CLIENT target are the same PERMISSION_DENIED ("You do not have access to
+// client <id>"); a CLIENT, ADMIN or service caller is PERMISSION_DENIED, no token UNAUTHENTICATED.
+// A former trainer is refused even though the old text stays stored: it shows again only if the
+// same pair becomes active again.
+service ClientAnamneseService {
+  // The caller's anamnese of the client. A client with none answers the empty state (text and
+  // updated_at empty), never NOT_FOUND.
+  rpc GetClientAnamnese(GetClientAnamneseRequest) returns (GetClientAnamneseResponse);
+  // Replaces the caller's anamnese of the client (last save wins; no history). A blank text,
+  // nothing but whitespace as JavaScript's String.prototype.trim() strips it (U+00A0 and line
+  // breaks included), deletes it and answers the empty state. Other text is stored as sent,
+  // untrimmed. INVALID_ARGUMENT over 5,000 UTF-16 units.
+  rpc SaveClientAnamnese(SaveClientAnamneseRequest) returns (SaveClientAnamneseResponse);
+}
+
+message GetClientAnamneseRequest {
+  int64 trainer_id = 1;
+  int64 client_id = 2;
+}
+
+message GetClientAnamneseResponse {
+  // Empty when the client has no anamnese.
+  string text = 1;
+  // When it was last saved (ISO-8601 instant); empty when text is empty.
+  string updated_at = 2;
+}
+
+message SaveClientAnamneseRequest {
+  int64 trainer_id = 1;
+  int64 client_id = 2;
+  // At most 5,000 UTF-16 units (a character outside the BMP counts twice). Blank clears it.
+  string text = 3;
+}
+
+message SaveClientAnamneseResponse {
+  // As stored; empty after a clear.
+  string text = 1;
+  // ISO-8601 instant of this save; empty after a clear.
+  string updated_at = 2;
+}

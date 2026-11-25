@@ -16,6 +16,7 @@ const context: ChatContext = {
     otherWorkouts: [],
     catalog: [{ id: 1, name: 'Agachamento', muscleGroups: [] }],
   },
+  anamnese: 'none',
   catalog: new Map([[1, exercise]]),
   keys: new Map([['e1', 1]]),
 }
@@ -48,6 +49,7 @@ async function run(client: AiClient, options: { handle?: ChatHandle; timings?: C
   let out = ''
   const logger = pino({ level: 'silent' })
   const info = vi.spyOn(logger, 'info')
+  const warn = vi.spyOn(logger, 'warn')
   const outcome = await runChat({
     client,
     context,
@@ -62,10 +64,71 @@ async function run(client: AiClient, options: { handle?: ChatHandle; timings?: C
     .split('\n\n')
     .filter((b) => b && !b.startsWith(':'))
     .map((b) => ({ event: /^event: (.*)$/m.exec(b)![1], data: JSON.parse(/^data: (.*)$/m.exec(b)![1]!) }))
-  return { outcome, events, raw: out, info }
+  return { outcome, events, raw: out, info, warn }
 }
 
 describe('runChat', () => {
+  describe('text lines (client-anamnese spec §4)', () => {
+    const proposal = ev('proposal', { exercises: [{ key: 'e1', exerciseId: 1, sets: [{ reps: 8 }] }] })
+
+    it('relays left_out then anamnese_conflict after a proposal, each with its marker (E25)', async () => {
+      const { client } = scripted([
+        ev('stage', { stage: 'analyzing' }),
+        proposal,
+        ev('text', { delta: 'Deixei de fora a remada cavalinho.', line: 'left_out' }),
+        ev('text', { delta: 'Box jump tem impacto, e a anamnese cita dor no joelho.', line: 'anamnese_conflict' }),
+        ev('done'),
+      ])
+      const { outcome, events, info } = await run(client)
+      expect(outcome).toBe('done')
+      expect(events.slice(2, 4)).toEqual([
+        { event: 'text', data: { delta: 'Deixei de fora a remada cavalinho.', line: 'left_out' } },
+        { event: 'text', data: { delta: 'Box jump tem impacto, e a anamnese cita dor no joelho.', line: 'anamnese_conflict' } },
+      ])
+      expect(info.mock.calls.at(-1)![0]).toMatchObject({ lines: ['left_out', 'anamnese_conflict'], anamnese: 'none' })
+    })
+
+    it('relays answer text then a conflict line on a question', async () => {
+      const { client } = scripted([
+        ev('text', { delta: 'Sim, ' }),
+        ev('text', { delta: 'pode.' }),
+        ev('text', { delta: 'Cuidado com o joelho.', line: 'anamnese_conflict' }),
+        ev('done'),
+      ])
+      const { events } = await run(client)
+      expect(events.slice(0, 3).map((e) => e.data)).toEqual([
+        { delta: 'Sim, ' },
+        { delta: 'pode.' },
+        { delta: 'Cuidado com o joelho.', line: 'anamnese_conflict' },
+      ])
+    })
+
+    it.each([
+      ['an unknown value', [{ delta: 'x', line: 'future_line' }], 'unknown_line'],
+      ['a non-string value', [{ delta: 'x', line: 3 }], 'unknown_line'],
+      ['a null value', [{ delta: 'x', line: null }], 'unknown_line'],
+      ['a repeat', [{ delta: 'a', line: 'left_out' }, { delta: 'x', line: 'left_out' }], 'repeated_line'],
+      ['left_out after the conflict', [{ delta: 'a', line: 'anamnese_conflict' }, { delta: 'x', line: 'left_out' }], 'line_order'],
+      ['a line break', [{ delta: 'x\ny', line: 'left_out' }], 'line_shape'],
+      ['a blank line', [{ delta: '   ', line: 'left_out' }], 'line_shape'],
+      ['301 code points', [{ delta: '😀'.repeat(301), line: 'left_out' }], 'line_shape'],
+    ])('keeps the delta but drops the marker on %s', async (_why, texts, reason) => {
+      const { client } = scripted([proposal, ...texts.map((t) => ev('text', t)), ev('done')])
+      const { outcome, events, warn } = await run(client)
+      expect(outcome).toBe('done')
+      const last = texts.at(-1)!
+      expect(events.at(-2)).toEqual({ event: 'text', data: { delta: last.delta } })
+      expect(warn.mock.calls.map(([fields]) => (fields as { reason?: string }).reason)).toContain(reason)
+    })
+
+    it('accepts a line of exactly 300 code points', async () => {
+      const delta = '😀'.repeat(300)
+      const { client } = scripted([proposal, ev('text', { delta, line: 'left_out' }), ev('done')])
+      const { events } = await run(client)
+      expect(events.at(-2)).toEqual({ event: 'text', data: { delta, line: 'left_out' } })
+    })
+  })
+
   it('relays stages, text and an enriched proposal in order, then done', async () => {
     const { client } = scripted([
       ev('stage', { stage: 'analyzing' }),

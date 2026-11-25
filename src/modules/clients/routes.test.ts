@@ -5,7 +5,18 @@ import { buildApp } from '../../app.js'
 import { grpcCall, mapGrpcError } from '../../grpc/call.js'
 import pino from 'pino'
 import { Writable } from 'node:stream'
-import { bearer, cpfOf, emailOf, fakeGrpcCall, fakeSuspended, ids, resetFakeSuspended, setupTokenFor } from '../../test/fakeUpstream.js'
+import {
+  bearer,
+  cpfOf,
+  emailOf,
+  FAKE_ANAMNESE_AT,
+  fakeGrpcCall,
+  fakeSuspended,
+  ids,
+  resetFakeAnamneses,
+  resetFakeSuspended,
+  setupTokenFor,
+} from '../../test/fakeUpstream.js'
 
 // Keep the real mapGrpcError: the fake upstream raises its errors through it.
 vi.mock('../../grpc/call.js', async (importOriginal) => ({
@@ -218,6 +229,7 @@ describe('client personal data (P1-03)', () => {
             "id": 100,
             "name": "Plan 100",
           },
+          "hasAnamnese": false,
           "id": 20,
           "lastWorkoutAt": null,
           "name": "Client A",
@@ -227,7 +239,7 @@ describe('client personal data (P1-03)', () => {
       `)
       for (const entry of roster) {
         expect(Object.keys(entry).sort()).toEqual(
-          ['activePlanCount', 'currentPlan', 'id', 'lastWorkoutAt', 'name', 'suspended', 'weekActivity'].sort(),
+          ['activePlanCount', 'currentPlan', 'hasAnamnese', 'id', 'lastWorkoutAt', 'name', 'suspended', 'weekActivity'].sort(),
         )
       }
       // The fake upstream still answers with the contact view (email set), so this proves the BFF
@@ -352,5 +364,112 @@ describe('client personal data (P1-03)', () => {
     })
     expect(res.statusCode).toBe(409)
     expect(res.json()).toEqual({ error: { code: 'CONFLICT', message: 'Email or CPF already in use' } })
+  })
+})
+
+describe('client anamnese (client-anamnese spec §2.2)', () => {
+  let app: FastifyInstance
+  const logLines: string[] = []
+
+  beforeAll(async () => {
+    const sink = new Writable({
+      write(chunk, _encoding, done) {
+        logLines.push(String(chunk))
+        done()
+      },
+    })
+    app = await buildApp({ loggerInstance: pino({ level: 'info' }, sink) })
+    await app.ready()
+  })
+  afterAll(() => app.close())
+
+  beforeEach(() => {
+    grpcCallMock.mockReset()
+    grpcCallMock.mockImplementation(fakeGrpcCall)
+    resetFakeAnamneses()
+    resetFakeSuspended()
+    logLines.length = 0
+  })
+
+  const url = (id: number = ids.clientA) => `/api/clients/${id}/anamnese`
+  const read = () => app.inject({ method: 'GET', url: url(), headers: bearer('trainerA') })
+  const save = (payload: unknown) => app.inject({ method: 'PUT', url: url(), payload: payload as object, headers: bearer('trainerA') })
+  const audits = () => logLines.map((l) => JSON.parse(l)).filter((l) => l.audit === 'client.anamnese.save')
+  const roster = async () =>
+    (await app.inject({ method: 'GET', url: '/api/clients', headers: bearer('trainerA') })).json() as {
+      id: number
+      hasAnamnese: boolean
+      suspended: boolean
+    }[]
+
+  it('answers the empty state with no anamnese, never a 404 (E1)', async () => {
+    const res = await read()
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json()).toEqual({ text: '', updatedAt: null })
+  })
+
+  it('saves as written, reads it back, then clears with a blank text (R18, R19, E4, E5)', async () => {
+    const text = '  Dor no joelho direito.\n\nEvitar impacto.  '
+    const saved = await save({ text })
+    expect(saved.statusCode, saved.body).toBe(200)
+    expect(saved.json()).toEqual({ text, updatedAt: FAKE_ANAMNESE_AT })
+    expect((await read()).json()).toEqual({ text, updatedAt: FAKE_ANAMNESE_AT })
+    expect((await roster()).find((c) => c.id === ids.clientA)).toMatchObject({ hasAnamnese: true, suspended: false })
+    expect((await roster()).find((c) => c.id === ids.clientA2)).toMatchObject({ hasAnamnese: false })
+
+    const cleared = await save({ text: ' \u00a0\n ' })
+    expect(cleared.statusCode, cleared.body).toBe(200)
+    expect(cleared.json()).toEqual({ text: '', updatedAt: null })
+    expect((await roster()).find((c) => c.id === ids.clientA)).toMatchObject({ hasAnamnese: false })
+
+    // One audit line per save, ids and outcome only; the text is in no log line.
+    expect(audits()).toEqual([
+      expect.objectContaining({ level: 30, actorId: ids.trainerA, clientId: ids.clientA, outcome: 'saved' }),
+      expect.objectContaining({ level: 30, actorId: ids.trainerA, clientId: ids.clientA, outcome: 'cleared' }),
+    ])
+    expect(logLines.join('')).not.toContain('joelho')
+  })
+
+  it('sends the text untrimmed, as the body had it', async () => {
+    await save({ text: ' a ' })
+    expect(upstreamRequest('SaveClientAnamnese')).toEqual({ trainerId: ids.trainerA, clientId: ids.clientA, text: ' a ' })
+  })
+
+  it('keeps hasAnamnese independent of suspended (R21)', async () => {
+    fakeSuspended.add(ids.clientA2)
+    await save({ text: 'x' })
+    const rows = await roster()
+    expect(rows.find((c) => c.id === ids.clientA)).toMatchObject({ hasAnamnese: true, suspended: false })
+    expect(rows.find((c) => c.id === ids.clientA2)).toMatchObject({ hasAnamnese: false, suspended: true })
+  })
+
+  it.each([
+    ['5,000 units', 'x'.repeat(5_000), 200],
+    ['2,500 non-BMP characters (5,000 units)', '😀'.repeat(2_500), 200],
+    ['5,001 units', 'x'.repeat(5_001), 400],
+    ['2,500 non-BMP characters and one more unit', '😀'.repeat(2_500) + 'x', 400],
+  ])('%s → %i, and a 400 reaches no write RPC (R10, R11, E2)', async (_why, text, code) => {
+    const res = await save({ text })
+    expect(res.statusCode, res.body).toBe(code)
+    if (code === 400) {
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+      expect(res.body).not.toContain('xxxxx')
+      expect(upstreamMethods()).toEqual(['IsTrainersClient'])
+    }
+  })
+
+  it.each([[{}], [{ text: 3 }], [{ text: null }], [{ text: 'x', extra: 1 }]])('refuses the body %j with a 400', async (payload) => {
+    const res = await save(payload)
+    expect(res.statusCode, res.body).toBe(400)
+    expect(upstreamMethods()).toEqual(['IsTrainersClient'])
+  })
+
+  it("is 403 on another trainer's client before any anamnese RPC (R7)", async () => {
+    for (const method of ['GET', 'PUT'] as const) {
+      grpcCallMock.mockClear()
+      const res = await app.inject({ method, url: url(ids.clientB), headers: bearer('trainerA'), ...(method === 'PUT' ? { payload: { text: 'x' } } : {}) })
+      expect(res.statusCode).toBe(403)
+      expect(upstreamMethods()).toEqual(['IsTrainersClient'])
+    }
   })
 })

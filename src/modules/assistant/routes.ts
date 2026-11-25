@@ -4,11 +4,12 @@ import { env } from '../../config/env.js'
 import { httpAiClient, type AiClient } from '../../ai/client.js'
 import { HttpError } from '../../lib/errors.js'
 import type { AuthUser } from '../../lib/jwt.js'
+import { z } from 'zod'
 import { routeDoc } from '../../openapi/docs.js'
-import { assistantStatusSchema, assistantStreamSchema } from '../../openapi/responses.js'
-import { workoutChatRequestSchema } from './schemas.js'
+import { anamneseNoticeSchema, assistantStatusSchema, assistantStreamSchema } from '../../openapi/responses.js'
+import { anamneseNoticeQuerySchema, workoutChatRequestSchema } from './schemas.js'
 import { AI_ASSISTANT_FLAG, isFlagOn } from '../feature-flags/service.js'
-import { buildChatContext } from './service.js'
+import { buildChatContext, getAnamneseNotice } from './service.js'
 import { ChatSlots, DEFAULT_CHAT_TIMINGS, runChat, type ChatTimings } from './session.js'
 
 /**
@@ -66,6 +67,32 @@ export default async function assistantRoutes(app: FastifyInstance, opts: { sett
       // No client: nothing the flag could say is useful, so it isn't read (FF3).
       enabled: settings.client !== undefined && (await settings.isEnabledFor(req.user!, req.log)),
     }),
+  )
+
+  // The AI panel's anamnese notice (client-anamnese spec §2.3). Not flag-gated (Q3): it carries no
+  // AI data and never the text, and the web calls it only inside the panel.
+  app.get(
+    '/anamnese-notice',
+    {
+      schema: routeDoc({
+        operationId: 'getAnamneseNotice',
+        summary: 'Whether the AI uses the anamnese of this plan’s client',
+        description:
+          'For the plan open in the editor (yours): `present` or `missing` with the client’s id and name (the ' +
+          'link to their anamnese tab), or `unavailable` with `client: null` when the client is no longer yours. ' +
+          'Never returns the anamnese itself. Each chat message reads the anamnese again, so this can lag a save ' +
+          'made since.',
+        tag: 'Assistant',
+        roles: ['TRAINER'],
+        query: z.object({ trainingPlanId: z.number().int().positive().describe('The plan open in the editor.') }),
+        ok: { status: 200, description: 'The notice state.', schema: anamneseNoticeSchema },
+        errors: [403, 404],
+      }),
+    },
+    async (req) => {
+      const { trainingPlanId } = anamneseNoticeQuerySchema.parse(req.query)
+      return getAnamneseNotice(req.user!, trainingPlanId)
+    },
   )
 
   app.post(

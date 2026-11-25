@@ -16,6 +16,7 @@ const PROTO_FILES = [
   'vertice/session/v1/workout_session.proto',
   'vertice/session/v1/workout_feedback.proto',
   'vertice/trainerclient/v1/trainer_client.proto',
+  'vertice/trainerclient/v1/client_anamnese.proto',
   'vertice/admin/v1/admin_auth.proto',
   'vertice/admin/v1/admin_ops.proto',
   'vertice/admin/v1/admin.proto',

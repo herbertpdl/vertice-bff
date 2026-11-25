@@ -149,6 +149,8 @@ A trainer’s roster of clients (TRAINER only).
 | PATCH | `/api/clients/{id}` | TRAINER | `updateClient` | Update a client |
 | DELETE | `/api/clients/{id}` | TRAINER | `endClientRelationship` | End the relationship with a client |
 | GET | `/api/clients/{id}/overview` | TRAINER | `getClientOverview` | The header of a client’s detail screen |
+| GET | `/api/clients/{id}/anamnese` | TRAINER | `getClientAnamnese` | A client’s anamnese |
+| PUT | `/api/clients/{id}/anamnese` | TRAINER | `saveClientAnamnese` | Save a client’s anamnese |
 | POST | `/api/clients/{id}/setup-token` | TRAINER | `reissueClientSetupToken` | Re-issue a client’s first-access link |
 
 ### Exercises
@@ -254,6 +256,7 @@ The AI workout assistant in the workout editor (TRAINER only; per trainer, the `
 | Method | Path | Access | `operationId` | Summary |
 |---|---|---|---|---|
 | GET | `/api/assistant/status` | TRAINER | `getAssistantStatus` | Whether the AI workout assistant is on for this trainer |
+| GET | `/api/assistant/anamnese-notice` | TRAINER | `getAnamneseNotice` | Whether the AI uses the anamnese of this plan’s client |
 | POST | `/api/assistant/workout-chat` | TRAINER | `workoutChat` | Send a message to the AI workout assistant (server-sent events) |
 
 ### Health
@@ -503,7 +506,7 @@ A trainer's roster = the clients with an active trainer–client relationship, f
 
 `ClientDetail` = `{id, name, email, cpf, role}` (`cpf` masked; no `cref`).
 
-- **`GET /`** → `ClientSummary[]` = `{id, name, activePlanCount, currentPlan, lastWorkoutAt, weekActivity, suspended}`, for the roster/list screen. `suspended: true` marks a client an admin suspended: they stay on the roster with their plans and history but cannot sign in (admin-panel R46). **No `email`, `cpf`, `cref` or `role`** (P1-03); the detail routes carry the email.
+- **`GET /`** → `ClientSummary[]` = `{id, name, activePlanCount, currentPlan, lastWorkoutAt, weekActivity, suspended, hasAnamnese}`, for the roster/list screen. `suspended: true` marks a client an admin suspended: they stay on the roster with their plans and history but cannot sign in (admin-panel R46). `hasAnamnese` says whether you wrote an anamnese for the client (the "Sem anamnese" badge when false; client-anamnese R21), independent of `suspended`. **No `email`, `cpf`, `cref` or `role`** (P1-03); the detail routes carry the email.
   - `currentPlan`: `{id, name, endDate} | null` — the student's date-active training plan (`startDate <= today <= endDate`) among the trainer's plans for them; `null` if none is currently active (shown as a "Sem plano" tag in the UI). If more than one plan is active at once, the most recently started one is returned.
   - `lastWorkoutAt`: ISO timestamp of the student's most recent *completed* workout log, or `null`. **Scoped to the current week only** — see limitation note below.
   - `weekActivity`: `{date, dayOfWeek, completed}[]`, always 5 entries for Monday–Friday of the current week, `completed` true if a workout log finished on that calendar date. Powers the 5-dot weekly-activity indicator.
@@ -538,6 +541,8 @@ A trainer's roster = the clients with an active trainer–client relationship, f
   - a masked value (anything with `*`, e.g. the `***.***.***-25` this API returns): `400 VALIDATION_ERROR`, nothing is sent. Edit forms must not echo the detail's `cpf` back; omit the field unless the trainer typed a new one.
 
   A taken email or CPF is `409 CONFLICT` `Email or CPF already in use`.
+- **`GET /:id/anamnese`** → `200 ClientAnamnese` `{text, updatedAt}`: your anamnese of one of your clients ([spec](./specs/client-anamnese/spec.md)). Health data: load it only on its tab. With none, `{ "text": "", "updatedAt": null }`, never a 404. `updatedAt` is the last save's instant. 403 for another trainer's client and for a **former** client (the text stays stored upstream but only the active trainer reads it).
+- **`PUT /:id/anamnese`** `{ "text": string }` (no other key) → `200 ClientAnamnese`, the stored state: render it, no re-read needed. Replaces the whole text (last save wins, no history); stored **as written** (no trim). A blank text (only whitespace, U+00A0 and line breaks included; vertice-api decides) **clears** it and answers the empty state. Over **5,000 UTF-16 units** (a character outside the BMP counts two, like JavaScript's `string.length`) is `400 VALIDATION_ERROR`, nothing saved; 403 as above. Each save logs `audit: "client.anamnese.save"` (`actorId`, `clientId`, `outcome: "saved" | "cleared"`); the text is never logged. A client's anamnese is part of their trainer's data export (`GET /auth/me/export`, vertice-api's `anamneses` section) and is deleted with the trainer's account.
 - `DELETE /:id` → `204`, no body. **Ends the trainer's relationship with the client** ("Encerrar acompanhamento", vertice-api's `EndTrainerClientRelationship`, which sets `ended_at`); it **does not delete the client's account**. The client drops off `GET /` and the trainer loses what the active link grants (`GET /:id`, the overview, progress, setup links, new plans for them, editing their plans' dates); the plans the trainer wrote, and the logs under them, stay readable to both. The client is free to be linked to another trainer. Deleting an account is only ever the user's own action (`DELETE /auth/me`). Errors: 403 `This client is not one of your clients` (another trainer's client, or one whose relationship already ended); upstream refusals as in the table above.
 
 ### What vertice-web-react must change (P1-03, web step)
@@ -677,6 +682,7 @@ Spec: [`docs/specs/ai-workout-assistant/spec.md`](./specs/ai-workout-assistant/s
 
 - `GET /assistant/status` → `{ "enabled": boolean }`. Always 200: `true` only when the flag is on for the caller and vertice-ai is configured (with no vertice-ai the flag is not read). May lag an admin change by up to 30 s (the API's cache); with the web's 30 s polling a change shows within about a minute. The web shows the AI icon only when `enabled`.
 - `POST /assistant/workout-chat` checks the flag first, before the body and any read: off, unreadable, or on with no vertice-ai configured is 503 `AI_UNAVAILABLE` (the last also logs one WARN `reason: "no_client"`). A stream already running when the flag turns off finishes; the next message is refused.
+- `GET /assistant/anamnese-notice?trainingPlanId=<id>` → `200 AnamneseNotice` `{ "state": "present" | "missing" | "unavailable", "client": { "id", "name" } | null }` for the plan open in the editor (yours; 403 another trainer's plan, 404 a missing one, 400 no or an extra query key). `present`: the AI uses your anamnese of `client` (R25); `missing`: you have none, link to `client.id`'s anamnese tab (R26, R28); `unavailable` (`client: null`): the client is no longer yours, show no notice and no link. Built from the roster, never the text. Not gated on the flag. Each message reads the anamnese again, so refetch on focus to follow a save in another tab.
 - `POST /assistant/workout-chat` → `text/event-stream`. Body:
 ```json
 {
@@ -689,23 +695,23 @@ Spec: [`docs/specs/ai-workout-assistant/spec.md`](./specs/ai-workout-assistant/s
 ```
   History turns follow vertice-ai's rules: a turn that produced a proposal is sent as an `assistant` turn "Proposta pronta para revisão no editor." (plus the R51 line), a stopped, failed or retried message's `user` turn is not sent, and empty turns never are. `workoutId` is absent on a workout not created yet. `workout` is the workout as it stands on screen (a proposal in review and the trainer's edits included); each entry is a `WorkoutExerciseEntry` plus the editor's opaque `key`. A `name` or `dayOfWeek` is ignored. `history` is earlier turns, text only, oldest first; the web trims it to the caps above.
 
-**Before the stream** (normal JSON errors): `400 VALIDATION_ERROR` (body; a `workoutId` from another of the trainer's plans; an on-screen `exerciseId` outside the trainer's catalog, the same answer for a missing id and another trainer's private one), `403 FORBIDDEN` (another trainer's plan or workout, CLIENT, ADMIN), `413 AI_CATALOG_TOO_LARGE` (more than 1,000 visible exercises), `503 AI_UNAVAILABLE` (switched off).
+**Before the stream** (normal JSON errors): `400 VALIDATION_ERROR` (body; a `workoutId` from another of the trainer's plans; an on-screen `exerciseId` outside the trainer's catalog, the same answer for a missing id and another trainer's private one), `403 FORBIDDEN` (another trainer's plan or workout, CLIENT, ADMIN), `413 AI_CATALOG_TOO_LARGE` (more than 1,000 visible exercises), `503 AI_UNAVAILABLE` (switched off), and the anamnese read failing for any reason but a refusal (`503 UPSTREAM_UNAVAILABLE`, `502`): the message is not sent without it.
 
 **The stream** (`Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: no-store`, `X-Accel-Buffering: no`). Each event is `event: <type>`, one `data: <JSON>` line and a blank line. `: keep-alive` comment lines arrive every 10 seconds; ignore them.
 
 | `event` | `data` |
 |---|---|
 | `stage` | `{ "stage": "analyzing" \| "choosing_exercises" \| "building_sets" \| "checking", "exercise"?: n }`: a change is being built; show your own label. `building_sets` repeats per exercise being written, `exercise` its 1-based position |
-| `text` | `{ "delta": "..." }`: append to the answer |
+| `text` | `{ "delta": "..." }`: append to the answer. With `line` (`{ "delta", "line": "left_out" \| "anamnese_conflict" }`): one whole line, shown on its own: `left_out` is what a proposal left out (R51), `anamnese_conflict` what the request conflicts with in the anamnese (warning style). At most one of each per stream, `left_out` first |
 | `proposal` | `{ "exercises": [ { "key": "e1" \| null, "exerciseId", "restSecondsBetweenSets"?, "notes"?, "sets": [ExerciseSetEntry], "exercise": Exercise } ] }`: the complete new list, in order; `key` is the on-screen exercise it changes or `null` for a new one; an on-screen key missing from the list is removed. Without `key` and `exercise`, each entry is a `WorkoutExerciseEntry` for `PUT /workouts/:workoutId/exercises` or the nested create |
 | `done` | `{}` |
 | `error` | `{ "code", "message" }` |
 
-A question is `text… done`; a change is `stage… proposal [text] done` (the optional `text` is the one "left out" line, R51). One `done` or `error` ends every stream. `error` codes: `AI_UNAVAILABLE` (vertice-ai down or off), `AI_TIMEOUT` (60 seconds with no stage, text or proposal; keep-alives don't count), `AI_INVALID_PROPOSAL` (the proposal failed validation: an exercise outside the catalog, over 20/10, a field out of bounds, a name or weekday, a key not sent or echoed on a different exercise; nothing to show), `AI_ERROR` (anything else), `AI_SUPERSEDED` (a newer message from the same trainer took over; show it as stopped).
+A question is `text… [anamnese_conflict] done`; a change is `stage… proposal [left_out] [anamnese_conflict] done`. A marker the BFF can't vouch for (unknown value, a repeat, out of order, not one line of at most 300 characters) is dropped and its `delta` arrives as plain answer text. One `done` or `error` ends every stream. `error` codes: `AI_UNAVAILABLE` (vertice-ai down or off), `AI_TIMEOUT` (60 seconds with no stage, text or proposal; keep-alives don't count), `AI_INVALID_PROPOSAL` (the proposal failed validation: an exercise outside the catalog, over 20/10, a field out of bounds, a name or weekday, a key not sent or echoed on a different exercise; nothing to show), `AI_ERROR` (anything else), `AI_SUPERSEDED` (a newer message from the same trainer took over; show it as stopped).
 
 Closing the request ("Parar", leaving) cancels the work upstream. A new message from the same trainer supersedes a running one rather than being refused, so "Parar" then a new message, or "Tentar novamente", always goes through. Nothing is stored: the conversation lives in the web.
 
-What reaches vertice-ai: the message and history, the plan's name, description, level and dates, the workout on screen, the plan's other workouts (exercise names, muscle groups, set counts) and the trainer's catalog (ids, names, muscle groups). Never the client's id, name or e-mail, recorded weights, logs or feedback (PRD R13). No message text is logged.
+What reaches vertice-ai: the message and history, the plan's name, description, level and dates, the workout on screen, the plan's other workouts (exercise names, muscle groups, set counts), the trainer's catalog (ids, names, muscle groups) and the trainer's anamnese of the plan's client, as stored (read again on every message, with the trainer's token; left out when there is none, and when vertice-api refuses it to a former trainer, whose assistant keeps working without it). The anamnese is the only client-derived text sent, and only in the body. Never the client's id, name or e-mail, recorded weights, logs or feedback (PRD R13). No message text or anamnese is logged: the message's log line says only `anamnese: "sent" | "none" | "refused"`.
 
 ---
 

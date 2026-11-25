@@ -53,3 +53,14 @@ export const workoutChatRequestSchema = z
   .meta({ id: 'WorkoutChatRequest' })
 
 export type WorkoutChatRequest = z.infer<typeof workoutChatRequestSchema>
+
+/** `GET /assistant/anamnese-notice` query: the plan open in the editor; nothing else is accepted. */
+export const anamneseNoticeQuerySchema = z
+  .object({
+    trainingPlanId: z
+      .string()
+      .regex(/^\d{1,15}$/, 'expected a positive integer')
+      .transform(Number)
+      .refine((id) => id > 0, 'expected a positive integer'),
+  })
+  .strict()

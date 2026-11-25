@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { parseId } from '../../lib/net.js'
-import { clientCreateSchema, clientDetailQuerySchema, clientUpdateSchema } from './schemas.js'
+import { clientAnamneseSaveSchema, clientCreateSchema, clientDetailQuerySchema, clientUpdateSchema } from './schemas.js'
 import * as clientService from './service.js'
 import * as userService from '../users/service.js'
 import { idParams, routeDoc } from '../../openapi/docs.js'
 import {
+  clientAnamneseSchema,
   clientDetailSchema,
   clientOverviewSchema,
   clientSummarySchema,
@@ -88,6 +89,60 @@ export default async function clientRoutes(app: FastifyInstance) {
       const id = parseId(req.params.id)
       await clientService.assertIsTrainersClient(req.user!.id, id)
       return clientService.getClientOverview(req.user!.id, id)
+    },
+  )
+
+  // The client's anamnese (client-anamnese spec §2.2): health data, read only on its tab. Never
+  // logged; the save writes one audit line with ids and the outcome only.
+  app.get<{ Params: { id: string } }>(
+    '/:id/anamnese',
+    {
+      schema: routeDoc({
+        operationId: 'getClientAnamnese',
+        summary: 'A client’s anamnese',
+        description:
+          'One of your clients (a former client is 403). With none, `{ "text": "", "updatedAt": null }`, never a 404.',
+        tag: 'Clients',
+        roles: ['TRAINER'],
+        params: idParams('id'),
+        ok: { status: 200, description: 'The anamnese, or the empty state.', schema: clientAnamneseSchema },
+        errors: [403],
+      }),
+    },
+    async (req) => {
+      const id = parseId(req.params.id)
+      await clientService.assertIsTrainersClient(req.user!.id, id)
+      return clientService.getClientAnamnese(req.user!.id, id)
+    },
+  )
+
+  app.put<{ Params: { id: string } }>(
+    '/:id/anamnese',
+    {
+      schema: routeDoc({
+        operationId: 'saveClientAnamnese',
+        summary: 'Save a client’s anamnese',
+        description:
+          'One of your clients. Replaces the whole text (last save wins, no history), stored as written. A blank ' +
+          'text clears it and answers the empty state. Over 5,000 UTF-16 units is a 400.',
+        tag: 'Clients',
+        roles: ['TRAINER'],
+        params: idParams('id'),
+        body: clientAnamneseSaveSchema,
+        ok: { status: 200, description: 'The stored state (the empty state after a clear).', schema: clientAnamneseSchema },
+        errors: [403],
+      }),
+    },
+    async (req) => {
+      const id = parseId(req.params.id)
+      await clientService.assertIsTrainersClient(req.user!.id, id)
+      const { text } = clientAnamneseSaveSchema.parse(req.body)
+      const saved = await clientService.saveClientAnamnese(req.user!.id, id, text)
+      req.log.info(
+        { audit: 'client.anamnese.save', actorId: req.user!.id, clientId: id, outcome: saved.text ? 'saved' : 'cleared' },
+        'Client anamnese saved',
+      )
+      return saved
     },
   )
 

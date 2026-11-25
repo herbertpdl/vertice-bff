@@ -3,7 +3,7 @@ import * as userService from '../users/service.js'
 import * as planService from '../training-plans/service.js'
 import * as workoutService from '../workouts/service.js'
 import * as sessionService from '../workout-sessions/service.js'
-import { trainerClientClient } from '../../grpc/clients.js'
+import { clientAnamneseClient, trainerClientClient } from '../../grpc/clients.js'
 import { grpcCall } from '../../grpc/call.js'
 import { ForbiddenError, PreconditionFailedError } from '../../lib/errors.js'
 import { addDays, businessDateOf, currentWeekStartDate, todayInBusinessZone } from '../../lib/dates.js'
@@ -139,6 +139,8 @@ export interface ClientSummary {
    * and history, but cannot sign in until reactivated.
    */
   suspended: boolean
+  /** The trainer wrote an anamnese for this client (client-anamnese R21); independent of `suspended`. */
+  hasAnamnese: boolean
 }
 
 const WEEKDAY_LABELS: WeekdayLabel[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY']
@@ -185,6 +187,8 @@ export async function listClientsOverviewForTrainer(trainerId: number): Promise<
   const roster = rosterRes.clients.map(userService.toUser)
   // `suspended` is set on this RPC only (admin-panel R46); `toUser` doesn't carry it.
   const suspendedIds = new Set(rosterRes.clients.filter((c) => c.suspended).map((c) => Number(c.id)))
+  // Likewise `has_anamnese` (client-anamnese R21): `false` on every other RPC, so never read it elsewhere.
+  const withAnamnese = new Set(rosterRes.clients.filter((c) => c.hasAnamnese).map((c) => Number(c.id)))
 
   const countByClient = new Map<number, number>()
   const plansByClient = new Map<number, planService.TrainingPlan[]>()
@@ -227,8 +231,56 @@ export async function listClientsOverviewForTrainer(trainerId: number): Promise<
       lastWorkoutAt,
       weekActivity,
       suspended: suspendedIds.has(client.id),
+      hasAnamnese: withAnamnese.has(client.id),
     }
   })
+}
+
+/**
+ * A trainer's anamnese of one client (client-anamnese spec §2.1): health data. The empty state is
+ * `{ text: "", updatedAt: null }`, never a 404.
+ */
+export interface ClientAnamnese {
+  /** As stored, untrimmed; `""` when there is none. */
+  text: string
+  /** Instant of the last save; `null` when `text` is empty. */
+  updatedAt: string | null
+}
+
+interface AnamneseResponse {
+  text: string
+  updatedAt: string
+}
+
+const toAnamnese = (res: AnamneseResponse): ClientAnamnese => ({
+  text: res.text ?? '',
+  updatedAt: res.text && res.updatedAt ? res.updatedAt : null,
+})
+
+/**
+ * The caller's anamnese of `clientId`, with the trainer's own token. vertice-api refuses anyone but
+ * the client's active trainer with PERMISSION_DENIED (→ `ForbiddenError`), a former trainer
+ * included (R7). Never logged.
+ */
+export async function getClientAnamnese(trainerId: number, clientId: number): Promise<ClientAnamnese> {
+  return toAnamnese(
+    await grpcCall<{ trainerId: number; clientId: number }, AnamneseResponse>(
+      clientAnamneseClient,
+      'GetClientAnamnese',
+      { trainerId, clientId },
+    ),
+  )
+}
+
+/** Replaces the anamnese (last save wins, R20); a blank text clears it and answers the empty state (R19). */
+export async function saveClientAnamnese(trainerId: number, clientId: number, text: string): Promise<ClientAnamnese> {
+  return toAnamnese(
+    await grpcCall<{ trainerId: number; clientId: number; text: string }, AnamneseResponse>(
+      clientAnamneseClient,
+      'SaveClientAnamnese',
+      { trainerId, clientId, text },
+    ),
+  )
 }
 
 /** Confirms `clientId` is actually one of `trainerId`'s clients via vertice-api's TrainerClientService. */

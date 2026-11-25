@@ -15,7 +15,8 @@ service TrainerClientService {
   // still keeps the client.
   rpc CreateClientForTrainer(CreateClientForTrainerRequest) returns (vertice.user.v1.UserResponse);
   // The trainer's active clients in the summary view (id, name, role): never email, cpf or cref
-  // (P1-03). A suspended client stays on the roster with suspended = true (admin-panel R46).
+  // (P1-03). A suspended client stays on the roster with suspended = true (admin-panel R46);
+  // has_anamnese says whether the trainer has written the client's anamnese (client-anamnese R21).
   rpc ListClientsForTrainer(ListClientsForTrainerRequest) returns (ListClientsForTrainerResponse);
   rpc IsTrainersClient(IsTrainersClientRequest) returns (IsTrainersClientResponse);
   // Ends the trainer's active relationship with the client: sets ended_at, nothing else. The
